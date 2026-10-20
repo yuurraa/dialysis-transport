@@ -1,0 +1,28 @@
+{
+  "name": "dialysis-transport",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "frontend",
+    "backend"
+  ],
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "scripts": {
+    "install:all": "npm install --workspaces --include-workspace-root",
+    "dev": "concurrently --kill-others --names frontend,backend \"npm run dev:frontend\" \"npm run dev:backend\"",
+    "dev:frontend": "npm run dev --workspace frontend",
+    "dev:backend": "npm run dev --workspace backend",
+    "build": "npm run build --workspaces",
+    "test": "npm run test:database && npm run test --workspace backend && npm run test --workspace frontend --",
+    "test:database": "node --test database/tests/*.test.mjs"
+  },
+  "devDependencies": {
+    "concurrently": "10.0.6",
+    "@electric-sql/pglite": "0.5.10"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true
+  }
+}

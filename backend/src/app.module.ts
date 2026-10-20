@@ -1,0 +1,20 @@
+import { Controller, Get, Module } from '@nestjs/common';
+import { SupabaseModule } from './supabase.module';
+import { AuthModule } from './auth/auth.module';
+import { ProfilesModule } from './profiles/profiles.module';
+import { SchedulingModule } from './scheduling/scheduling.module';
+import { TripsModule } from './trips/trips.module';
+import { IntegrationsModule } from './integrations/integrations.module';
+
+@Controller('health')
+class HealthController {
+  /** Process liveness only; does not claim database or integration readiness. */
+  @Get()
+  health() { return { status: 'ok' }; }
+}
+
+@Module({
+  imports: [SupabaseModule, AuthModule, ProfilesModule, SchedulingModule, TripsModule, IntegrationsModule],
+  controllers: [HealthController],
+})
+export class AppModule {}

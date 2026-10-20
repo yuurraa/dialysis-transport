@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Dialysis Transport</title>
+    <link rel="preload" as="image" href="/images/transport-night.jpg" />
+    <style>
+      html { background: #10252b; color-scheme: dark; }
+      body { margin: 0; min-height: 100svh; isolation: isolate; }
+      body::before {
+        content: ''; position: fixed; z-index: -1; inset: -64px; pointer-events: none;
+        background: linear-gradient(180deg, rgb(8 23 29 / 78%), rgb(8 23 29 / 58%) 55%, rgb(8 23 29 / 85%)), url('/images/transport-night.jpg') center 48% / cover;
+        filter: blur(32px); opacity: .35;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
