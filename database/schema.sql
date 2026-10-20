@@ -341,6 +341,20 @@ drop policy if exists treatment_update on public.treatment_schedules;
 create policy treatment_update on public.treatment_schedules for update to authenticated
   using (private.owns_active_patient(patient_id)) with check (private.owns_active_patient(patient_id));
 
+-- Lock before the statement touches any schedule rows, including direct Data API
+-- updates. Saves and deletion therefore always acquire Patient -> Schedule locks.
+create or replace function private.lock_treatment_patient() returns trigger
+language plpgsql security definer set search_path = '' as $$
+begin
+  perform 1 from public.patients where account_id=(select private.patient_account_id()) for update;
+  return null;
+end;
+$$;
+revoke all on function private.lock_treatment_patient() from public, anon, authenticated;
+drop trigger if exists treatment_patient_lock on public.treatment_schedules;
+create trigger treatment_patient_lock before insert or update on public.treatment_schedules
+  for each statement execute function private.lock_treatment_patient();
+
 -- Serialize changes per Patient so concurrent submissions cannot bypass overlap checks.
 create or replace function private.check_treatment_overlap() returns trigger
 language plpgsql security definer set search_path = '' as $$
@@ -391,6 +405,44 @@ revoke all on function private.check_treatment_overlap() from public, anon, auth
 drop trigger if exists treatment_overlap on public.treatment_schedules;
 create trigger treatment_overlap before insert or update on public.treatment_schedules
   for each row execute function private.check_treatment_overlap();
+
+-- A narrow owner operation keeps linked replacements and restored occurrences atomic.
+-- Direct DELETE remains revoked; all changes serialize on the same Patient as saves.
+create or replace function private.delete_my_treatment(target uuid) returns uuid
+language plpgsql security definer set search_path = '' as $$
+declare selected public.treatment_schedules;
+begin
+  select * into selected from public.treatment_schedules where id=target;
+  if not found then
+    if (select private.patient_account_id()) is null then
+      raise exception 'Treatment access denied.' using errcode='42501';
+    end if;
+    return null;
+  end if;
+  if not private.owns_active_patient(selected.patient_id) then
+    raise exception 'Treatment access denied.' using errcode='42501';
+  end if;
+  perform 1 from public.patients where id=selected.patient_id for update;
+  -- Recheck after the lock: another request may have deleted the schedule.
+  select * into selected from public.treatment_schedules where id=target for update;
+  if not found then return null; end if;
+  if not private.owns_active_patient(selected.patient_id) then
+    raise exception 'Treatment access denied.' using errcode='42501';
+  end if;
+  delete from public.treatment_schedules where replaces_schedule_id=target;
+  delete from public.treatment_schedules where id=target;
+  if selected.replaces_schedule_id is not null then
+    -- Removing a replacement restores its original occurrence. The existing trigger
+    -- checks the restored series; a conflict rolls this entire deletion back.
+    update public.treatment_schedules set start_time=start_time where id=selected.replaces_schedule_id;
+  end if;
+  return target;
+end;
+$$;
+create or replace function public.delete_my_treatment(target uuid) returns uuid
+language sql security invoker set search_path = '' as $$ select private.delete_my_treatment(target); $$;
+revoke all on function private.delete_my_treatment(uuid), public.delete_my_treatment(uuid) from public, anon;
+grant execute on function private.delete_my_treatment(uuid), public.delete_my_treatment(uuid) to authenticated;
 
 notify pgrst, 'reload schema';
 commit;

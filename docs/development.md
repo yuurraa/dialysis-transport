@@ -82,3 +82,8 @@ All times are Singapore local time. Only same-day sessions are supported. The ap
 Add/Edit/Reschedule uses a centred modal over the dimmed list. Cancel, Escape and backdrop clicks dismiss it when not saving, and focus returns to the opening control. Centre selection uses bounded searchable results and an always-present, read-only address field. Single sessions and recurring entries have distinct fields and labels; rescheduled dates are shown on the original entry.
 
 Apply the schema and deploy backend/frontend together. Older requests without a type remain recurring for compatibility. Do not drop type or replacement metadata during rollback; preserve the current database checks and API semantics so an excluded original occurrence cannot silently become active again. Trip generation, transport feasibility checks, calendar views, Google Calendar sync and caregiver access remain pending.
+
+
+Schedule deletion uses `DELETE /api/schedules/:id` and the owner-only `delete_my_treatment` database function. Reapply the existing `database/schema.sql` before deploying this version; no direct table DELETE grant or service-role key is needed. The operation checks live account/profile ownership, serializes with schedule writes, and removes a series and its replacements atomically. Deleting a replacement revalidates the restored original session; overlap failures roll back the deletion. This currently manages treatment requirements only, since trip generation is not implemented.
+
+For every new dashboard page, follow the shared page/overlay format in [Integrations and responsive design](apis-and-responsive-design.md#dashboard-page-and-overlay-format).

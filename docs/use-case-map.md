@@ -42,7 +42,7 @@ Personal-role Trips prioritises next pickup, destination, driver, vehicle and re
 
 ## Agreed use-case revisions
 
-### UC-03 — Manage Treatment and Transport Schedules
+### UC-03 - Manage Treatment and Transport Schedules
 
 | Item | Description |
 | --- | --- |
@@ -55,7 +55,7 @@ Personal-role Trips prioritises next pickup, destination, driver, vehicle and re
 | Postconditions | Treatment requirements are stored separately from transport pickup times. Trips and assignments are stored when transport scheduling is performed. |
 | Rules | Treatment submission does not confirm transport. Patients/Caregivers cannot assign resources or set operational pickup times. No separate treatment-approval workflow is required. Completed Trips retain their history. Single replacements exclude only their linked original occurrence; failed saves leave that occurrence unchanged. |
 
-### UC-02.1 — Link Caregiver to Patient
+### UC-02.1 - Link Caregiver to Patient
 
 | Item | Description |
 | --- | --- |
@@ -68,8 +68,8 @@ Personal-role Trips prioritises next pickup, destination, driver, vehicle and re
 | Postconditions | A confirmed link grants only permitted Patient-specific transport access. Unlinking revokes further access without deleting the Patient or transport history. |
 | Rules | A Caregiver is optional. A code alone does not grant access or create a Patient account. Code attempts are rate-limited, and relationship changes record who performed them. Server/database checks enforce current links, including after unlinking. |
 
-UC-02 currently describes coordinator-only linking and broad Patient editing. Its wording should instead reference UC-02.1 for self-service/assisted linking and retain the implemented boundary: Patients own personal details; Coordinators update Status and Notes. Caregiver access covers permitted transport functions, not unrestricted editing of Patient identity details.
+The latest UC-02 description references UC-02.1 for self-service/assisted linking and retains the implemented boundary: Patients own personal details; Coordinators update Status and Notes. Caregiver access covers permitted transport functions, not unrestricted editing of Patient identity details.
 
 ## Next implementation slice
 
-Patient treatment-schedule entry/editing, persistence and the Coordinator read view are implemented at `/dashboard/schedules`. Recurring, single and one-occurrence rescheduling are implemented, with atomic replacement links and overlap checks. Recurring Trip generation and resource assignment remain pending. Caregiver treatment entry depends on UC-02.1 linking; until that is implemented, Caregiver accounts receive no Patient access. Linking also needs a minimal Caregiver profile, since the use case requires one. Caregiver linking and operational transport scheduling remain pending.
+Patient treatment-schedule entry/editing, persistence and the Coordinator read view are implemented at `/dashboard/schedules`. Recurring, single and one-occurrence rescheduling are implemented, with atomic replacement links and overlap checks. Edit contains the whole-series/one-session scope choice. One-session editing offers the actual, not-yet-replaced occurrences in a bounded dropdown and an adjacent new date; validation/save errors use dismissible overlay toasts. The same Save/Cancel/Delete layout is retained in both edit scopes. Rescheduled-session counts open a bounded detail list instead of growing date paragraphs. Patients can delete owned schedules after confirmation; series deletion includes linked replacements, while replacement deletion restores its original occurrence only if overlap validation succeeds. Coordinators remain read-only. Recurring Trip generation and resource assignment remain pending. Caregiver treatment entry depends on UC-02.1 linking; until that is implemented, Caregiver accounts receive no Patient access. Linking also needs a minimal Caregiver profile, since the use case requires one. Caregiver linking and operational transport scheduling remain pending.

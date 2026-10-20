@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Headers, Inject, Param, Patch, Post } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Headers, Inject, Param, Patch, Post } from '@nestjs/common';
 import { SchedulingService } from './scheduling.service';
 
 /** UC-03, UC-03.1, UC-06 and UC-07: schedules, matching and availability. */
@@ -10,6 +10,9 @@ export class SchedulingController {
 
   @Post()
   create(@Headers('authorization') header: string | undefined, @Body() body: unknown) { return this.service.saveTreatment(header, body); }
+
+  @Delete(':id')
+  remove(@Headers('authorization') header: string | undefined, @Param('id') id: string) { return this.service.deleteTreatment(header, id); }
 
   @Patch(':id')
   update(@Headers('authorization') header: string | undefined, @Body() body: unknown, @Param('id') id: string) { return this.service.saveTreatment(header, body, id); }

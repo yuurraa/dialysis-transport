@@ -443,3 +443,48 @@ test('single sessions and recurring exceptions reject real conflicts and resched
     assert.deepEqual((await local.query('select * from public.treatment_schedules order by id')).rows,before);
   } finally {await local.close();}
 });
+
+
+test('schedule deletion is owner-only, removes linked replacements and restores occurrences atomically', async () => {
+  const local = await databaseWithAuth();
+  try {
+    await local.exec(schema);
+    await local.exec(`insert into public.accounts(auth_user_id,email,display_name,role) values
+      ('${patient}','patient@example.test','Patient','patient'), ('${coordinator}','coordinator@example.test','Coordinator','coordinator'),
+      ('${driver}','driver@example.test','Driver','driver'), ('${stranger}','stranger@example.test','Other','patient');
+      insert into public.patients(account_id,full_name,phone,pickup_address,mobility,assistance_required,status)
+      select id,display_name,'81234567','Test street','ambulant',false,'active' from public.accounts where role='patient';`);
+    const own = async (who, sql, params = []) => {
+      await local.exec('begin; set local role authenticated;');
+      try { await local.query("select set_config('request.jwt.claim.sub',$1,true)",[who]); const r=await local.query(sql,params); await local.exec('commit'); return r.rows; }
+      catch (e) { await local.exec('rollback'); throw e; }
+    };
+    const insert = async (kind, date, day, parent=null, original=null) => (await own(patient,`insert into public.treatment_schedules
+      (patient_id,centre_id,kind,days,start_time,end_time,effective_from,effective_to,replaces_schedule_id,replaces_date)
+      select p.id,c.id,$1,$2,'09:00','13:00',$3,$4,$5,$6 from public.patients p cross join public.dialysis_centres c
+      where p.account_id=(select id from public.accounts where auth_user_id=auth.uid()) limit 1 returning *`,
+      [kind,[day],date,kind==='recurring'?'2026-12-31':date,parent,original]))[0];
+    const remove = (who,id) => own(who,'select public.delete_my_treatment($1) as id',[id]);
+    const series = await insert('recurring','2026-10-19',1);
+    const moved = await insert('single','2026-10-27',2,series.id,'2026-10-26');
+    for (const denied of [coordinator,driver,stranger]) await assert.rejects(remove(denied,series.id),/denied/i);
+    await assert.rejects(own(patient,'delete from public.treatment_schedules where id=$1',[series.id]),/permission/i);
+    const conflict = await insert('single','2026-10-26',1);
+    await assert.rejects(remove(patient,moved.id),/overlap/i);
+    assert.equal((await own(patient,'select id from public.treatment_schedules where id=$1',[moved.id])).length,1);
+    await remove(patient,conflict.id);
+    await remove(patient,moved.id);
+    await assert.rejects(insert('single','2026-10-26',1),/overlap/i);
+    const second = await insert('single','2026-10-28',3,series.id,'2026-10-26');
+    await local.exec(`update public.patients set status='inactive' where account_id=(select id from public.accounts where auth_user_id='${patient}')`);
+    await assert.rejects(remove(patient,series.id),/denied/i);
+    await local.exec(`update public.patients set status='active' where account_id=(select id from public.accounts where auth_user_id='${patient}')`);
+    await remove(patient,series.id);
+    assert.equal((await own(patient,'select id from public.treatment_schedules where id=any($1)',[[series.id,second.id]])).length,0);
+    assert.equal((await remove(patient,series.id))[0].id,null);
+    await local.exec('begin; set local role anon;');
+    try { await assert.rejects(local.query('select public.delete_my_treatment($1)',[series.id]),/permission/i); }
+    finally { await local.exec('rollback'); }
+    await local.exec(schema);
+  } finally { await local.close(); }
+});

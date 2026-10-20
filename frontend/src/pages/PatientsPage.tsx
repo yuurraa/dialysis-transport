@@ -1,4 +1,5 @@
-import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react';
+import { Overlay, PageHeading } from '../components/DashboardUI';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { ApiError, apiGet, apiRequest } from '../lib/api';
 
 export interface Patient {
@@ -49,18 +50,6 @@ export default function PatientsPage({ notify, onSessionExpired }: { notify: (me
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
   const alive = useRef(false);
-  const title = useRef<HTMLHeadingElement>(null);
-  const modal = useRef<HTMLDialogElement>(null);
-  const formOpen = draft !== null;
-  useLayoutEffect(() => {
-    if (!formOpen || !modal.current) return;
-    const dialog = modal.current;
-    const previousOverflow = document.body.style.overflow;
-    dialog.showModal();
-    title.current?.focus();
-    document.body.style.overflow = 'hidden';
-    return () => { if (dialog.open) dialog.close(); document.body.style.overflow = previousOverflow; };
-  }, [formOpen]);
   const editButton = useRef<HTMLButtonElement | null>(null);
   const formWasOpen = useRef(false);
   const restoreFocus = useRef(false);
@@ -129,45 +118,23 @@ export default function PatientsPage({ notify, onSessionExpired }: { notify: (me
 
   const patientIcon = <span className="dashboard-data-status-icon" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><circle cx="12" cy="8" r="4" /><path d="M4 21v-2a8 8 0 0 1 16 0v2" /></svg></span>;
 
-  return <section className="dashboard-trips patients-panel" aria-labelledby="patients-title" aria-busy={updating}>
-    <header className="dashboard-section-heading patients-heading"><div><p className="dashboard-eyebrow">Patient Management</p><h1 id="patients-title">Patients List</h1></div><label className="patient-search"><svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 5 5" /></svg><input type="search" aria-label="Search patients" placeholder="Name, phone or full patient ID" maxLength={100} value={searchText} onChange={event => setSearchText(event.target.value)} /></label></header>
+  return <section className="dashboard-trips patients-panel page-panel" aria-labelledby="patients-title" aria-busy={updating}>
+    <PageHeading id="patients-title" eyebrow="Patient Management" title="Patients List" actions={<label className="patient-search"><svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 5 5" /></svg><input type="search" aria-label="Search patients" placeholder="Patient name, phone or ID" maxLength={100} value={searchText} onChange={event => setSearchText(event.target.value)} /></label>} />
     {loading && !list ? <div className="account-loading patients-loading" role="status" aria-label="Loading patients"><span className="account-spinner" aria-hidden="true" /><span>Loading...</span></div>
       : error ? <div className="dashboard-data-status patients-status">{patientIcon}<div><h3 role="alert">{error}</h3><p>Patient records are currently unavailable.</p></div><button type="button" onClick={() => setReload(value => value + 1)}>Try again</button></div>
       : list && <>
-        {list.total === 0 ? <div className="dashboard-data-status patients-status" role="status">{patientIcon}<div><h3>{search ? 'No matching patients.' : 'No patients yet.'}</h3><p>{search ? 'Try another name, phone number or full patient ID.' : 'Patients appear here after completing account creation.'}</p></div></div> : <>
+        {list.total === 0 ? <div className="dashboard-data-status patients-status" role="status">{patientIcon}<div><h3>{search ? 'No matching patients.' : 'No patients yet.'}</h3><p>{search ? 'Try another patient name, phone number or full patient ID.' : 'Patients appear here after completing account creation.'}</p></div></div> : <>
           <div className="patients-table-scroll" tabIndex={0} role="region" aria-label="Patient records"><table className="patients-table"><colgroup>{[26, 20, 17, 13, 12, 12].map((width, index) => <col key={index} style={{ width: `${width}%` }} />)}</colgroup><thead><tr>{patientColumns.map(column => <th key={column.key} scope="col" aria-label={column.label} aria-sort={sort === column.key ? direction === 'asc' ? 'ascending' : 'descending' : 'none'}><button type="button" className="patient-sort-button" aria-label={sort === column.key && direction === 'desc' ? `Reset ${column.label} ordering` : `Sort by ${column.label} ${sort === column.key ? 'descending' : 'ascending'}`} onClick={() => sortPatients(column.key)}>{column.label}{sort === column.key && <span aria-hidden="true">{direction === 'asc' ? '▲' : '▼'}</span>}</button></th>)}<th scope="col">Actions</th></tr></thead><tbody>
             {list.patients.map(patient => <tr key={patient.id}><td className="patient-record-id">{patient.id}</td><td>{patient.full_name}</td><td>{patient.phone}</td><td>{mobilityLabels[patient.mobility]}</td><td>{patient.status === 'active' ? 'Active' : 'Inactive'}</td><td><button type="button" aria-label={`View ${patient.full_name}`} disabled={updating} ref={patient.id === editingId ? editButton : undefined} onClick={() => open(patient)}>View</button></td></tr>)}
           </tbody></table></div>
         </>}
           <div className="patients-pagination"><span>{list.total} {list.total === 1 ? 'patient' : 'patients'} · Page {list.page}</span><div className="patient-actions"><button type="button" disabled={updating || page === 1} onClick={() => setFilters(current => ({ ...current, page: current.page - 1 }))}>Previous</button><button type="button" disabled={updating || page * list.pageSize >= list.total} onClick={() => setFilters(current => ({ ...current, page: current.page + 1 }))}>Next</button></div></div>
       </>}
-    {draft && selectedPatient && <dialog className="dashboard-dialog patient-dialog patient-form-panel" ref={modal} aria-labelledby="patient-dialog-title" aria-busy={saving}
-      onCancel={event => { event.preventDefault(); if (!saving) close(); }}
-      onKeyDown={event => {
-        if (event.key !== 'Tab') return;
-        const controls = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('input:not(:disabled), select:not(:disabled), textarea:not(:disabled), button:not(:disabled)'));
-        const first = controls[0];
-        const last = controls[controls.length - 1];
-        if (!first) event.preventDefault();
-        else if (event.shiftKey && (document.activeElement === first || document.activeElement === title.current)) { event.preventDefault(); last.focus(); }
-        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
-      }}
-      onClick={event => {
-        if (event.target !== event.currentTarget || saving) return;
-        const bounds = event.currentTarget.getBoundingClientRect();
-        if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) close();
-      }}>
-      <header className="dashboard-section-heading"><div><p className="profile-id">Patient ID: {selectedPatient.id}</p><h2 id="patient-dialog-title" ref={title} tabIndex={-1}>Patient Details</h2></div></header>
-
-      {editing ? <form className="patient-form" onSubmit={save} aria-busy={saving}>
-        <PatientFields draft={draft} onChange={setDraft} disabled={saving} showStatus personalDetailsReadOnly />
-        {saveError && <p className="patient-error" role="alert">{saveError}</p>}
-        <div className="patient-actions"><button type="button" disabled={saving} onClick={() => { setDraft(patientDraft(selectedPatient)); setSaveError(''); setEditing(false); }}>Cancel</button><button className="patient-primary" type="submit" disabled={saving}>{saving ? <><span className="account-spinner" aria-hidden="true" />Loading...</> : 'Save Patient'}</button></div>
-      </form> : <>
-        <div className="patient-readonly-fields"><PatientFields draft={draft} onChange={setDraft} disabled showStatus /></div>
-        <div className="patient-actions"><button type="button" onClick={close}>Close</button><button ref={detailsEditButton} className="patient-primary" type="button" onClick={() => { setDraft(patientDraft(selectedPatient)); setSaveError(''); setEditing(true); }}>Edit Patient</button></div>
-      </>}
-    </dialog>}
+    {draft && selectedPatient && <Overlay title="Patient Details" description={<span className="profile-id">Patient ID: {selectedPatient.id}</span>} className="patient-dialog" busy={saving} onClose={close} onSubmit={editing ? save : undefined} error={saveError} onDismissError={() => setSaveError('')}
+      footer={editing ? <><button className="patient-primary" type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save Patient'}</button><button type="button" disabled={saving} onClick={() => { setDraft(patientDraft(selectedPatient)); setSaveError(''); setEditing(false); }}>Cancel</button></>
+        : <><button ref={detailsEditButton} className="patient-primary" type="button" onClick={() => { setDraft(patientDraft(selectedPatient)); setSaveError(''); setEditing(true); }}>Edit Patient</button><button type="button" onClick={close}>Close</button></>}>
+      <PatientFields draft={draft} onChange={setDraft} disabled={saving || !editing} showStatus personalDetailsReadOnly={editing} />
+    </Overlay>}
   </section>;
 }
 

@@ -11,7 +11,7 @@ export function apiGet<T>(path: string, accessToken?: string): Promise<T> {
   return apiRequest<T>(path, 'GET', undefined, accessToken);
 }
 
-export async function apiRequest<T>(path: string, method: 'GET' | 'POST' | 'PATCH', body?: unknown, accessToken?: string): Promise<T> {
+export async function apiRequest<T>(path: string, method: 'GET' | 'POST' | 'PATCH' | 'DELETE', body?: unknown, accessToken?: string): Promise<T> {
   const token = accessToken ?? (supabase ? (await supabase.auth.getSession()).data.session?.access_token : undefined);
   const origin = (import.meta.env.VITE_API_URL ?? '').replace(/\/$/, '');
   const controller = new AbortController();

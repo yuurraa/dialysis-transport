@@ -1,4 +1,4 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page, type Locator } from '@playwright/test';
 
 // Only the external Auth HTTP boundary is simulated; React and Supabase JS run unchanged.
 const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': 'GET, POST, OPTIONS' };
@@ -20,6 +20,14 @@ const session = {
     created_at: '2026-01-01T00:00:00Z',
   },
 };
+
+async function chooseOption(control: Locator, value: string) {
+  if (await control.evaluate(element => element.tagName) === 'SELECT') { await control.selectOption(value); return; }
+  const label = (await control.getAttribute('aria-label'))!;
+  await control.click();
+  const list = control.page().getByRole('listbox', { name: label, exact: true });
+  await list.locator(`[data-value="${value}"]`).click();
+}
 
 async function seedSession(page: Page, expired = false) {
   await page.addInitScript(value => {
@@ -197,7 +205,7 @@ test('patient signup collects profile before account creation and survives reloa
   await expect(page.getByRole('button', { name: /Refresh account|Use another Google account/ })).toHaveCount(0);
   await expect(page.getByLabel('Role').locator('option')).toHaveText(['Choose a role', 'Patient', 'Caregiver', 'Driver']);
   await page.getByLabel('Username').fill('testpatient');
-  await page.getByLabel('Role').selectOption('patient');
+  await chooseOption(page.getByLabel('Role'), 'patient');
   await submitSignup(page);
   await expect(page.getByRole('heading', { name: /^Welcome back,/ })).toBeVisible();
   await openAccountDropdown(page);
@@ -254,7 +262,7 @@ test('registration errors keep entered details and allow retry without refresh c
   await page.route('**/api/auth/register', route => route.fulfill({ status: 503, json: { message: 'PRIVATE_DATABASE_DETAIL' } }));
   await page.goto('/');
   await page.getByLabel('Username').fill('testpatient');
-  await page.getByLabel('Role').selectOption('patient');
+  await chooseOption(page.getByLabel('Role'), 'patient');
   await submitSignup(page);
   await expect(page.getByRole('alert')).toContainText('Unable to create your account. Please try again.');
   await expect(page.getByLabel('Street', { exact: true })).toHaveValue('Test street');
@@ -306,7 +314,7 @@ test('a session rejected during signup returns to sign-in rather than trapping t
   await page.route('**/auth/v1/logout?scope=local', route => route.request().method() === 'OPTIONS' ? route.fallback() : route.fulfill({ status: 204, headers: cors }));
   await page.goto('/');
   await page.getByLabel('Username').fill('testpatient');
-  await page.getByLabel('Role').selectOption('patient');
+  await chooseOption(page.getByLabel('Role'), 'patient');
   await submitSignup(page);
   await expect(page.getByRole('button', { name: 'Continue with Google' })).toBeEnabled();
   await expect(page.locator('.toast-region')).toContainText('Your session is no longer valid. Please sign in with Google again.');
@@ -446,7 +454,7 @@ test.describe('touch phone layouts', () => {
           expect(await page.getByLabel('Username').evaluate(element => parseFloat(getComputedStyle(element).fontSize))).toBeGreaterThanOrEqual(16);
           await page.getByLabel('Username').focus();
           await page.getByLabel('Username').fill('mobilepatient');
-          await page.getByLabel('Role').selectOption('patient');
+          await chooseOption(page.getByLabel('Role'), 'patient');
           await expect(page.getByRole('button', { name: 'Next', exact: true })).toBeEnabled();
         }
       });
@@ -481,7 +489,7 @@ test('signup shows the selected Google email as a disabled field and Cancel does
   await expect(page.getByLabel('Email', { exact: true })).toBeDisabled();
   await expect(page.getByRole('button', { name: 'Change Google account' })).toBeVisible();
   await page.getByLabel('Username').fill('cancelledpatient');
-  await page.getByLabel('Role').selectOption('patient');
+  await chooseOption(page.getByLabel('Role'), 'patient');
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Continue with Google' })).toBeEnabled();
   expect(await page.locator('.auth-toast').count()).toBe(0);
@@ -503,7 +511,7 @@ async function beginGoogleSelection(page: Page) {
   await page.route('**/auth/v1/authorize**', route => route.fulfill({ contentType: 'text/html', body: 'Google account picker boundary' }));
   await page.goto('/');
   await page.getByLabel('Username').fill('savedpatient');
-  await page.getByLabel('Role').selectOption('caregiver');
+  await chooseOption(page.getByLabel('Role'), 'caregiver');
   await page.getByRole('button', { name: 'Change Google account' }).click();
   await page.waitForURL('https://auth.example.test/auth/v1/authorize**');
   const url = new URL(page.url());
@@ -559,7 +567,7 @@ test('signup actions use primary-first order, equal vertical spacing and hover f
   await seedSession(page);
   await page.goto('/');
   await page.getByLabel('Username').fill('testpatient');
-  await page.getByLabel('Role').selectOption('patient');
+  await chooseOption(page.getByLabel('Role'), 'patient');
   await expect(page.locator('.signup-actions button')).toHaveText(['Next', 'Cancel']);
   const gaps = await page.evaluate(() => {
     const username = document.querySelector('input[autocomplete=username]')!;
@@ -740,7 +748,7 @@ test('a timed-out registration response recovers an account already created by t
   await page.route('**/api/auth/register', async () => { registrations++; started(); await waiting; });
   await page.goto('/');
   await page.getByLabel('Username').fill('testpatient');
-  await page.getByLabel('Role').selectOption('patient');
+  await chooseOption(page.getByLabel('Role'), 'patient');
   await advanceSignup(page);
   await page.locator('.signup-form').dispatchEvent('submit');
   await requested;
@@ -758,7 +766,7 @@ test('active coordinators land on a separate dashboard with honest unavailable m
   await expect(page.getByRole('heading', { name: "Today's trips" })).toBeVisible();
   await expect(page.locator('.landing-page')).toHaveCount(0);
   await expect(page.getByRole('heading', { name: 'Every patient.' })).toHaveCount(0);
-  await expect(page.locator('.dashboard-metric-value')).toHaveText(['—', '—', '—', '—']);
+  await expect(page.locator('.dashboard-metric-value')).toHaveText(['-', '-', '-', '-']);
   await expect(page.getByText('Trip information is not available.')).toBeVisible();
   for (const status of ['Unfilled', 'At-Risk', 'On-Track', 'Resolved']) {
     await page.getByRole('button', { name: status, exact: true }).click();
@@ -1231,7 +1239,7 @@ test('coordinator reads patient details but persists only Status and Notes', asy
   await expect(page.getByRole('button', { name: 'Save Patient', exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: 'Edit Patient', exact: true }).click();
   await expect(details.getByLabel('Notes', { exact: true })).toHaveValue('');
-  await details.getByLabel('Status', { exact: true }).selectOption('inactive');
+  await chooseOption(details.getByLabel('Status', { exact: true }), 'inactive');
   await details.getByLabel('Notes', { exact: true }).fill('Coordinator note.');
   await page.getByRole('button', { name: 'Save Patient', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Edit Patient', exact: true })).toBeVisible();
@@ -1299,6 +1307,20 @@ test('patient list pagination and mobile drawer navigation preserve bounded tabl
   await page.getByRole('dialog').getByRole('link', { name: 'Patients', exact: true }).click();
   await expect(page.getByRole('dialog')).toBeHidden();
   await expect(page.getByRole('heading', { name: 'Patients List', exact: true })).toBeVisible();
+  const title = await page.getByRole('heading', { name: 'Patients List', exact: true }).boundingBox();
+  const subheader = await page.getByText('Patient Management', { exact: true }).boundingBox();
+  expect(subheader!.y).toBeGreaterThanOrEqual(title!.y + title!.height);
+  for (const width of [390, 768, 1440]) {
+    await page.setViewportSize({ width, height: 844 });
+    const hintFits = await page.getByRole('searchbox', { name: 'Search patients' }).evaluate((input: HTMLInputElement) => {
+      const style = getComputedStyle(input);
+      const context = document.createElement('canvas').getContext('2d')!;
+      context.font = style.font;
+      return context.measureText(input.placeholder).width <= input.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+    });
+    expect(hintFits).toBe(true);
+  }
+  await page.setViewportSize({ width: 390, height: 844 });
   await expect(page.getByRole('button', { name: 'Previous', exact: true })).toBeDisabled();
   await page.getByRole('button', { name: 'Next', exact: true }).click();
   await expect(page.getByRole('cell', { name: 'Second Page Patient', exact: true })).toBeVisible();
@@ -1361,7 +1383,7 @@ test('patient dashboard completes and edits its own profile with shared styling 
   await page.getByLabel('Postal code', { exact: true }).fill('560123');
   await page.getByLabel('Unit no.', { exact: true }).fill('#05-12');
   await page.getByLabel('Notes', { exact: true }).fill('Please call upon arrival.');
-  await page.getByLabel('Assistance required', { exact: true }).selectOption('yes');
+  await chooseOption(page.getByLabel('Assistance required', { exact: true }), 'yes');
   await expect(page.getByLabel('Status', { exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: 'Finish creating account', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Your rides', exact: true })).toBeVisible();
@@ -1377,6 +1399,7 @@ test('patient dashboard completes and edits its own profile with shared styling 
   await expect(page.getByLabel('Street', { exact: true })).toBeDisabled();
   await expect(page.getByLabel('Street', { exact: true })).toHaveValue('Test address');
   await page.getByRole('button', { name: 'Edit profile', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: 'Edit profile', exact: true }).locator('.overlay-footer > button')).toHaveText(['Save profile', 'Cancel']);
   await expect(page.getByLabel('Street', { exact: true })).toHaveValue('Test address');
   await expect(page.getByLabel('Country code', { exact: true })).toHaveCount(0);
   await expect(page.getByLabel('Contact number', { exact: true })).toHaveValue('+65 81234567');
@@ -1467,7 +1490,7 @@ test('patient signup stays in the landing box until final submission and Back pr
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/');
   await page.getByLabel('Username').fill('testpatient');
-  await page.getByLabel('Role').selectOption('patient');
+  await chooseOption(page.getByLabel('Role'), 'patient');
   await page.getByRole('button', { name: 'Next', exact: true }).click();
   expect(submissions).toBe(0);
   await expect(page).toHaveURL('http://127.0.0.1:5199/');
@@ -1515,7 +1538,7 @@ test('landing columns stay centred between signup steps', async ({ page }) => {
   await page.route('**/api/auth/me', route => route.fulfill({ json: { account: null } }));
   await page.goto('/');
   await page.getByLabel('Username').fill('testpatient');
-  await page.getByLabel('Role').selectOption('patient');
+  await chooseOption(page.getByLabel('Role'), 'patient');
   for (const width of [1440, 1728]) {
     await page.setViewportSize({ width, height: 1000 });
     const intro = page.locator('.landing-intro');
@@ -1753,9 +1776,9 @@ test('patients save treatment requirements and coordinators have a read-only sch
   await expect(page.getByRole('heading',{name:'Add Schedule',exact:true})).toBeVisible();
   await page.getByRole('combobox',{name:'Dialysis centre',exact:true}).click();
   await page.getByRole('option',{name:/Test Centre/}).click();
-  await page.getByLabel('Treatment day',{exact:true}).selectOption('1');
-  await page.getByLabel('Treatment day',{exact:true}).selectOption('3');
-  await page.getByLabel('Treatment day',{exact:true}).selectOption('1');
+  await chooseOption(page.getByLabel('Treatment day',{exact:true}), '1');
+  await chooseOption(page.getByLabel('Treatment day',{exact:true}), '3');
+  await chooseOption(page.getByLabel('Treatment day',{exact:true}), '1');
   const panelAfter=await page.locator('.treatment-panel').boundingBox();
   expect(panelAfter!.width).toBe(panelBefore!.width);
   expect(panelAfter!.height).toBe(panelBefore!.height);
@@ -1889,6 +1912,9 @@ test('patient schedule heading stays in place when the Add Schedule action loads
     await page.goto('/dashboard/schedules');
     await expect(page.locator('.treatment-panel .account-loading')).toBeVisible();
     const heading=page.getByRole('heading',{name:'Treatment Schedules',exact:true});
+    const subheader=page.getByText('Treatment planning',{exact:true});
+    await expect(subheader).toHaveCSS('text-transform','uppercase');
+    await expect(subheader).toHaveCSS('font-weight','600');
     const before=await heading.boundingBox();
     await expect(page.getByRole('button',{name:'Add Schedule',exact:true})).toBeHidden();
     release();
@@ -1980,12 +2006,16 @@ test('coordinator patient details overlay preserves the list and returns focus a
     const dialog=page.getByRole('dialog',{name:'Patient Details',exact:true});
     await expect(dialog).toBeVisible();
     await expect(dialog.getByRole('heading',{name:'Patient Details',exact:true})).toBeFocused();
+    await expect(dialog.locator('.overlay-footer > button')).toHaveText(['Edit Patient', 'Close']);
     expect(await page.locator('.patients-table').boundingBox()).toEqual(before);
     expect(await page.evaluate(()=>document.body.style.overflow)).toBe('hidden');
     await dialog.getByRole('button',{name:'Edit Patient',exact:true}).focus();
     await page.keyboard.press('Tab');
     await expect(dialog.getByRole('button',{name:'Close',exact:true})).toBeFocused();
     await dialog.getByRole('button',{name:'Edit Patient',exact:true}).click();
+    await expect(dialog.locator('.overlay-footer > button')).toHaveText(['Save Patient', 'Cancel']);
+    const actions = await dialog.locator('.overlay-footer > button').evaluateAll(buttons => buttons.map(button => button.getBoundingClientRect().width));
+    expect(Math.abs(actions[0] - actions[1])).toBeLessThanOrEqual(1);
     await expect(dialog.getByLabel('Full name',{exact:true})).toBeDisabled();
     await dialog.getByLabel('Notes',{exact:true}).fill('Discard on dismissal.');
     await page.keyboard.press('Escape');
@@ -2022,7 +2052,7 @@ test('patient records an independent single session without recurring fields', a
   await page.goto('/dashboard/schedules');
   await page.getByRole('button',{name:'Add Schedule',exact:true}).click();
   const dialog=page.getByRole('dialog',{name:'Add Schedule',exact:true});
-  await dialog.getByLabel('Schedule type',{exact:true}).selectOption('single');
+  await chooseOption(dialog.getByLabel('Schedule type',{exact:true}), 'single');
   await expect(dialog.getByLabel('Treatment day',{exact:true})).toHaveCount(0);
   await expect(dialog.getByLabel('Effective from',{exact:true})).toHaveCount(0);
   await dialog.getByRole('combobox',{name:'Dialysis centre',exact:true}).click();
@@ -2035,7 +2065,7 @@ test('patient records an independent single session without recurring fields', a
   await expect(page.getByRole('heading',{name:/27 Oct 2026/})).toBeVisible();
   await page.reload();
   await page.getByRole('button',{name:'Edit Schedule',exact:true}).click();
-  await expect(page.getByLabel('Schedule type',{exact:true})).toBeDisabled();
+  await expect(page.getByLabel('Schedule type',{exact:true})).toHaveCount(0);
   await expect(page.getByLabel('Session date',{exact:true})).toHaveValue('2026-10-27');
   await page.getByRole('button',{name:'Cancel',exact:true}).click();
 });
@@ -2062,28 +2092,45 @@ test('rescheduling replaces one recurring occurrence and failed saves leave the 
     return route.fulfill({json:{centres:[centre],schedules:[series,...(replacement?[replacement]:[])]}});
   });
   await page.goto('/dashboard/schedules');
-  await page.getByRole('button',{name:'Reschedule Session',exact:true}).click();
-  const dialog=page.getByRole('dialog',{name:'Reschedule Session',exact:true});
-  await dialog.getByLabel('Original session date',{exact:true}).fill('2026-10-27');
-  await dialog.getByLabel('Session date',{exact:true}).fill('2026-10-28');
+  await page.getByRole('button',{name:'Edit Schedule',exact:true}).first().click();
+  await chooseOption(page.getByLabel('Apply changes to'), 'occurrence');
+  const dialog=page.getByRole('dialog',{name:'Edit Schedule',exact:true});
+  const source = dialog.getByRole('combobox', { name: 'Session to change', exact: true });
+  await expect(source).toBeVisible();
+  await source.click();
+  await expect(page.getByRole('listbox', {name:'Session to change',exact:true}).locator('[data-value="2026-10-27"]')).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await expect(dialog.getByLabel('Schedule type', { exact: true })).toHaveCount(0);
   await dialog.getByRole('button',{name:'Save Schedule',exact:true}).click();
-  await expect(dialog.getByRole('alert')).toContainText('valid occurrence');
+  await expect(dialog.locator('.error-toast')).toContainText('session');
+  const toastBox = await dialog.locator('.error-toast').boundingBox();
+  const footerBox = await dialog.locator('.overlay-footer').boundingBox();
+  expect(toastBox!.y + toastBox!.height).toBeLessThanOrEqual(footerBox!.y);
+  await dialog.locator('.overlay-body').evaluate(e => e.scrollTop = e.scrollHeight);
+  expect(await dialog.locator('.error-toast').boundingBox()).toEqual(toastBox);
   expect(writes).toBe(0);
-  await dialog.getByLabel('Original session date',{exact:true}).fill('2026-10-26');
-  await dialog.getByLabel('Session date',{exact:true}).fill('2026-10-27');
+  await dialog.getByRole('button', { name: 'Dismiss error' }).click();
+  await chooseOption(source, '2026-10-26');
+  await expect(dialog.getByLabel('New session date',{exact:true})).toHaveValue('2026-10-26');
+  await chooseOption(source, '2026-11-02');
+  await expect(dialog.getByLabel('New session date',{exact:true})).toHaveValue('2026-11-02');
+  await dialog.getByLabel('New session date',{exact:true}).fill('2026-10-27');
+  await chooseOption(source, '2026-10-26');
+  await expect(dialog.getByLabel('New session date',{exact:true})).toHaveValue('2026-10-27');
   await dialog.getByRole('button',{name:'Save Schedule',exact:true}).click();
-  await expect(dialog.getByRole('alert')).toContainText('could not be saved');
-  await expect(dialog.getByLabel('Original session date',{exact:true})).toHaveValue('2026-10-26');
+  await expect(dialog.locator('.error-toast')).toContainText('could not be saved');
+  await expect(source).toHaveText('Monday, 26 Oct 2026');
   expect(replacement).toBeNull();
   fail=false;
   await dialog.getByRole('button',{name:'Save Schedule',exact:true}).click();
   await expect(dialog).toBeHidden();
   await expect(page.getByText('Rescheduled Session',{exact:true})).toBeVisible();
-  await expect(page.getByText('Rescheduled dates: 26 Oct 2026',{exact:true})).toBeVisible();
-  await page.getByRole('button',{name:'Reschedule Session',exact:true}).click();
-  await dialog.getByLabel('Original session date',{exact:true}).fill('2026-10-26');
-  await dialog.getByRole('button',{name:'Save Schedule',exact:true}).click();
-  await expect(dialog.getByRole('alert')).toContainText('already been rescheduled');
+  await expect(page.getByRole('button', {name:'1 rescheduled session',exact:true})).toBeVisible();
+  await page.getByRole('button',{name:'Edit Schedule',exact:true}).first().click();
+  await chooseOption(page.getByLabel('Apply changes to'), 'occurrence');
+  await source.click();
+  await expect(page.getByRole('listbox', {name:'Session to change',exact:true}).locator('[data-value="2026-10-26"]')).toHaveCount(0);
+  await page.keyboard.press('Escape');
   expect(writes).toBe(2);
   for(const width of [320,390,1440]) {
     await page.setViewportSize({width,height:900});
@@ -2091,4 +2138,219 @@ test('rescheduling replaces one recurring occurrence and failed saves leave the 
     expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
   }
   await dialog.getByRole('button',{name:'Cancel',exact:true}).click();
+});
+
+
+for (const width of [390, 1440]) test(`shared schedule layout contains long lists and keeps overlay actions visible at ${width}px`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 844 });
+  await seedSession(page);
+  await page.route('**/api/auth/me', r => r.fulfill({ json: { account: activeAccount } }));
+  const centre = { id: '77777777-7777-4777-8777-777777777777', name: 'Test Centre', address: 'Test street', postal_code: '560123' };
+  const schedules = Array.from({ length: 20 }, (_, i) => ({ id: `88888888-8888-4888-8888-${String(i).padStart(12,'0')}`, kind: 'recurring', centre_id: centre.id, days: [2], start_time: '11:00', end_time: '12:30', effective_from: '2026-10-20', effective_to: '2027-07-06', patients: { full_name: 'Test Patient' } }));
+  await page.route('**/api/schedules', r => r.fulfill({ json: { centres: [centre], schedules } }));
+  await page.goto('/dashboard/schedules');
+  const records = page.getByRole('region', { name: 'Treatment schedules', exact: true });
+  await expect(records).toBeVisible();
+  expect(await records.evaluate(e => e.scrollHeight > e.clientHeight)).toBe(true);
+  expect(await page.evaluate(() => document.documentElement.scrollHeight <= innerHeight + 1)).toBe(true);
+  const heading = page.getByRole('heading', { name: 'Treatment Schedules', exact: true });
+  const before = await heading.boundingBox();
+  await records.evaluate(e => e.scrollTop = e.scrollHeight);
+  expect(await heading.boundingBox()).toEqual(before);
+  await records.evaluate(e => e.scrollTop = 0);
+  await expect(page.getByRole('button', { name: 'Reschedule Session', exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Edit Schedule', exact: true }).first().click();
+  const dialog = page.getByRole('dialog', { name: 'Edit Schedule', exact: true });
+  await expect(dialog.getByLabel('Apply changes to')).toHaveText('Entire recurring schedule');
+  await chooseOption(dialog.getByLabel('Apply changes to'), 'occurrence');
+  await expect(dialog.getByLabel('Session to change', { exact: true })).toBeVisible();
+  await chooseOption(dialog.getByLabel('Apply changes to'), 'series');
+  await expect(dialog.locator('.overlay-footer > button')).toHaveText(['Save Schedule', 'Cancel', 'Delete Schedule']);
+  const save = dialog.getByRole('button', { name: 'Save Schedule', exact: true });
+  const saveBox = await save.boundingBox();
+  const cancelBox = await dialog.getByRole('button', { name: 'Cancel', exact: true }).boundingBox();
+  expect(Math.abs(saveBox!.width - cancelBox!.width)).toBeLessThanOrEqual(1);
+  expect(saveBox!.y + saveBox!.height).toBeLessThanOrEqual(844);
+  await dialog.locator('.overlay-body').evaluate(e => e.scrollTop = e.scrollHeight);
+  expect(await save.boundingBox()).toEqual(saveBox);
+  await expect(dialog.getByRole('button', { name: 'Delete Schedule', exact: true })).toBeVisible();
+  if (width === 390) {
+    for (const [height, fontSize] of [[568, 16], [900, 32]]) {
+      await page.setViewportSize({ width: 320, height });
+      await page.evaluate(size => { document.documentElement.style.fontSize = `${size}px`; }, fontSize);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      const footer = await dialog.locator('.overlay-footer').boundingBox();
+      expect(footer!.y + footer!.height).toBeLessThanOrEqual(height);
+      expect(await dialog.locator('.overlay-body').evaluate(e => e.clientHeight)).toBeGreaterThan(44);
+    }
+  }
+  await page.keyboard.press('Escape');
+  await expect(dialog).toBeHidden();
+  await expect(page.getByRole('button', { name: 'Edit Schedule', exact: true }).first()).toBeFocused();
+});
+
+test('schedule deletion requires confirmation, preserves failed edits and removes only after success', async ({ page }) => {
+  await seedSession(page);
+  await page.route('**/api/auth/me', r => r.fulfill({ json: { account: activeAccount } }));
+  const centre = { id: '77777777-7777-4777-8777-777777777777', name: 'Test Centre', address: 'Test street', postal_code: '560123' };
+  const schedule = { id: '88888888-8888-4888-8888-888888888888', kind: 'single', centre_id: centre.id, days: [5], start_time: '11:00', end_time: '12:30', effective_from: '2026-10-30', effective_to: '2026-10-30', patients: { full_name: 'Test Patient' } };
+  let deleted = false; let fail = true; let writes = 0;
+  await page.route('**/api/schedules**', r => {
+    if (r.request().method() === 'DELETE') { writes++; if (fail) return r.fulfill({ status: 503, json: {} }); deleted = true; return r.fulfill({ json: { id: schedule.id } }); }
+    return r.fulfill({ json: { centres: [centre], schedules: deleted ? [] : [schedule] } });
+  });
+  await page.goto('/dashboard/schedules');
+  await expect(page.getByRole('heading', { name: /Friday, 30 Oct 2026/ })).toBeVisible();
+  await page.getByRole('button', { name: 'Edit Schedule', exact: true }).click();
+  await page.getByLabel('Session start').fill('10:00');
+  await page.getByRole('button', { name: 'Delete Schedule', exact: true }).click();
+  expect(writes).toBe(0);
+  await page.getByRole('button', { name: 'Keep Schedule', exact: true }).click();
+  await expect(page.getByLabel('Session start')).toHaveValue('10:00');
+  await page.getByRole('button', { name: 'Delete Schedule', exact: true }).click();
+  await page.getByRole('button', { name: 'Confirm Delete', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText('could not be deleted');
+  expect(deleted).toBe(false);
+  fail = false;
+  await page.getByRole('button', { name: 'Confirm Delete', exact: true }).click();
+  await expect(page.getByText('No treatment schedules yet.', { exact: true })).toBeVisible();
+  expect(writes).toBe(2);
+});
+
+
+test('one-session selection stays bounded for long series and can jump to another month', async ({ page }) => {
+  await seedSession(page);
+  await page.route('**/api/auth/me', r => r.fulfill({ json: { account: activeAccount } }));
+  const centre = { id: '77777777-7777-4777-8777-777777777777', name: 'Test Centre', address: 'Test street', postal_code: '560123' };
+  const series = { id: '88888888-8888-4888-8888-888888888888', kind: 'recurring', centre_id: centre.id, days: [1], start_time: '09:00', end_time: '13:00', effective_from: '2026-10-19', effective_to: '9999-12-31', patients: { full_name: 'Test Patient' } };
+  await page.route('**/api/schedules', r => r.fulfill({ json: { centres: [centre], schedules: [series] } }));
+  await page.goto('/dashboard/schedules');
+  await page.getByRole('button', { name: 'Edit Schedule', exact: true }).click();
+  await chooseOption(page.getByLabel('Apply changes to'), 'occurrence');
+  const source = page.getByRole('combobox', { name: 'Session to change', exact: true });
+  await expect(source).toBeVisible();
+  await source.click();
+  expect(await page.getByRole('listbox', {name:'Session to change',exact:true}).getByRole('option').count()).toBeLessThanOrEqual(5);
+  await page.keyboard.press('Escape');
+  await page.getByLabel('Show sessions in', { exact: true }).fill('2099-12');
+  await source.click();
+  await expect(page.getByRole('listbox', {name:'Session to change',exact:true}).locator('[data-value="2099-12-07"]')).toHaveCount(1);
+  await page.keyboard.press('Escape');
+  await source.click();
+  expect(await page.getByRole('listbox', {name:'Session to change',exact:true}).getByRole('option').count()).toBeLessThanOrEqual(5);
+  await page.keyboard.press('Escape');
+  await chooseOption(source, '2099-12-07');
+  await expect(page.getByLabel('New session date', { exact: true })).toHaveValue('2099-12-07');
+});
+
+
+for (const width of [390, 1440]) test(`session dropdown and edit footer stay bounded and stable at ${width}px`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 844 });
+  await seedSession(page);
+  await page.route('**/api/auth/me', r => r.fulfill({ json: { account: activeAccount } }));
+  const centre = { id: '77777777-7777-4777-8777-777777777777', name: 'Test Centre', address: 'Test street', postal_code: '560123' };
+  const series = { id: '88888888-8888-4888-8888-888888888888', kind: 'recurring', centre_id: centre.id, days: [2], start_time: '11:00', end_time: '12:30', effective_from: '2026-10-20', effective_to: '2027-07-06', patients: { full_name: 'Test Patient' } };
+  await page.route('**/api/schedules', r => r.fulfill({ json: { centres: [centre], schedules: [series] } }));
+  await page.goto('/dashboard/schedules');
+  await page.getByRole('button', { name: 'Edit Schedule', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Edit Schedule', exact: true });
+  const before = await dialog.locator('.overlay-footer > button').evaluateAll(buttons => buttons.map(b => { const r = b.getBoundingClientRect(); return { x:r.x, y:r.y, width:r.width, height:r.height }; }));
+  await chooseOption(page.getByLabel('Apply changes to'), 'occurrence');
+  await expect(dialog.getByRole('button', { name: 'Delete Schedule', exact: true })).toBeVisible();
+  expect(await dialog.locator('.overlay-footer > button').evaluateAll(buttons => buttons.map(b => { const r = b.getBoundingClientRect(); return { x:r.x, y:r.y, width:r.width, height:r.height }; }))).toEqual(before);
+  await page.getByRole('combobox', { name: 'Session to change', exact: true }).click();
+  const options = page.getByRole('listbox', { name: 'Session to change', exact: true });
+  await expect(options).toBeVisible();
+  const bounds = await options.boundingBox();
+  expect(bounds!.height).toBeLessThanOrEqual(844 * 0.35);
+  expect(await options.evaluate(e => e.scrollHeight > e.clientHeight)).toBe(true);
+  await page.keyboard.press('Escape');
+  await expect(options).toBeHidden();
+  await expect(dialog).toBeVisible();
+  await page.getByRole('combobox', { name: 'Session to change', exact: true }).click();
+  await page.keyboard.press('End');
+  await page.keyboard.press('Enter');
+  await expect(page.getByLabel('New session date', { exact: true })).toHaveValue('2027-07-06');
+  await dialog.getByRole('button', { name: 'Delete Schedule', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: 'Delete Schedule', exact: true })).toContainText('entire recurring schedule');
+});
+
+test('many rescheduled dates use a compact count and a scrolling history overlay', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await seedSession(page);
+  await page.route('**/api/auth/me', r => r.fulfill({ json: { account: activeAccount } }));
+  const centre = { id: '77777777-7777-4777-8777-777777777777', name: 'Test Centre', address: 'Test street', postal_code: '560123' };
+  const series = { id: '88888888-8888-4888-8888-888888888888', kind: 'recurring', centre_id: centre.id, days: [2], start_time: '11:00', end_time: '12:30', effective_from: '2026-10-20', effective_to: '2027-07-06', patients: { full_name: 'Test Patient' } };
+  const moved = Array.from({ length: 30 }, (_, i) => { const date = new Date(Date.UTC(2026,9,20+i*7)).toISOString().slice(0,10); return { ...series, id: `99999999-9999-4999-8999-${String(i).padStart(12,'0')}`, kind: 'single', effective_from:date, effective_to:date, replaces_schedule_id:series.id, replaces_date:date }; });
+  await page.route('**/api/schedules', r => r.fulfill({ json: { centres: [centre], schedules: [series,...moved] } }));
+  await page.goto('/dashboard/schedules');
+  const summary = page.getByRole('button', { name: '30 rescheduled sessions', exact: true });
+  await expect(summary).toBeVisible();
+  await expect(page.getByText(/^Rescheduled dates:/)).toHaveCount(0);
+  await summary.click();
+  const history = page.getByRole('dialog', { name: 'Rescheduled sessions', exact: true });
+  await expect(history.getByRole('listitem')).toHaveCount(30);
+  expect(await history.locator('.overlay-body').evaluate(e => e.scrollHeight > e.clientHeight)).toBe(true);
+  await history.getByRole('button', { name: 'Close', exact: true }).click();
+  await expect(summary).toBeFocused();
+});
+
+for (const role of ['patient', 'coordinator']) test(`${role} schedule cards use compact identity rows and coordinator patient search`, async ({ page }) => {
+  await seedSession(page);
+  await page.route('**/api/auth/me', route => route.fulfill({ json: { account: { ...activeAccount, role, profile_complete: true } } }));
+  const centre = { id: '77777777-7777-4777-8777-777777777777', name: 'Test Centre', address: 'Test street', postal_code: '560123' };
+  const patientId = '11111111-1111-4111-8111-111111111111';
+  const schedules = [
+    { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', patient_id: patientId, patients: { full_name: 'Alex Fixture' }, kind: 'recurring', centre_id: centre.id, days: [1], effective_from: '2026-10-01', effective_to: '2026-12-31', start_time: '09:00', end_time: '10:00' },
+    { id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', patient_id: role === 'coordinator' ? '22222222-2222-4222-8222-222222222222' : patientId, patients: { full_name: role === 'coordinator' ? 'Jamie Fixture' : 'Alex Fixture' }, kind: 'single', centre_id: centre.id, days: [2], effective_from: '2026-10-20', effective_to: '2026-10-20', start_time: '11:00', end_time: '12:00' },
+  ];
+  await page.route('**/api/schedules', route => route.fulfill({ json: { centres: [centre], schedules } }));
+  await page.goto('/dashboard/schedules');
+  await expect(page.getByRole('heading', { name: role === 'coordinator' ? 'Treatment Schedule List' : 'Treatment Schedules', exact: true })).toBeVisible();
+  await expect(page.locator('.treatment-record')).toHaveCount(2);
+  const first = page.locator('.treatment-record').first();
+  for (const width of [1440, 390, 320]) {
+    await page.setViewportSize({ width, height: 900 });
+    const row = first.locator('.treatment-identity');
+    await expect(row).toContainText('Alex Fixture');
+    await expect(row).toContainText('Recurring');
+    if (width === 1440) {
+      const name = await row.getByText('Alex Fixture', { exact: true }).boundingBox();
+      const tag = await row.getByText('Recurring', { exact: true }).boundingBox();
+      expect(Math.abs(name!.y + name!.height / 2 - tag!.y - tag!.height / 2)).toBeLessThan(2);
+    }
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  }
+  if (role === 'coordinator') {
+    await expect(page.getByText('Schedule Management', { exact: true })).toBeVisible();
+    await expect(first).toContainText(`Patient ID: ${patientId}`);
+    await expect(page.getByRole('button', { name: 'Edit Schedule', exact: true })).toHaveCount(0);
+    const search = page.getByRole('searchbox', { name: 'Search treatment schedules' });
+    await search.fill('  jAMIE  ');
+    await expect(page.locator('.treatment-record')).toHaveCount(1);
+    await expect(page.locator('.treatment-record')).toContainText('Jamie Fixture');
+    await search.fill(patientId);
+    await expect(page.locator('.treatment-record')).toHaveCount(1);
+    await expect(page.locator('.treatment-record')).toContainText('Alex Fixture');
+    for (const [term, count] of [['  MONDAY  ', 1], ['20 Oct 2026', 1], ['2026-10-20', 1], ['single session', 1], ['recurring', 1], ['TEST CENTRE', 2]] as const) {
+      await search.fill(term);
+      await expect(page.locator('.treatment-record')).toHaveCount(count);
+    }
+    await search.fill('No such patient');
+    await expect(page.locator('.treatment-panel').getByRole('status')).toContainText('No matching schedules.');
+    await search.fill('');
+    await expect(page.locator('.treatment-record')).toHaveCount(2);
+  } else {
+    await expect(first).not.toContainText('Patient ID:');
+    const search = page.getByRole('searchbox', { name: 'Search treatment schedules' });
+    for (const [term, count] of [['  MONDAY  ', 1], ['20 Oct 2026', 1], ['single session', 1], ['recurring', 1], ['TEST CENTRE', 2]] as const) {
+      await search.fill(term);
+      await expect(page.locator('.treatment-record')).toHaveCount(count);
+    }
+    await search.fill('No such centre');
+    await expect(page.locator('.treatment-panel').getByRole('status')).toContainText('No matching schedules.');
+    await expect(page.getByRole('button', { name: 'Add Schedule', exact: true })).toBeVisible();
+    await search.fill('');
+    await expect(page.locator('.treatment-record')).toHaveCount(2);
+  }
 });

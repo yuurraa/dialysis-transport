@@ -48,6 +48,7 @@ test('schedule HTTP routes use /api/schedules for reads and writes', async () =>
   const { SchedulingController } = await import('../src/scheduling/scheduling.controller');
   const calls: unknown[]=[];
   @Module({controllers:[SchedulingController],providers:[{provide:SchedulingService,useValue:{
+    deleteTreatment: async (header: string,id: string)=>{calls.push({header,id});return {id};},
     treatments: async (header: string)=>{calls.push(header);return {centres:[],schedules:[]};},
     saveTreatment: async (header: string,body: unknown,id?: string)=>{calls.push({header,body,id});return {id:id ?? 'new'};},
   }}]}) class TestModule {}
@@ -61,7 +62,8 @@ test('schedule HTTP routes use /api/schedules for reads and writes', async () =>
     assert.equal((await fetch(`${origin}/api/schedules`,{method:'POST',headers,body:JSON.stringify(details)})).status,201);
     assert.equal((await fetch(`${origin}/api/schedules/${details.centre_id}`,{method:'PATCH',headers,body:JSON.stringify(details)})).status,200);
     assert.equal((await fetch(`${origin}/api/scheduling/treatments`,{headers})).status,404);
-    assert.equal(calls.length,3);
+    assert.equal((await fetch(`${origin}/api/schedules/${details.centre_id}`,{method:'DELETE',headers})).status,200);
+    assert.equal(calls.length,4);
     assert.equal(calls[0],'Bearer fixture');
   } finally {await app.close();}
 });
@@ -76,4 +78,25 @@ test('single session input uses one date and rescheduling validates its source',
   for(const body of [{...single,session_date:'2026-02-30'},{...single,days:[1]},{...single,replaces_schedule_id:details.centre_id},{...single,replaces_date:'2026-10-26'},{...details,kind:'single'},{...details,kind:'other'}]) assert.throws(()=>treatmentInput(body));
   const replacement=treatmentInput({...single,replaces_schedule_id:details.centre_id,replaces_date:'2026-10-26'});
   assert.equal(replacement.replaces_schedule_id,details.centre_id);
+});
+
+test('schedule deletion verifies active patient access and calls the atomic owner operation', async () => {
+  let role = 'patient'; let status = 'active'; let result: { data: unknown; error: { code: string } | null } = { data: details.centre_id, error: null };
+  const calls: unknown[] = [];
+  const service = new SchedulingService(
+    { verifyIdentity: async () => ({ account: { role, status } }) } as unknown as AuthService,
+    { forUser: () => ({ rpc: async (...args: unknown[]) => { calls.push(args); return result; } }) } as unknown as SupabaseService);
+  await assert.rejects(service.deleteTreatment(undefined, details.centre_id), /Sign-in/);
+  for (const denied of ['coordinator', 'driver', 'caregiver']) { role = denied; await assert.rejects(service.deleteTreatment('Bearer fixture', details.centre_id), /denied/); }
+  role = 'patient'; status = 'inactive';
+  await assert.rejects(service.deleteTreatment('Bearer fixture', details.centre_id), /denied/);
+  status = 'active';
+  await assert.rejects(service.deleteTreatment('Bearer fixture', 'bad-id'), /Invalid schedule/);
+  assert.equal(calls.length, 0);
+  assert.deepEqual(await service.deleteTreatment('Bearer fixture', details.centre_id), { id: details.centre_id });
+  assert.deepEqual(calls, [['delete_my_treatment', { target: details.centre_id }]]);
+  result = { data: null, error: null };
+  await assert.rejects(service.deleteTreatment('Bearer fixture', details.centre_id), /not found/);
+  result = { data: null, error: { code: '23P01' } };
+  await assert.rejects(service.deleteTreatment('Bearer fixture', details.centre_id), /overlap/);
 });

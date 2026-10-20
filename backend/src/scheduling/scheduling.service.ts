@@ -50,6 +50,15 @@ export class SchedulingService {
     return result.data;
   }
 
+  async deleteTreatment(header: string | undefined, id: string) {
+    const { client } = await this.access(header, true);
+    if (!/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(id)) throw new BadRequestException('Invalid schedule.');
+    const result = await client.rpc('delete_my_treatment', { target: id });
+    this.check(result.error);
+    if (!result.data) throw new NotFoundException('Treatment schedule not found.');
+    return { id: result.data };
+  }
+
   /** Generate outbound and return journeys with a 15-minute buffer in Asia/Singapore. */
   async createRecurringTrips(scope: PatientScope, slot: TreatmentSlotInput): Promise<unknown> {
     // TODO: Implement using Supabase and database constraints.
