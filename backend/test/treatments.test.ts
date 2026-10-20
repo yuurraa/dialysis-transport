@@ -8,7 +8,7 @@ import type { SupabaseService } from '../src/supabase.module';
 const details = { centre_id: '77777777-7777-4777-8777-777777777777', days: [1], start_time: '09:00', end_time: '13:00', effective_from: '2026-10-20', effective_to: '2026-12-31' };
 test('treatment input rejects malformed, conflicting and ownership fields', () => {
   assert.deepEqual(treatmentInput(details).days,[1]);
-  for (const body of [null, {}, { ...details, days: [] }, { ...details, days: [1,3] }, { ...details, days: [1,1] }, { ...details, days: [8] }, { ...details, end_time: '08:00' }, { ...details, start_time: '24:00' }, { ...details, effective_from: '2026-02-30' }, { ...details, effective_to: '2025-01-01' }, { ...details, patient_id: 'other' }]) assert.throws(() => treatmentInput(body));
+  for (const body of [null, {}, { ...details, days: [] }, { ...details, days: [1,3] }, { ...details, days: [1,1] }, { ...details, days: [8] }, { ...details, end_time: '08:00' }, { ...details, start_time: '24:00' }, { ...details, effective_from: '2026-02-30' }, { ...details, effective_to: '2025-01-01' }, { ...details, patient_id: 'other' }, { ...details, effective_from:'2026-10-20',effective_to:'2026-10-20' }]) assert.throws(() => treatmentInput(body));
 });
 test('treatment service rejects missing authentication, caregivers, drivers and coordinator writes', async () => {
   let role = 'driver'; let status = 'active';
@@ -30,13 +30,13 @@ test('treatment writes derive the Patient from the session and constrain edits t
   };
   const service = new SchedulingService(
     { verifyIdentity: async () => ({ account: { id: 'trusted-account', role: 'patient', status: 'active' } }) } as unknown as AuthService,
-    { forUser: () => ({ from: () => query }) } as unknown as SupabaseService);
+    { forUser: () => ({ from: () => query, rpc: async (_name: string,args: {details: unknown}) => { saved=args.details; return query.maybeSingle(); } }) } as unknown as SupabaseService);
   await service.saveTreatment('Bearer fixture',details);
   assert.equal((saved as Record<string,unknown>).patient_id,'owned-patient');
   assert.ok(filters.some(([key,value]) => key==='account_id' && value==='trusted-account'));
-  await service.saveTreatment('Bearer fixture',details,details.centre_id);
-  assert.ok(filters.some(([key,value]) => key==='patient_id' && value==='owned-patient'));
-  assert.ok(filters.some(([key,value]) => key==='id' && value===details.centre_id));
+  await service.saveTreatment('Bearer fixture',{...details,version:1},details.centre_id);
+  // Updates use the owner-checked versioned database RPC.
+
   assert.ok(!Object.hasOwn(saved as object,'patient_id'));
   fail=true;
   await assert.rejects(service.saveTreatment('Bearer fixture',details),/overlap/);
@@ -87,16 +87,37 @@ test('schedule deletion verifies active patient access and calls the atomic owne
     { verifyIdentity: async () => ({ account: { role, status } }) } as unknown as AuthService,
     { forUser: () => ({ rpc: async (...args: unknown[]) => { calls.push(args); return result; } }) } as unknown as SupabaseService);
   await assert.rejects(service.deleteTreatment(undefined, details.centre_id), /Sign-in/);
-  for (const denied of ['coordinator', 'driver', 'caregiver']) { role = denied; await assert.rejects(service.deleteTreatment('Bearer fixture', details.centre_id), /denied/); }
+  for (const denied of ['coordinator', 'driver', 'caregiver']) { role = denied; await assert.rejects(service.deleteTreatment('Bearer fixture', details.centre_id,{version:1}), /denied/); }
   role = 'patient'; status = 'inactive';
-  await assert.rejects(service.deleteTreatment('Bearer fixture', details.centre_id), /denied/);
+  await assert.rejects(service.deleteTreatment('Bearer fixture', details.centre_id,{version:1}), /denied/);
   status = 'active';
   await assert.rejects(service.deleteTreatment('Bearer fixture', 'bad-id'), /Invalid schedule/);
   assert.equal(calls.length, 0);
-  assert.deepEqual(await service.deleteTreatment('Bearer fixture', details.centre_id), { id: details.centre_id });
-  assert.deepEqual(calls, [['delete_my_treatment', { target: details.centre_id }]]);
+  assert.deepEqual(await service.deleteTreatment('Bearer fixture', details.centre_id,{version:1}), { id: details.centre_id });
+  assert.deepEqual(calls, [['delete_my_treatment', { target: details.centre_id, expected_version:1 }]]);
   result = { data: null, error: null };
-  await assert.rejects(service.deleteTreatment('Bearer fixture', details.centre_id), /not found/);
+  await assert.rejects(service.deleteTreatment('Bearer fixture', details.centre_id,{version:1}), /not found/);
   result = { data: null, error: { code: '23P01' } };
-  await assert.rejects(service.deleteTreatment('Bearer fixture', details.centre_id), /overlap/);
+  await assert.rejects(service.deleteTreatment('Bearer fixture', details.centre_id,{version:1}), /overlap/);
+});
+
+
+test('schedule reads validate filters and paginate search in the database before returning results', async () => {
+  const calls: unknown[]=[];
+  const service=new SchedulingService(
+    {verifyIdentity:async()=>({account:{role:'coordinator',status:'active'}})} as unknown as AuthService,
+    {forUser:()=>({rpc:async(...args:unknown[])=>{calls.push(args);return {data:{schedules:[],total:26,page:2,pageSize:25},error:null};}})} as unknown as SupabaseService);
+  assert.equal((await service.treatments('Bearer fixture','2','  Monday  ')).page,2);
+  assert.deepEqual(calls,[['list_treatments',{search_text:'Monday',page_no:2}]]);
+  for(const [page,search] of [['0',''],['1.5',''],['1000001',''],['1','x'.repeat(101)],['1','\n']]) await assert.rejects(service.treatments('Bearer fixture',page,search),/Invalid/);
+});
+
+test('schedule mutations require versions and surface stale conflicts', async () => {
+  const service=new SchedulingService(
+    {verifyIdentity:async()=>({account:{id:'fixture',role:'patient',status:'active'}})} as unknown as AuthService,
+    {forUser:()=>({from:()=>({select(){return this;},eq(){return this;},maybeSingle:async()=>({data:{id:'owned'},error:null})}),rpc:async()=>({data:null,error:{code:'40001'}})})} as unknown as SupabaseService);
+  await assert.rejects(service.saveTreatment('Bearer fixture',details,details.centre_id),/version/);
+  await assert.rejects(service.deleteTreatment('Bearer fixture',details.centre_id),/version/);
+  await assert.rejects(service.saveTreatment('Bearer fixture',{...details,version:1},details.centre_id),error => (error as {status:number}).status===409);
+  await assert.rejects(service.deleteTreatment('Bearer fixture',details.centre_id,{version:1}),error => (error as {status:number}).status===409);
 });

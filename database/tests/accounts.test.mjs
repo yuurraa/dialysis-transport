@@ -198,8 +198,17 @@ test('patient records persist independently of login accounts and are coordinato
     for (const field of ['full_name', 'phone', 'pickup_address', 'mobility', 'unit_no', 'postal_code', 'account_id', 'assistance_required', 'id', 'created_at']) {
       await assert.rejects(act(coordinator, `update public.patients set ${field} = ${field} where id=$1`, [record.id]), /permission denied/);
     }
-    await act(coordinator, "update public.patients set notes='Coordinator note' where id=$1", [record.id]);
-    await act(coordinator, "update public.patients set status='inactive' where id=$1", [record.id]);
+    await assert.rejects(act(coordinator, "update public.patients set notes='Bypass' where id=$1", [record.id]), /permission denied/);
+    const change = (body) => act(coordinator, 'select public.save_patient($1,$2::jsonb) as patient', [record.id, JSON.stringify(body)]);
+    const [{ patient: changed }] = await change({ notes: 'Coordinator note', version: record.version });
+    assert.equal(changed.version, record.version + 1);
+    for (const id of [patient, driver, stranger]) {
+      await assert.rejects(act(id, 'select public.save_patient($1,$2::jsonb)', [record.id, JSON.stringify({ notes: 'Forbidden', version: changed.version })]), /Coordinator access required/);
+    }
+    await assert.rejects(change({ full_name: 'Forbidden', version: changed.version }), /Invalid patient details/);
+    await assert.rejects(change({ notes: 'Stale note', version: record.version }), error => error.code === '40001');
+    await assert.rejects(change({ notes: 'No version' }), /version/);
+    await change({ status: 'inactive', version: changed.version });
     await assert.rejects(act(coordinator, 'delete from public.patients'), /permission denied/);
     await local.exec(schema);
     assert.equal((await act(coordinator, 'select * from public.patients'))[0].status, 'inactive');
@@ -237,17 +246,21 @@ test('patient-owned profiles are unique, private, shared with coordinators and c
     for (const id of [driver, stranger, coordinator]) await assert.rejects(save(id), /Patient access required/);
     for (const body of [{ ...details, status: 'active' }, { ...details, account_id: record.account_id }, { ...details, id: record.id }, { ...details, assistance_required: 'true' }]) await assert.rejects(save(patient, body), /Invalid patient/);
     await assert.rejects(act(patient, "insert into public.patients(full_name,phone,pickup_address,mobility) values ('Other','81234567','Other address','ambulant')"), /(row-level security|permission denied)/);
-    assert.deepEqual(await act(patient, "update public.patients set status='inactive' returning *"), []);
-    const [{ patient: updated }] = await save(patient, { ...details, phone: '87654321', unit_no: '#05-12', postal_code: '560123', notes: 'Call on arrival.' });
+    await assert.rejects(act(patient, "update public.patients set status='inactive' returning *"), /permission denied/);
+    await assert.rejects(save(patient), /version/);
+    const [{ patient: updated }] = await save(patient, { ...details, version: record.version, phone: '87654321', unit_no: '#05-12', postal_code: '560123', notes: 'Call on arrival.' });
+    assert.equal(updated.version, record.version + 1);
+    await assert.rejects(save(patient, { ...details, version: record.version }), error => error.code === '40001');
     assert.equal(updated.id, record.id);
     assert.equal(updated.phone, '87654321');
     assert.equal(updated.unit_no, '#05-12');
     assert.equal(updated.postal_code, '560123');
     assert.equal(updated.notes, 'Call on arrival.');
-    const [{ patient: compatible }] = await save(patient);
+    const [{ patient: compatible }] = await save(patient, { ...details, version: updated.version });
     assert.equal(compatible.notes, 'Call on arrival.');
-    await assert.rejects(save(patient, { ...details, postal_code: '123' }), /check constraint/);
-    await assert.rejects(save(patient, { ...details, notes: 'x'.repeat(1001) }), /check constraint/);
+    await assert.rejects(act(coordinator, 'select public.save_patient($1,$2::jsonb)', [record.id, JSON.stringify({ notes: 'Stale coordinator', version: record.version })]), error => error.code === '40001');
+    await assert.rejects(save(patient, { ...details, version: compatible.version, postal_code: '123' }), /check constraint/);
+    await assert.rejects(save(patient, { ...details, version: compatible.version, notes: 'x'.repeat(1001) }), /check constraint/);
     assert.equal((await act(coordinator, 'select * from public.patients')).length, 1);
     await local.query("update auth.users set email_confirmed_at=now() where id=$1", [stranger]);
     await local.query("insert into public.accounts(auth_user_id,email,display_name,role) values ($1,'stranger@example.test','Other Patient','patient')", [stranger]);
@@ -260,7 +273,7 @@ test('patient-owned profiles are unique, private, shared with coordinators and c
     assert.equal((await act(patient, 'select * from public.patients')).length, 1);
     await local.exec(schema);
     assert.equal((await act(patient, 'select * from public.patients'))[0].id, record.id);
-    await act(coordinator, "update public.patients set status='inactive' where id=$1", [record.id]);
+    await act(coordinator, 'select public.save_patient($1,$2::jsonb)', [record.id, JSON.stringify({ status: 'inactive', version: compatible.version })]);
     await assert.rejects(save(patient), /Patient profile is inactive/);
     await local.query("update public.accounts set status='inactive' where auth_user_id=$1", [patient]);
     assert.deepEqual(await act(patient, 'select * from public.patients'), []);
@@ -325,10 +338,10 @@ test('treatment schedules enforce ownership, overlap checks and coordinator read
     await assert.rejects(own(driver,`insert into public.treatment_schedules(patient_id,centre_id,days,start_time,end_time,effective_from,effective_to)
       values ('${ids.patient_id}','${ids.centre_id}',array[2],'09:00','13:00','2026-10-20','2026-12-31')`),/policy|access/i);
     await assert.rejects(own(patient,"update public.treatment_schedules set patient_id=gen_random_uuid()"),/permission denied/i);
-    // A shared weekday outside the intersecting date range is not a real overlap.
-    await own(patient,insert.replace("'2026-10-20','2026-12-31'","'2026-10-20','2026-10-20'"));
-    assert.equal((await own(coordinator,"update public.treatment_schedules set start_time='10:00' returning id")).length,0);
-    await assert.rejects(own(patient,"update public.treatment_schedules set end_time='08:00'"),/constraint/i);
+    // A valid occurrence outside the other schedule range is not an overlap.
+    await own(patient,insert.replace("'2026-10-20','2026-12-31'","'2027-01-04','2027-01-04'"));
+    await assert.rejects(own(coordinator,"update public.treatment_schedules set start_time='10:00' returning id"),/permission/i);
+    await assert.rejects(own(patient,"update public.treatment_schedules set end_time='08:00'"),/permission/i);
     await local.exec(`update public.accounts set status='inactive' where role='patient'`);
     assert.equal((await own(patient,'select * from public.treatment_schedules')).length,0);
     await local.exec(schema);
@@ -420,13 +433,13 @@ test('single sessions and recurring exceptions reject real conflicts and resched
     await assert.rejects(insert('single','2026-11-02',1),/overlap/i);
     await assert.rejects(insert('single','2026-10-28',3,'09:00','13:00',series.id,'2026-10-27'),/occurrence/i);
     // Moving the replacement keeps its original exception and frees its former date.
-    await own(patient,`update public.treatment_schedules set effective_from='2026-10-28',effective_to='2026-10-28',days=array[3] where id=$1`,[replacement.id]);
+    await own(patient,`select public.update_my_treatment($1,jsonb_build_object('effective_from','2026-10-28','effective_to','2026-10-28','days',array[3]),(select version from public.treatment_schedules where id=$1))`,[replacement.id]);
     // Overlap after an excluded week must still be detected in later weeks.
     await assert.rejects(insert('recurring','2026-10-26',1,'10:00','12:00'),/overlap/i);
     await insert('single','2026-10-26',1);
-    await assert.rejects(own(patient,`update public.treatment_schedules set days=array[2] where id=$1`,[series.id]),/rescheduled|occurrence/i);
+    await assert.rejects(own(patient,`select public.update_my_treatment($1,jsonb_build_object('days',array[2]),(select version from public.treatment_schedules where id=$1))`,[series.id]),/rescheduled|occurrence/i);
     await assert.rejects(own(patient,`update public.treatment_schedules set replaces_date='2026-11-02' where id=$1`,[replacement.id]),/permission/i);
-    await assert.rejects(own(patient,`update public.treatment_schedules set kind='recurring' where id=$1`,[extra.id]),/type|kind/i);
+    await assert.rejects(own(patient,`select public.update_my_treatment($1,jsonb_build_object('kind','recurring'),(select version from public.treatment_schedules where id=$1))`,[extra.id]),/type|kind/i);
     await assert.rejects(insert('single','2026-10-29',1),/constraint/i);
     assert.equal((await own(coordinator,'select * from public.treatment_schedules')).length,5);
     assert.equal((await own(driver,'select * from public.treatment_schedules')).length,0);
@@ -464,7 +477,7 @@ test('schedule deletion is owner-only, removes linked replacements and restores 
       select p.id,c.id,$1,$2,'09:00','13:00',$3,$4,$5,$6 from public.patients p cross join public.dialysis_centres c
       where p.account_id=(select id from public.accounts where auth_user_id=auth.uid()) limit 1 returning *`,
       [kind,[day],date,kind==='recurring'?'2026-12-31':date,parent,original]))[0];
-    const remove = (who,id) => own(who,'select public.delete_my_treatment($1) as id',[id]);
+    const remove = async (who,id) => { const row=(await local.query('select version from public.treatment_schedules where id=$1',[id])).rows[0]; return own(who,'select public.delete_my_treatment($1,$2) as id',[id,row?.version ?? 1]); };
     const series = await insert('recurring','2026-10-19',1);
     const moved = await insert('single','2026-10-27',2,series.id,'2026-10-26');
     for (const denied of [coordinator,driver,stranger]) await assert.rejects(remove(denied,series.id),/denied/i);
@@ -483,8 +496,199 @@ test('schedule deletion is owner-only, removes linked replacements and restores 
     assert.equal((await own(patient,'select id from public.treatment_schedules where id=any($1)',[[series.id,second.id]])).length,0);
     assert.equal((await remove(patient,series.id))[0].id,null);
     await local.exec('begin; set local role anon;');
-    try { await assert.rejects(local.query('select public.delete_my_treatment($1)',[series.id]),/permission/i); }
+    try { await assert.rejects(local.query('select public.delete_my_treatment($1,1)',[series.id]),/permission/i); }
     finally { await local.exec('rollback'); }
     await local.exec(schema);
+  } finally { await local.close(); }
+});
+
+
+test('schedule date bounds and nonempty recurrence are enforced for direct authenticated writes', async () => {
+  const local = await databaseWithAuth();
+  try {
+    await local.exec(schema);
+    await local.exec(`set role authenticated; select set_config('request.jwt.claim.sub','${patient}',false);`);
+    await local.query("select public.register_patient_account('Fixture',$1::jsonb)", [JSON.stringify(signupDetails)]);
+    const insert = (date, day=1) => local.query(`insert into public.treatment_schedules(patient_id,centre_id,days,start_time,end_time,effective_from,effective_to)
+      select p.id,c.id,array[$1::integer],'09:00','10:00',$2::date,$2::date from public.patients p cross join public.dialysis_centres c limit 1 returning id`, [day,date]);
+    for(const date of ['10000-01-01','0001-01-01 BC','infinity','-infinity']) await assert.rejects(insert(date), /date|range|finite|check/i);
+    await assert.rejects(insert('2026-10-20'), /weekday|occurrence|check/i);
+    assert.equal((await insert('2026-10-19')).rows.length,1);
+  } finally { await local.close(); }
+});
+
+// Opt-in integration proof against a disposable local PostgreSQL cluster. Supply
+// PG_CONCURRENCY_BIN (absolute psql path), PG_CONCURRENCY_SOCKET (Unix socket
+// directory), and optionally PG_CONCURRENCY_PORT. The connected local role must
+// create/drop databases; fixture roles anon/authenticated must already exist.
+// Each race uses independent connections and verifies an actual lock wait.
+test('real PostgreSQL serializes overlapping writes and rejects stale concurrent edits', {
+  skip: !process.env.PG_CONCURRENCY_BIN && !process.env.PG_CONCURRENCY_SOCKET,
+  timeout: 30000,
+}, async () => {
+  const { execFile, spawn } = await import('node:child_process');
+  const { promisify } = await import('node:util');
+  const { isAbsolute, join } = await import('node:path');
+  const { stat } = await import('node:fs/promises');
+  const binary = process.env.PG_CONCURRENCY_BIN;
+  const socket = process.env.PG_CONCURRENCY_SOCKET;
+  const port = process.env.PG_CONCURRENCY_PORT ?? '5432';
+  assert.ok(binary && isAbsolute(binary), 'PG_CONCURRENCY_BIN must be an absolute psql path.');
+  assert.ok(socket && isAbsolute(socket), 'Only an absolute local Unix socket directory is allowed.');
+  assert.match(port, /^\d+$/);
+  assert.ok(Number(port) > 0 && Number(port) <= 65535);
+  assert.ok((await stat(join(socket, `.s.PGSQL.${port}`))).isSocket(), 'A live local PostgreSQL Unix socket is required.');
+  // Inherited PGHOSTADDR/PGSERVICE can override libpq host handling. Remove all
+  // PG settings so this opt-in test cannot accidentally use a remote database.
+  const environment = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('PG')));
+  environment.PGCONNECT_TIMEOUT = '3';
+  const database = `dialysis_race_${process.pid}_${Date.now()}`;
+  const args = name => ['-X', '-w', '-qAt', '-h', socket, '-p', port, '-d', name, '-v', 'ON_ERROR_STOP=1', '-v', 'VERBOSITY=verbose'];
+  const execute = promisify(execFile);
+  const processes = new Set();
+  const literal = value => `'${String(value).replaceAll("'", "''")}'`;
+  async function query(sql, name = database, application = 'dialysis-concurrency-probe') {
+    try {
+      const result = await execute(binary, [...args(name), '-c', sql], {
+        env: { ...environment, PGAPPNAME: application }, timeout: 10000, maxBuffer: 4 * 1024 * 1024,
+      });
+      return { ...result, code: 0 };
+    } catch (error) { return { stdout: error.stdout ?? '', stderr: error.stderr ?? '', code: error.code }; }
+  }
+  async function checked(sql, name = database) {
+    const result = await query(sql, name);
+    assert.equal(result.code, 0, result.stderr);
+    return result.stdout.trim();
+  }
+  const authenticated = (sql, user = patient) => `begin; set local role authenticated;
+    select set_config('request.jwt.claim.sub',${literal(user)},true);
+    set local statement_timeout='8s'; set local idle_in_transaction_session_timeout='8s'; ${sql}`;
+  async function race(label, leaderSql, followerSql, expectedState, user = patient) {
+    const leader = spawn(binary, [...args(database), '-f', '-'], {
+      env: { ...environment, PGAPPNAME: `${database}_leader` }, stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    processes.add(leader);
+    let stderr = ''; let output = '';
+    leader.stderr.on('data', chunk => { stderr += chunk; });
+    const finished = new Promise(resolve => {
+      leader.once('error', error => resolve({ code: error.code }));
+      leader.once('close', code => { processes.delete(leader); resolve({ code }); });
+    });
+    const ready = new Promise((resolve, reject) => {
+      leader.stdout.on('data', chunk => { output += chunk; if (output.includes('PROBE_LOCK_HELD')) resolve(); });
+      leader.once('error', reject);
+      leader.once('close', () => { if (!output.includes('PROBE_LOCK_HELD')) reject(new Error(stderr || 'Leader exited before taking its lock.')); });
+    });
+    // Keep the leader transaction open until pg_stat_activity proves the other
+    // connection is blocked. No sleep-based assumption about overlap is needed.
+    leader.stdin.write(`${authenticated(leaderSql, user)} select 'PROBE_LOCK_HELD';\n`);
+    try {
+      await ready;
+      const follower = query(`${authenticated(followerSql, user)} commit;`, database, `${database}_follower`);
+      let blocked = false;
+      for (let attempt = 0; attempt < 60; attempt++) {
+        if (await checked(`select count(*) from pg_stat_activity where application_name=${literal(`${database}_follower`)} and wait_event_type='Lock'`) === '1') {
+          blocked = true; break;
+        }
+        await new Promise(resolve => setTimeout(resolve, 20));
+      }
+      leader.stdin.end('commit;\n');
+      assert.equal((await finished).code, 0, `${label}: ${stderr}`);
+      const result = await follower;
+      assert.ok(blocked, `${label}: independent connections must demonstrably overlap on a lock.`);
+      if (expectedState) {
+        assert.notEqual(result.code, 0, `${label}: stale/conflicting write unexpectedly succeeded.`);
+        assert.ok(result.stderr.includes(expectedState), `${label}: ${result.stderr}`);
+      } else assert.equal(result.code, 0, `${label}: ${result.stderr}`);
+    } finally {
+      if (processes.has(leader)) { leader.stdin.end('rollback;\n'); await finished; }
+    }
+  }
+  await checked("select case when count(*)=2 then 'ready' else 'missing fixture roles' end from pg_roles where rolname in ('anon','authenticated')", 'postgres').then(value => assert.equal(value, 'ready'));
+  await checked(`create database ${database}`, 'postgres');
+  try {
+    await checked(`create schema auth;
+      create table auth.users(id uuid primary key,email text,email_confirmed_at timestamptz);
+      create table auth.identities(user_id uuid,provider text);
+      create function auth.uid() returns uuid language sql stable as
+        $$select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid$$;
+      grant usage on schema auth to authenticated; grant execute on function auth.uid() to authenticated;
+      insert into auth.users values (${literal(patient)},'patient@example.test',now()),(${literal(coordinator)},'coordinator@example.test',now());
+      insert into auth.identities values (${literal(patient)},'google'),(${literal(coordinator)},'google');`);
+    await checked(schema);
+    await checked(`insert into public.accounts(auth_user_id,email,display_name,role) values
+      (${literal(patient)},'patient@example.test','Fixture Patient','patient'),(${literal(coordinator)},'coordinator@example.test','Fixture Coordinator','coordinator');
+      insert into public.patients(account_id,full_name,phone,pickup_address,mobility)
+      select id,'Fixture Patient','81234567','Fixture street','ambulant' from public.accounts where role='patient';`);
+    const patientId = await checked('select id from public.patients limit 1');
+    const centreId = await checked('select id from public.dialysis_centres order by id limit 1');
+    const insert = `insert into public.treatment_schedules(patient_id,centre_id,days,start_time,end_time,effective_from,effective_to)
+      values (${literal(patientId)},${literal(centreId)},array[1],'09:00','10:00','2026-10-19','2026-12-28');`;
+    const details = { kind: 'recurring', centre_id: centreId, days: [1], start_time: '11:00', end_time: '12:00', effective_from: '2026-10-19', effective_to: '2026-12-28' };
+    const edit = (id, version) => `select public.update_my_treatment(${literal(id)},${literal(JSON.stringify(details))}::jsonb,${version});`;
+    const remove = (id, version) => `select public.delete_my_treatment(${literal(id)},${version});`;
+    async function seed() {
+      await checked('truncate public.treatment_schedules;');
+      await checked(`${authenticated(insert)} commit;`);
+      const [id, version] = (await checked('select id,version from public.treatment_schedules limit 1')).split('|');
+      return { id, version: Number(version) };
+    }
+    await race('overlapping inserts', insert, insert, '23P01');
+    assert.equal(await checked('select count(*) from public.treatment_schedules'), '1');
+    let row = await seed();
+    await race('simultaneous stale edits', edit(row.id, row.version), edit(row.id, row.version), '40001');
+    assert.equal(await checked(`select version from public.treatment_schedules where id=${literal(row.id)}`), String(row.version + 1));
+    row = await seed();
+    await race('edit then stale delete', edit(row.id, row.version), remove(row.id, row.version), '40001');
+    assert.equal(await checked('select count(*) from public.treatment_schedules'), '1');
+    row = await seed();
+    await race('delete then edit', remove(row.id, row.version), edit(row.id, row.version));
+    assert.equal(await checked('select count(*) from public.treatment_schedules'), '0');
+    const version = Number(await checked(`select version from public.patients where id=${literal(patientId)}`));
+    const update = (status, notes) => `select public.save_patient(${literal(patientId)},${literal(JSON.stringify({ version, status, notes }))}::jsonb);`;
+    await race('stale patient status', update('inactive', 'First coordinator'), update('active', 'Stale notes edit'), '40001', coordinator);
+    assert.equal(await checked(`select status from public.patients where id=${literal(patientId)}`), 'inactive');
+  } finally {
+    for (const child of processes) child.kill();
+    await checked(`drop database ${database} with (force)`, 'postgres');
+  }
+});
+
+
+test('schedule search paginates all matching records and retains replacement context under RLS', async () => {
+  const local=await databaseWithAuth();
+  try {
+    await local.exec(schema);
+    await local.exec(`insert into public.accounts(auth_user_id,email,display_name,role) values
+      ('${patient}','patient@example.test','Patient','patient'),('${coordinator}','coordinator@example.test','Coordinator','coordinator'),('${driver}','driver@example.test','Driver','driver');
+      insert into public.patients(account_id,full_name,phone,pickup_address,mobility) select id,'Alex Fixture','81234567','Test street','ambulant' from public.accounts where role='patient';
+      set role authenticated; select set_config('request.jwt.claim.sub','${patient}',false);`);
+    const ids=(await local.query('select p.id as patient,c.id as centre from public.patients p cross join public.dialysis_centres c limit 1')).rows[0];
+    await local.query(`insert into public.treatment_schedules(patient_id,centre_id,kind,days,start_time,end_time,effective_from,effective_to)
+      select $1,$2,'single',array[extract(isodow from d)::integer],'09:00','10:00',d::date,d::date
+      from generate_series(date '2027-01-01',date '2027-01-01'+1004,interval '1 day') d`,[ids.patient,ids.centre]);
+    const list=async (term='',page=1)=>(await local.query('select public.list_treatments($1,$2) as result',[term,page])).rows[0].result;
+    assert.equal((await list()).total,1005);
+    const last=await list('',41);
+    assert.equal(last.schedules.length,5);
+    const needle=last.schedules.at(-1).effective_from;
+    assert.equal((await list(needle)).schedules.length,1);
+    assert.equal((await list('%')).total,0);
+    const series=(await local.query(`insert into public.treatment_schedules(patient_id,centre_id,kind,days,start_time,end_time,effective_from,effective_to)
+      values ($1,$2,'recurring',array[1],'09:00','10:00','2026-10-19','2026-12-31') returning *`,[ids.patient,ids.centre])).rows[0];
+    await local.query(`insert into public.treatment_schedules(patient_id,centre_id,kind,days,start_time,end_time,effective_from,effective_to,replaces_schedule_id,replaces_date)
+      values ($1,$2,'single',array[2],'09:00','10:00','2026-10-27','2026-10-27',$3,'2026-10-26')`,[ids.patient,ids.centre,series.id]);
+    const filtered=await list(' recurring ');
+    assert.equal(filtered.total,1);
+    assert.equal(filtered.context.length,2);
+    const stale=series.version;
+    await assert.rejects(local.query('select public.update_my_treatment($1,$2::jsonb,$3)',[series.id,JSON.stringify({start_time:'10:00',end_time:'11:00'}),stale]),/changed/i);
+    await local.query("select set_config('request.jwt.claim.sub',$1,false)",[coordinator]);
+    assert.equal((await list('aLeX fIxTuRe')).total,1007);
+    assert.equal((await list(ids.patient)).total,1007);
+    await local.query("select set_config('request.jwt.claim.sub',$1,false)",[driver]);
+    assert.equal((await list()).total,0);
+    assert.equal((await list()).context.length,0);
+    await assert.rejects(list('',0),/Invalid/);
   } finally { await local.close(); }
 });

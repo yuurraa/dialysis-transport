@@ -5,14 +5,15 @@ import { ApiError, apiGet, apiRequest } from '../lib/api';
 
 interface Centre { id: string; name: string; address: string; postal_code: string }
 interface Details { kind: 'recurring' | 'single'; centre_id: string; days: number[]; start_time: string; end_time: string; effective_from: string; effective_to: string }
-interface Schedule extends Omit<Details, 'kind'> { kind?: 'recurring' | 'single'; id: string; patient_id: string; patients: { full_name: string }; replaces_schedule_id?: string | null; replaces_date?: string | null }
-interface Data { centres: Centre[]; schedules: Schedule[] }
+interface Schedule extends Omit<Details, 'kind'> { kind?: 'recurring' | 'single'; id: string; version: number; patient_id: string; patients: { full_name: string }; replaces_schedule_id?: string | null; replaces_date?: string | null }
+interface Data { centres: Centre[]; schedules: Schedule[]; context: Schedule[]; total: number; page: number; pageSize: number }
 const scheduleIcon = <span className="dashboard-data-status-icon" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="5" width="16" height="16" rx="3" /><path d="M8 3v4m8-4v4M4 11h16m-10 4 4 4m0-4-4 4" /></svg></span>;
 const weekdays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 const blank = (): Details => ({ kind: 'recurring', centre_id: '', days: [], start_time: '', end_time: '', effective_from: '', effective_to: '' });
 const dayFor = (date: string) => new Date(`${date}T00:00:00Z`).getUTCDay() || 7;
-const formatDayDate = (date: string) => new Intl.DateTimeFormat('en-SG', { weekday: 'long', day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Singapore' }).format(new Date(`${date}T00:00:00+08:00`));
-const formatDate = (date: string) => new Intl.DateTimeFormat('en-SG', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Singapore' }).format(new Date(`${date}T00:00:00+08:00`));
+const supportedDate = (date: string) => /^\d{4}-\d{2}-\d{2}$/.test(date) && !date.startsWith('0000') && Number.isFinite(Date.parse(`${date}T00:00:00Z`)) && new Date(`${date}T00:00:00Z`).toISOString().slice(0,10) === date;
+const formatDayDate = (date: string) => !supportedDate(date) ? 'Invalid date' : new Intl.DateTimeFormat('en-SG', { weekday: 'long', day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Singapore' }).format(new Date(`${date}T00:00:00+08:00`));
+const formatDate = (date: string) => !supportedDate(date) ? 'Invalid date' : new Intl.DateTimeFormat('en-SG', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Singapore' }).format(new Date(`${date}T00:00:00+08:00`));
 
 export default function TreatmentSchedules({ coordinator, notify, onSessionExpired }: {
   coordinator: boolean; notify: (message: string) => void; onSessionExpired: () => void;
@@ -20,21 +21,24 @@ export default function TreatmentSchedules({ coordinator, notify, onSessionExpir
   const [data, setData] = useState<Data | null>(null);
   const [reload, setReload] = useState(0);
   const [search, setSearch] = useState('');
-  const searchTerm = search.trim().toLocaleLowerCase('en-SG');
-  const visibleSchedules = data?.schedules.filter(schedule => {
-    if (!searchTerm) return true;
-    const fields = [
-      ...(coordinator ? [schedule.patients.full_name, schedule.patient_id] : []),
-      data.centres.find(centre => centre.id === schedule.centre_id)?.name,
-      schedule.days.map(day => weekdays[day - 1]).join(' '),
-      schedule.effective_from, schedule.effective_to,
-      formatDate(schedule.effective_from), formatDate(schedule.effective_to),
-      schedule.kind === 'single' ? 'Single Session' : 'Recurring',
-      schedule.replaces_schedule_id ? 'Rescheduled Session' : '',
-    ];
-    return fields.some(field => field?.toLocaleLowerCase('en-SG').includes(searchTerm));
-  }) ?? [];
   const [loading, setLoading] = useState(true);
+  const [filters, setFilters] = useState({page: 1, search: ''});
+  useEffect(() => {
+    const timer = window.setTimeout(() => setFilters(current => current.search === search.trim() ? current : {page:1,search:search.trim()}),300);
+    return () => window.clearTimeout(timer);
+  },[search]);
+  const searchTerm = filters.search;
+  const visibleSchedules = data?.schedules ?? [];
+  const context = useMemo(() => [...new Map([...(data?.schedules ?? []),...(data?.context ?? [])].map(schedule => [schedule.id,schedule])).values()],[data]);
+  useEffect(() => {
+    if (!data || loading) return;
+    const lastPage=Math.max(1,Math.ceil((data.total ?? data.schedules.length)/(data.pageSize ?? 25)));
+    if (filters.page>lastPage) setFilters(current => ({...current,page:lastPage}));
+  },[data,filters.page,loading]);
+  const [draftVersion, setDraftVersion] = useState<number>();
+  const [editingSchedule, setEditingSchedule] = useState<Schedule | null>(null);
+  const [editorContext, setEditorContext] = useState<Schedule[]>([]);
+  const [conflict, setConflict] = useState(false);
   const [draft, setDraft] = useState<Details | null>(null);
   const [id, setId] = useState<string>();
   const [rescheduling, setRescheduling] = useState<Schedule | null>(null);
@@ -56,13 +60,13 @@ export default function TreatmentSchedules({ coordinator, notify, onSessionExpir
     const from = needsMonth ? Math.max(start, monthStart) : start;
     const until = needsMonth ? Math.min(end, nextMonth.getTime() - day) : end;
     const firstInWindow = from + ((rescheduling.days[0] - (new Date(from).getUTCDay() || 7) + 7) % 7) * day;
-    const replaced = new Set(data?.schedules.filter(schedule => schedule.replaces_schedule_id === rescheduling.id).map(schedule => schedule.replaces_date));
+    const replaced = new Set(editorContext.filter(schedule => schedule.replaces_schedule_id === rescheduling.id).map(schedule => schedule.replaces_date));
     for (let time = firstInWindow; time <= until; time += 7 * day) {
       const date = new Date(time).toISOString().slice(0, 10);
       if (!replaced.has(date)) dates.push(date);
     }
     return { dates, month, needsMonth };
-  }, [rescheduling, occurrenceMonth, data?.schedules]);
+  }, [rescheduling, occurrenceMonth, editorContext]);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
   const alive = useRef(false);
@@ -70,65 +74,73 @@ export default function TreatmentSchedules({ coordinator, notify, onSessionExpir
   const [historySchedule, setHistorySchedule] = useState<Schedule | null>(null);
   const replacements = useMemo(() => {
     const grouped = new Map<string, Schedule[]>();
-    for (const schedule of data?.schedules ?? []) {
+    for (const schedule of context) {
       if (!schedule.replaces_schedule_id) continue;
       const list = grouped.get(schedule.replaces_schedule_id) ?? [];
       list.push(schedule); grouped.set(schedule.replaces_schedule_id, list);
     }
     for (const list of grouped.values()) list.sort((a,b) => (a.replaces_date ?? '').localeCompare(b.replaces_date ?? ''));
     return grouped;
-  }, [data?.schedules]);
-  const currentSchedule = data?.schedules.find(schedule => schedule.id === (id ?? rescheduling?.id));
+  }, [context]);
+  const currentSchedule = editingSchedule;
   const addButton = useRef<HTMLButtonElement>(null);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
   useEffect(() => {
     let active = true;
     setLoading(true); setError('');
-    apiGet<Data>('/schedules').then(result => { if (active) setData(result); })
+    apiGet<Data>(`/schedules?${new URLSearchParams({page:String(filters.page),search:filters.search})}`).then(result => { if (active) setData(result); })
       .catch(reason => { if (active) { if (reason instanceof ApiError && reason.status === 401) onSessionExpired(); setError('Treatment schedules could not be loaded. Please try again.'); } })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [reload, onSessionExpired]);
+  }, [reload, onSessionExpired, filters]);
   function open(schedule?: Schedule, reschedule = false) {
+    setConflict(false); setDraftVersion(schedule?.version); setEditingSchedule(schedule ?? null);
+    setEditorContext(draft ? editorContext : context);
     setConfirmingDelete(false); setError(''); setId(reschedule ? undefined : schedule?.id); setRescheduling(reschedule && schedule ? schedule : null); setOriginalDate(''); setOccurrenceMonth('');
     setDraft(schedule ? { kind: reschedule ? 'single' : schedule.kind ?? 'recurring', centre_id: schedule.centre_id, days: reschedule ? [] : [...schedule.days], start_time: schedule.start_time.slice(0,5), end_time: schedule.end_time.slice(0,5), effective_from: reschedule ? '' : schedule.effective_from, effective_to: reschedule ? '' : schedule.effective_to } : blank());
   }
-  function close() { setDraft(null); setRescheduling(null); setOriginalDate(''); setConfirmingDelete(false); setError(''); }
+  function close() { setConflict(false); setEditingSchedule(null); setEditorContext([]); setDraft(null); setRescheduling(null); setOriginalDate(''); setConfirmingDelete(false); setError(''); }
   async function save(event: FormEvent) {
     event.preventDefault();
-    if (!draft || saving) return;
+    if (!draft || saving || conflict) return;
     if (rescheduling && !occurrences.dates.includes(originalDate)) { setError('Choose the session you want to change.'); return; }
     if (!draft.centre_id || !draft.effective_from || !draft.start_time || !draft.end_time || (draft.kind === 'recurring' && (draft.days.length !== 1 || draft.effective_to < draft.effective_from)) || draft.end_time <= draft.start_time) { setError('Check the centre, dates and session times.'); return; }
+    if (draft.kind==='recurring') {
+      const first=Date.parse(draft.effective_from)+((draft.days[0]-dayFor(draft.effective_from)+7)%7)*86400000;
+      if (first>Date.parse(draft.effective_to)) { setError('Choose a date range that includes the selected treatment day.'); return; }
+    }
     if (rescheduling) {
       if (!originalDate || originalDate < rescheduling.effective_from || originalDate > rescheduling.effective_to || dayFor(originalDate) !== rescheduling.days[0]) { setError('Select a valid occurrence of the recurring schedule.'); return; }
-      if (data?.schedules.some(schedule => schedule.replaces_schedule_id === rescheduling.id && schedule.replaces_date === originalDate)) { setError('This occurrence has already been rescheduled. Edit its replacement instead.'); return; }
+      if (editorContext.some(schedule => schedule.replaces_schedule_id === rescheduling.id && schedule.replaces_date === originalDate)) { setError('This occurrence has already been rescheduled. Edit its replacement instead.'); return; }
     }
-    if (id && draft.kind === 'recurring' && data?.schedules.some(schedule => schedule.replaces_schedule_id === id && schedule.replaces_date
+    if (id && draft.kind === 'recurring' && editorContext.some(schedule => schedule.replaces_schedule_id === id && schedule.replaces_date
       && (schedule.replaces_date < draft.effective_from || schedule.replaces_date > draft.effective_to || dayFor(schedule.replaces_date) !== draft.days[0]))) { setError('These changes would remove a rescheduled occurrence. Keep its original date within the recurring schedule.'); return; }
     const payload = draft.kind === 'single' ? { kind: draft.kind, centre_id: draft.centre_id, session_date: draft.effective_from, start_time: draft.start_time, end_time: draft.end_time,
       ...(rescheduling ? { replaces_schedule_id: rescheduling.id, replaces_date: originalDate } : {}) } : draft;
     setSaving(true); setError('');
     try {
-      await apiRequest(`/schedules${id ? `/${id}` : ''}`, id ? 'PATCH' : 'POST', payload);
+      await apiRequest(`/schedules${id ? `/${id}` : ''}`, id ? 'PATCH' : 'POST', id ? {...payload,version:draftVersion} : payload);
       if (!alive.current) return;
       close(); notify('Treatment schedule saved.'); setReload(value => value + 1);
     } catch (reason) {
       if (!alive.current) return;
       if (reason instanceof ApiError && reason.status === 401) onSessionExpired();
+      if (reason instanceof ApiError && reason.status === 409) { setConflict(true); setError('This schedule changed in another session. Reload schedules before saving again.'); return; }
       setError(reason instanceof ApiError && reason.status === 400 ? 'Check the dates, times and existing sessions for conflicts.' : 'The schedule could not be saved. Please try again.');
     } finally { if (alive.current) setSaving(false); }
   }
   async function remove() {
-    if (!currentSchedule || saving) return;
+    if (!currentSchedule || saving || conflict) return;
     setSaving(true); setError('');
     try {
-      await apiRequest(`/schedules/${currentSchedule.id}`, 'DELETE');
+      await apiRequest(`/schedules/${currentSchedule.id}`, 'DELETE', {version:draftVersion});
       if (!alive.current) return;
       close(); notify('Treatment schedule deleted.'); setReload(value => value + 1);
       requestAnimationFrame(() => addButton.current?.focus());
     } catch (reason) {
       if (!alive.current) return;
       if (reason instanceof ApiError && reason.status === 401) onSessionExpired();
+      if (reason instanceof ApiError && reason.status === 409) { setConflict(true); setError('This schedule changed in another session. Reload schedules before deleting.'); return; }
       setError(reason instanceof ApiError && reason.status === 400
         ? 'The original session would overlap another schedule. Edit that conflict before removing this replacement.'
         : 'The schedule could not be deleted. Please try again.');
@@ -136,21 +148,22 @@ export default function TreatmentSchedules({ coordinator, notify, onSessionExpir
   }
   return <section className="dashboard-trips treatment-panel page-panel" aria-labelledby="treatment-title" aria-busy={loading}>
     <PageHeading id="treatment-title" title={coordinator ? "Treatment Schedule List" : "Treatment Schedules"} eyebrow={coordinator ? "Schedule Management" : "Treatment planning"}
-      actions={<><label className="patient-search"><svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 5 5" /></svg><input type="search" aria-label="Search treatment schedules" placeholder={coordinator ? "Patient or schedule details" : "Centre, day, date or type"} title={coordinator ? "Search by patient name, ID, centre, day, date or schedule type" : "Search by centre, day, date or schedule type"} maxLength={100} value={search} onChange={event => setSearch(event.target.value)} /></label>{!coordinator && <button ref={addButton} className="patient-primary" style={{ visibility: data ? undefined : 'hidden' }} type="button" disabled={loading || !data?.centres.length} onClick={() => open()}>Add Schedule</button>}</>} />
+      actions={<><label className="patient-search"><svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 5 5" /></svg><input type="search" aria-label="Search treatment schedules" placeholder={coordinator ? "Patient or schedule details" : "Centre, day, date or type"} title={coordinator ? "Search by patient name, ID, centre, day, date or schedule type" : "Search by centre, day, date or schedule type"} maxLength={100} value={search} onChange={event => setSearch(event.target.value)} /></label>{!coordinator && <button ref={addButton} className="patient-primary" type="button" disabled={loading || !data?.centres.length} onClick={() => open()}>Add Schedule</button>}</>} />
     {loading ? <div className="account-loading" role="status"><span className="account-spinner" aria-hidden="true" /><span>Loading...</span></div> : <>
       {error && !draft ? <div className="dashboard-data-status patients-status">{scheduleIcon}<div role="alert"><h3>{error}</h3><p>Schedule information is currently unavailable.</p></div><button type="button" onClick={() => setReload(value => value+1)}>Try again</button></div> : <>
         {!data?.centres.length && <div className="dashboard-data-status patients-status" role="status">{scheduleIcon}<div><h3>No dialysis centres are available.</h3><p>{coordinator ? 'The dialysis centre directory has not been loaded yet.' : 'Contact your Transport Coordinator.'}</p></div></div>}
-        {data?.schedules.length === 0 ? data.centres.length > 0 && <div className="dashboard-data-status patients-status" role="status">{scheduleIcon}<div><h3>No treatment schedules yet.</h3><p>{coordinator ? 'Patient treatment schedules will appear here once submitted.' : 'Add your treatment schedule to share your dialysis requirements.'}</p></div></div> : searchTerm && visibleSchedules.length === 0 ? <div className="dashboard-data-status patients-status" role="status">{scheduleIcon}<div><h3>No matching schedules.</h3><p>{coordinator ? 'Try another patient name, ID, centre, day, date or schedule type.' : 'Try another centre, day, date or schedule type.'}</p></div></div> : <div className="treatment-records panel-scroll" tabIndex={0} role="region" aria-label="Treatment schedules">{visibleSchedules.map(schedule => <article className="treatment-record" key={schedule.id}>
+        {(data?.total ?? data?.schedules.length) === 0 ? (data?.centres.length ?? 0) > 0 && <div className="dashboard-data-status patients-status" role="status">{scheduleIcon}<div><h3>{searchTerm ? 'No matching schedules.' : 'No treatment schedules yet.'}</h3><p>{searchTerm ? 'Try another search.' : coordinator ? 'Patient treatment schedules will appear here once submitted.' : 'Add your treatment schedule to share your dialysis requirements.'}</p></div></div> : searchTerm && visibleSchedules.length === 0 ? <div className="dashboard-data-status patients-status" role="status">{scheduleIcon}<div><h3>No matching schedules.</h3><p>{coordinator ? 'Try another patient name, ID, centre, day, date or schedule type.' : 'Try another centre, day, date or schedule type.'}</p></div></div> : <div className="treatment-records panel-scroll" tabIndex={0} role="region" aria-label="Treatment schedules">{visibleSchedules.map(schedule => <article className="treatment-record" key={schedule.id}>
           <div><div className="treatment-identity"><p>{schedule.patients.full_name}</p>{coordinator && <p className="treatment-patient-id"><span className="treatment-identity-separator" aria-hidden="true">·</span>Patient ID: {schedule.patient_id}</p>}<p className="treatment-kind">{schedule.replaces_schedule_id ? 'Rescheduled Session' : schedule.kind === 'single' ? 'Single Session' : 'Recurring'}</p></div><h2><span>{schedule.kind === 'single' ? formatDayDate(schedule.effective_from) : `Every ${schedule.days.map(day => weekdays[day-1]).join(', ')}`}</span><span className="treatment-time">{schedule.start_time.slice(0,5)}–{schedule.end_time.slice(0,5)}</span></h2><p>{data?.centres.find(c => c.id === schedule.centre_id)?.name}</p>{schedule.kind !== 'single' && <p>From {formatDate(schedule.effective_from)} until {formatDate(schedule.effective_to)}</p>}{schedule.replaces_date && <p>Replaces {formatDate(schedule.replaces_date)}</p>}{replacements.has(schedule.id) && <button className="reschedule-summary" type="button" onClick={() => setHistorySchedule(schedule)}>{replacements.get(schedule.id)!.length} rescheduled {replacements.get(schedule.id)!.length === 1 ? 'session' : 'sessions'}</button>}</div>
           {!coordinator && <div className="patient-actions"><button type="button" onClick={() => open(schedule)}>Edit Schedule</button></div>}
         </article>)}</div>}
       </>}
     </>}
+    <div className="patients-pagination" aria-label="Schedule pages"><span>{data ? <>{data.total ?? visibleSchedules.length} {(data.total ?? visibleSchedules.length)===1 ? 'schedule' : 'schedules'} · Page {filters.page} of {Math.max(1,Math.ceil((data.total ?? visibleSchedules.length)/(data.pageSize ?? 25)))}</> : loading ? 'Loading...' : 'Schedule count unavailable'}</span><div className="patient-actions"><button type="button" aria-label="Previous" title="Previous page" disabled={loading || !!error || search.trim()!==filters.search || filters.page===1} onClick={() => setFilters(current => ({...current,page:current.page-1}))}>{'<'}</button><button type="button" aria-label="Next" title="Next page" disabled={loading || !!error || search.trim()!==filters.search || !data || filters.page*(data.pageSize ?? 25)>=(data.total ?? visibleSchedules.length)} onClick={() => setFilters(current => ({...current,page:current.page+1}))}>{'>'}</button></div></div>
     {draft && !coordinator && <Overlay title={confirmingDelete ? 'Delete Schedule' : id || rescheduling ? 'Edit Schedule' : 'Add Schedule'}
       description={confirmingDelete ? 'Review what will be removed before confirming.' : rescheduling ? 'Change one session. Other weeks stay unchanged.' : currentSchedule?.kind !== 'single' && currentSchedule ? 'Changes apply to the entire recurring schedule.' : 'Record the centre, date and treatment times.'}
       className={confirmingDelete ? '' : 'schedule-editor'} busy={saving} onClose={close} onSubmit={confirmingDelete ? undefined : save} noValidate error={error} onDismissError={() => setError('')}
-      footer={confirmingDelete ? <><button type="button" disabled={saving} onClick={() => { setConfirmingDelete(false); setError(''); }}>Keep Schedule</button><button className="button-danger" type="button" disabled={saving} onClick={() => void remove()}>{saving ? 'Deleting…' : 'Confirm Delete'}</button></>
-        : <><button className="patient-primary" type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save Schedule'}</button><button type="button" disabled={saving} onClick={close}>Cancel</button>{currentSchedule && <button className="overlay-delete" type="button" aria-label="Delete Schedule" title="Delete Schedule" disabled={saving} onClick={() => { setConfirmingDelete(true); setError(''); }}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 6h18M9 6V4h6v2M5 6l1 14h12l1-14M10 10v6m4-6v6" /></svg><span className="delete-label">Delete Schedule</span></button>}</>}>
+      footer={conflict ? <><button className="patient-primary" type="button" onClick={() => { close(); setReload(value => value+1); }}>Reload schedules</button><button type="button" onClick={close}>Cancel</button></> : confirmingDelete ? <><button type="button" disabled={saving} onClick={() => { setConfirmingDelete(false); setError(''); }}>Keep Schedule</button><button className="button-danger" type="button" disabled={saving} onClick={() => void remove()}>{saving ? 'Deleting…' : 'Confirm Delete'}</button></>
+        : <><button className="patient-primary" type="submit" disabled={saving || conflict}>{saving ? 'Saving…' : 'Save Schedule'}</button><button type="button" disabled={saving} onClick={close}>Cancel</button>{currentSchedule && <button className="overlay-delete" type="button" aria-label="Delete Schedule" title="Delete Schedule" disabled={saving} onClick={() => { setConfirmingDelete(true); setError(''); }}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 6h18M9 6V4h6v2M5 6l1 14h12l1-14M10 10v6m4-6v6" /></svg><span className="delete-label">Delete Schedule</span></button>}</>}>
       {confirmingDelete ? <div className="delete-summary"><p>{currentSchedule?.kind === 'recurring'
         ? 'This removes the entire recurring schedule and all its rescheduled sessions.'
         : currentSchedule?.replaces_schedule_id ? 'This removes the replacement and restores the original recurring session, provided it does not overlap another session.' : 'This removes this single treatment session.'}</p><p>This cannot be undone. This changes treatment requirements, not transport bookings.</p></div> : <>

@@ -39,6 +39,14 @@ Run `npm test` after installing dependencies. It runs:
 
 Tests use fictional identities and do not connect to the hosted Supabase project. Real Google consent and Render configuration still need checking on the deployed app.
 
+The normal database suite uses a single-session disposable engine. To verify real concurrent writes, opt into the additional integration test against a disposable **local PostgreSQL cluster** with the `anon` and `authenticated` roles already created. The local OS database user must be able to create/drop databases. Set `PG_CONCURRENCY_BIN` to an absolute `psql` executable path, `PG_CONCURRENCY_SOCKET` to its live Unix socket directory, and optionally `PG_CONCURRENCY_PORT` (default `5432`), then run:
+
+```bash
+node --test --test-name-pattern='real PostgreSQL' database/tests/accounts.test.mjs
+```
+
+This test creates and drops its own database containing fictional fixtures. It verifies actual lock waits between independent connections for overlapping inserts, stale schedule edits, edit/delete races, and stale patient-status updates. Inherited PostgreSQL connection settings are removed and TCP/remote connection targets are rejected. Without the opt-in variables, this integration test is skipped; ordinary database tests alone do not prove concurrent behavior.
+
 Windows browser tests use Microsoft Edge. On other platforms, install Chromium with `npm exec --workspace frontend -- playwright install chromium`; Linux may need Playwright system dependencies. The test frontend uses port 5199.
 
 ## Troubleshooting
@@ -85,5 +93,11 @@ Apply the schema and deploy backend/frontend together. Older requests without a 
 
 
 Schedule deletion uses `DELETE /api/schedules/:id` and the owner-only `delete_my_treatment` database function. Reapply the existing `database/schema.sql` before deploying this version; no direct table DELETE grant or service-role key is needed. The operation checks live account/profile ownership, serializes with schedule writes, and removes a series and its replacements atomically. Deleting a replacement revalidates the restored original session; overlap failures roll back the deletion. This currently manages treatment requirements only, since trip generation is not implemented.
+
+Reapply `database/schema.sql` before deploying these API/frontend changes together. Patient and schedule reads now include a `version`. Patient saves and schedule edits/deletes must send the version originally read; a stale version returns HTTP 409 and keeps the draft available until the user chooses to reload. Coordinator patient edits use `save_patient(target, details)` with `details.version`; owner profile saves use `save_my_patient(details)`. Schedule edits use `update_my_treatment(target, details, expected_version)`, and deletion uses `delete_my_treatment(target, expected_version)`. Authenticated direct table UPDATE is revoked for both tables so clients cannot bypass version checks. Inserts remain protected by ownership and database validation. Replacement insert/edit/removal also changes the parent version.
+
+`GET /api/schedules?page=1&search=...` now calls the RLS-respecting `list_treatments` function. Search is applied before pagination (25 records per page); the response includes `total`, `page`, `pageSize` and the related schedule `context` needed for exception counts, history and editing across pages. Search supports the existing centre/day/date/type fields, plus patient name/ID for coordinators. Sorting remains effective start date, then schedule ID.
+
+New or updated treatment dates must be within AD 0001-01-01 through 9999-12-31, and the selected weekday must occur within the date range. The database enforces these rules even for direct inserts. Date/occurrence constraints use `NOT VALID` during upgrade to preserve existing records; they still enforce every new insert/update. Any historical invalid records require explicit correction rather than automatic deletion. The list displays unsupported legacy dates as “Invalid date” instead of failing to render. Keep these constraints, version columns and protected write functions when rolling back application code; old clients without versions must reload/update rather than silently overwrite newer data.
 
 For every new dashboard page, follow the shared page/overlay format in [Integrations and responsive design](apis-and-responsive-design.md#dashboard-page-and-overlay-format).

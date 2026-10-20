@@ -1764,7 +1764,7 @@ test('patients save treatment requirements and coordinators have a read-only sch
       const input = route.request().postDataJSON();
       expect(input.days).toEqual([1]);
       expect(input).not.toHaveProperty('patient_id');
-      schedules = [{ ...input, id: centre.id, patients: { full_name: 'Test Patient' } }];
+      schedules = [{ ...input, id: centre.id, version: 1, patients: { full_name: 'Test Patient' } }];
       return route.fulfill({ json: schedules[0] });
     }
     return route.fulfill({ json: { centres: [centre], schedules } });
@@ -1823,7 +1823,7 @@ test('centre search matches name, address and postcode and displays only a selec
     { id:'77777777-7777-4777-8777-777777777777',name:'Test Centre',address:'Blk 10 Example Road #01-01',postal_code:'560123' },
     { id:'88888888-8888-4888-8888-888888888888',name:'Another Centre',address:'Blk 20 Other Street #02-02',postal_code:'730123' },
   ];
-  await page.route('**/api/schedules',route => route.fulfill({ json: { centres,schedules:[] } }));
+  await page.route('**/api/schedules?*',route => route.fulfill({ json: { centres,schedules:[] } }));
   await page.goto('/dashboard/schedules');
   await page.getByRole('button',{name:'Add Schedule',exact:true}).click();
   const search=page.getByRole('combobox',{name:'Dialysis centre',exact:true});
@@ -1856,7 +1856,7 @@ for (const scenario of [
 ]) test(`schedule empty state uses shared styling for ${scenario.role} centres=${scenario.centres} failure=${scenario.failure}`, async ({ page }) => {
   await seedSession(page);
   await page.route('**/api/auth/me',route => route.fulfill({json:{account:{...activeAccount,role:scenario.role,profile_complete:true}}}));
-  await page.route('**/api/schedules',route => route.fulfill(scenario.failure
+  await page.route('**/api/schedules?*',route => route.fulfill(scenario.failure
     ? {status:503,json:{message:'Unavailable'}}
     : {json:{centres:scenario.centres ? [{id:'77777777-7777-4777-8777-777777777777',name:'Test Centre',address:'Test street',postal_code:'560123'}] : [],schedules:[]}}));
   await page.goto('/dashboard/schedules');
@@ -1881,7 +1881,7 @@ for (const scenario of [
 test('schedule loading indicator is centred inside the panel on desktop and mobile', async ({ page }) => {
   await seedSession(page);
   await page.route('**/api/auth/me',route => route.fulfill({json:{account:{...activeAccount,role:'coordinator'}}}));
-  await page.route('**/api/schedules', () => {});
+  await page.route('**/api/schedules?*', () => {});
   await page.goto('/dashboard/schedules');
   const panel=page.locator('.treatment-panel');
   const loader=panel.locator('.account-loading');
@@ -1894,7 +1894,8 @@ test('schedule loading indicator is centred inside the panel on desktop and mobi
     const text=await loader.getByText('Loading...', {exact:true}).boundingBox();
     const groupCentre=(spinner!.x+text!.x+text!.width)/2;
     expect(Math.abs(groupCentre-(bounds!.x+bounds!.width/2))).toBeLessThan(3);
-    const contentCentre=(heading!.y+heading!.height+bounds!.y+bounds!.height)/2;
+    const footer=await panel.locator('.patients-pagination').boundingBox();
+    const contentCentre=(heading!.y+heading!.height+footer!.y)/2;
     expect(Math.abs(spinner!.y+spinner!.height/2-contentCentre)).toBeLessThan(20);
   }
 });
@@ -1903,7 +1904,7 @@ test('patient schedule heading stays in place when the Add Schedule action loads
   await seedSession(page);
   await page.route('**/api/auth/me',route => route.fulfill({json:{account:{...activeAccount,role:'patient',profile_complete:true}}}));
   let release: () => void = () => {};
-  await page.route('**/api/schedules',async route => {
+  await page.route('**/api/schedules?*',async route => {
     await new Promise<void>(resolve => { release=resolve; });
     await route.fulfill({json:{centres:[{id:'77777777-7777-4777-8777-777777777777',name:'Test Centre',address:'Test street',postal_code:'560123'}],schedules:[]}});
   });
@@ -1916,9 +1917,21 @@ test('patient schedule heading stays in place when the Add Schedule action loads
     await expect(subheader).toHaveCSS('text-transform','uppercase');
     await expect(subheader).toHaveCSS('font-weight','600');
     const before=await heading.boundingBox();
-    await expect(page.getByRole('button',{name:'Add Schedule',exact:true})).toBeHidden();
+    await expect(page.getByRole('button',{name:'Add Schedule',exact:true})).toBeVisible();
+    await expect(page.getByRole('button',{name:'Add Schedule',exact:true})).toBeDisabled();
+    const footer=page.locator('.patients-pagination');
+    await expect(footer).toBeVisible();
+    const previous=footer.getByRole('button',{name:'Previous',exact:true});
+    const next=footer.getByRole('button',{name:'Next',exact:true});
+    await expect(previous).toBeDisabled();
+    await expect(next).toBeDisabled();
+    await expect(previous).toHaveText('<');
+    await expect(next).toHaveText('>');
+    const left=await previous.boundingBox(); const right=await next.boundingBox();
+    expect(right!.x-left!.x-left!.width).toBeGreaterThanOrEqual(12);
     release();
     await expect(page.getByRole('button',{name:'Add Schedule',exact:true})).toBeVisible();
+    await expect(page.getByRole('button',{name:'Add Schedule',exact:true})).toBeEnabled();
     expect(await heading.boundingBox()).toEqual(before);
   }
 });
@@ -1927,7 +1940,7 @@ test('centre picker stays bounded with many results and supports keyboard select
   await seedSession(page);
   await page.route('**/api/auth/me',route => route.fulfill({json:{account:{...activeAccount,role:'patient',profile_complete:true}}}));
   const centres=Array.from({length:45},(_,i)=>({id:`77777777-7777-4777-8777-${String(i).padStart(12,'0')}`,name:`Test Dialysis Centre ${String(i).padStart(2,'0')}`,address:`Blk ${i+1} Example Street #01-01`,postal_code:'560123'}));
-  await page.route('**/api/schedules',route => route.fulfill({json:{centres,schedules:[]}}));
+  await page.route('**/api/schedules?*',route => route.fulfill({json:{centres,schedules:[]}}));
   await page.goto('/dashboard/schedules');
   await page.getByRole('button',{name:'Add Schedule',exact:true}).click();
   const picker=page.getByRole('combobox',{name:'Dialysis centre',exact:true});
@@ -1953,7 +1966,7 @@ test('schedule form overlays the list, keeps address space stable and restores f
   await seedSession(page);
   await page.route('**/api/auth/me',route => route.fulfill({json:{account:{...activeAccount,role:'patient',profile_complete:true}}}));
   const centre={id:'77777777-7777-4777-8777-777777777777',name:'Test Centre',address:'Test street',postal_code:'560123'};
-  await page.route('**/api/schedules',route => route.fulfill({json:{centres:[centre],schedules:[]}}));
+  await page.route('**/api/schedules?*',route => route.fulfill({json:{centres:[centre],schedules:[]}}));
   for(const width of [1440,390]) {
     await page.setViewportSize({width,height:900});
     await page.goto('/dashboard/schedules');
@@ -2044,7 +2057,7 @@ test('patient records an independent single session without recurring fields', a
     if(route.request().method()!=='GET') {
       const input=route.request().postDataJSON();
       expect(input).toEqual({kind:'single',centre_id:centre.id,session_date:'2026-10-27',start_time:'09:00',end_time:'13:00'});
-      saved={...input,id:centre.id,days:[2],effective_from:input.session_date,effective_to:input.session_date,patients:{full_name:'Test Patient'}};
+      saved={...input,id:centre.id,days:[2],effective_from:input.session_date,effective_to:input.session_date,version:1,patients:{full_name:'Test Patient'}};
       return route.fulfill({json:saved});
     }
     return route.fulfill({json:{centres:[centre],schedules:saved?[saved]:[]}});
@@ -2075,7 +2088,7 @@ test('rescheduling replaces one recurring occurrence and failed saves leave the 
   await seedSession(page);
   await page.route('**/api/auth/me',route=>route.fulfill({json:{account:{...activeAccount,role:'patient',profile_complete:true}}}));
   const centre={id:'77777777-7777-4777-8777-777777777777',name:'Test Centre',address:'Test street',postal_code:'560123'};
-  const series={id:'88888888-8888-4888-8888-888888888888',kind:'recurring',centre_id:centre.id,days:[1],start_time:'09:00',end_time:'13:00',effective_from:'2026-10-19',effective_to:'2026-12-31',patients:{full_name:'Test Patient'}};
+  const series={id:'88888888-8888-4888-8888-888888888888',kind:'recurring',centre_id:centre.id,days:[1],start_time:'09:00',end_time:'13:00',effective_from:'2026-10-19',effective_to:'2026-12-31',version:1,patients:{full_name:'Test Patient'}};
   let replacement: Record<string,unknown>|null=null;
   let fail=true; let writes=0;
   await page.route('**/api/schedules**',route=>{
@@ -2086,7 +2099,7 @@ test('rescheduling replaces one recurring occurrence and failed saves leave the 
       expect(input.replaces_schedule_id).toBe(series.id);
       expect(input.replaces_date).toBe('2026-10-26');
       expect(input.session_date).toBe('2026-10-27');
-      replacement={...input,id:centre.id,days:[2],effective_from:input.session_date,effective_to:input.session_date,patients:{full_name:'Test Patient'}};
+      replacement={...input,id:centre.id,days:[2],effective_from:input.session_date,effective_to:input.session_date,version:1,patients:{full_name:'Test Patient'}};
       return route.fulfill({json:replacement});
     }
     return route.fulfill({json:{centres:[centre],schedules:[series,...(replacement?[replacement]:[])]}});
@@ -2146,8 +2159,8 @@ for (const width of [390, 1440]) test(`shared schedule layout contains long list
   await seedSession(page);
   await page.route('**/api/auth/me', r => r.fulfill({ json: { account: activeAccount } }));
   const centre = { id: '77777777-7777-4777-8777-777777777777', name: 'Test Centre', address: 'Test street', postal_code: '560123' };
-  const schedules = Array.from({ length: 20 }, (_, i) => ({ id: `88888888-8888-4888-8888-${String(i).padStart(12,'0')}`, kind: 'recurring', centre_id: centre.id, days: [2], start_time: '11:00', end_time: '12:30', effective_from: '2026-10-20', effective_to: '2027-07-06', patients: { full_name: 'Test Patient' } }));
-  await page.route('**/api/schedules', r => r.fulfill({ json: { centres: [centre], schedules } }));
+  const schedules = Array.from({ length: 20 }, (_, i) => ({ id: `88888888-8888-4888-8888-${String(i).padStart(12,'0')}`, kind: 'recurring', centre_id: centre.id, days: [2], start_time: '11:00', end_time: '12:30', effective_from: '2026-10-20', effective_to: '2027-07-06', version: 1, patients: { full_name: 'Test Patient' } }));
+  await page.route('**/api/schedules?*', r => r.fulfill({ json: { centres: [centre], schedules } }));
   await page.goto('/dashboard/schedules');
   const records = page.getByRole('region', { name: 'Treatment schedules', exact: true });
   await expect(records).toBeVisible();
@@ -2193,7 +2206,7 @@ test('schedule deletion requires confirmation, preserves failed edits and remove
   await seedSession(page);
   await page.route('**/api/auth/me', r => r.fulfill({ json: { account: activeAccount } }));
   const centre = { id: '77777777-7777-4777-8777-777777777777', name: 'Test Centre', address: 'Test street', postal_code: '560123' };
-  const schedule = { id: '88888888-8888-4888-8888-888888888888', kind: 'single', centre_id: centre.id, days: [5], start_time: '11:00', end_time: '12:30', effective_from: '2026-10-30', effective_to: '2026-10-30', patients: { full_name: 'Test Patient' } };
+  const schedule = { id: '88888888-8888-4888-8888-888888888888', kind: 'single', centre_id: centre.id, days: [5], start_time: '11:00', end_time: '12:30', effective_from: '2026-10-30', effective_to: '2026-10-30', version: 1, patients: { full_name: 'Test Patient' } };
   let deleted = false; let fail = true; let writes = 0;
   await page.route('**/api/schedules**', r => {
     if (r.request().method() === 'DELETE') { writes++; if (fail) return r.fulfill({ status: 503, json: {} }); deleted = true; return r.fulfill({ json: { id: schedule.id } }); }
@@ -2222,8 +2235,8 @@ test('one-session selection stays bounded for long series and can jump to anothe
   await seedSession(page);
   await page.route('**/api/auth/me', r => r.fulfill({ json: { account: activeAccount } }));
   const centre = { id: '77777777-7777-4777-8777-777777777777', name: 'Test Centre', address: 'Test street', postal_code: '560123' };
-  const series = { id: '88888888-8888-4888-8888-888888888888', kind: 'recurring', centre_id: centre.id, days: [1], start_time: '09:00', end_time: '13:00', effective_from: '2026-10-19', effective_to: '9999-12-31', patients: { full_name: 'Test Patient' } };
-  await page.route('**/api/schedules', r => r.fulfill({ json: { centres: [centre], schedules: [series] } }));
+  const series = { id: '88888888-8888-4888-8888-888888888888', kind: 'recurring', centre_id: centre.id, days: [1], start_time: '09:00', end_time: '13:00', effective_from: '2026-10-19', effective_to: '9999-12-31', version: 1, patients: { full_name: 'Test Patient' } };
+  await page.route('**/api/schedules?*', r => r.fulfill({ json: { centres: [centre], schedules: [series] } }));
   await page.goto('/dashboard/schedules');
   await page.getByRole('button', { name: 'Edit Schedule', exact: true }).click();
   await chooseOption(page.getByLabel('Apply changes to'), 'occurrence');
@@ -2249,8 +2262,8 @@ for (const width of [390, 1440]) test(`session dropdown and edit footer stay bou
   await seedSession(page);
   await page.route('**/api/auth/me', r => r.fulfill({ json: { account: activeAccount } }));
   const centre = { id: '77777777-7777-4777-8777-777777777777', name: 'Test Centre', address: 'Test street', postal_code: '560123' };
-  const series = { id: '88888888-8888-4888-8888-888888888888', kind: 'recurring', centre_id: centre.id, days: [2], start_time: '11:00', end_time: '12:30', effective_from: '2026-10-20', effective_to: '2027-07-06', patients: { full_name: 'Test Patient' } };
-  await page.route('**/api/schedules', r => r.fulfill({ json: { centres: [centre], schedules: [series] } }));
+  const series = { id: '88888888-8888-4888-8888-888888888888', kind: 'recurring', centre_id: centre.id, days: [2], start_time: '11:00', end_time: '12:30', effective_from: '2026-10-20', effective_to: '2027-07-06', version: 1, patients: { full_name: 'Test Patient' } };
+  await page.route('**/api/schedules?*', r => r.fulfill({ json: { centres: [centre], schedules: [series] } }));
   await page.goto('/dashboard/schedules');
   await page.getByRole('button', { name: 'Edit Schedule', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: 'Edit Schedule', exact: true });
@@ -2280,9 +2293,9 @@ test('many rescheduled dates use a compact count and a scrolling history overlay
   await seedSession(page);
   await page.route('**/api/auth/me', r => r.fulfill({ json: { account: activeAccount } }));
   const centre = { id: '77777777-7777-4777-8777-777777777777', name: 'Test Centre', address: 'Test street', postal_code: '560123' };
-  const series = { id: '88888888-8888-4888-8888-888888888888', kind: 'recurring', centre_id: centre.id, days: [2], start_time: '11:00', end_time: '12:30', effective_from: '2026-10-20', effective_to: '2027-07-06', patients: { full_name: 'Test Patient' } };
+  const series = { id: '88888888-8888-4888-8888-888888888888', kind: 'recurring', centre_id: centre.id, days: [2], start_time: '11:00', end_time: '12:30', effective_from: '2026-10-20', effective_to: '2027-07-06', version: 1, patients: { full_name: 'Test Patient' } };
   const moved = Array.from({ length: 30 }, (_, i) => { const date = new Date(Date.UTC(2026,9,20+i*7)).toISOString().slice(0,10); return { ...series, id: `99999999-9999-4999-8999-${String(i).padStart(12,'0')}`, kind: 'single', effective_from:date, effective_to:date, replaces_schedule_id:series.id, replaces_date:date }; });
-  await page.route('**/api/schedules', r => r.fulfill({ json: { centres: [centre], schedules: [series,...moved] } }));
+  await page.route('**/api/schedules?*', r => r.fulfill({ json: { centres: [centre], schedules: [series,...moved] } }));
   await page.goto('/dashboard/schedules');
   const summary = page.getByRole('button', { name: '30 rescheduled sessions', exact: true });
   await expect(summary).toBeVisible();
@@ -2301,10 +2314,14 @@ for (const role of ['patient', 'coordinator']) test(`${role} schedule cards use 
   const centre = { id: '77777777-7777-4777-8777-777777777777', name: 'Test Centre', address: 'Test street', postal_code: '560123' };
   const patientId = '11111111-1111-4111-8111-111111111111';
   const schedules = [
-    { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', patient_id: patientId, patients: { full_name: 'Alex Fixture' }, kind: 'recurring', centre_id: centre.id, days: [1], effective_from: '2026-10-01', effective_to: '2026-12-31', start_time: '09:00', end_time: '10:00' },
-    { id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', patient_id: role === 'coordinator' ? '22222222-2222-4222-8222-222222222222' : patientId, patients: { full_name: role === 'coordinator' ? 'Jamie Fixture' : 'Alex Fixture' }, kind: 'single', centre_id: centre.id, days: [2], effective_from: '2026-10-20', effective_to: '2026-10-20', start_time: '11:00', end_time: '12:00' },
+    { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', patient_id: patientId, version: 1, patients: { full_name: 'Alex Fixture' }, kind: 'recurring', centre_id: centre.id, days: [1], effective_from: '2026-10-01', effective_to: '2026-12-31', start_time: '09:00', end_time: '10:00' },
+    { id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', patient_id: role === 'coordinator' ? '22222222-2222-4222-8222-222222222222' : patientId, version: 1, patients: { full_name: role === 'coordinator' ? 'Jamie Fixture' : 'Alex Fixture' }, kind: 'single', centre_id: centre.id, days: [2], effective_from: '2026-10-20', effective_to: '2026-10-20', start_time: '11:00', end_time: '12:00' },
   ];
-  await page.route('**/api/schedules', route => route.fulfill({ json: { centres: [centre], schedules } }));
+  await page.route('**/api/schedules?*', route => {
+    const term=(new URL(route.request().url()).searchParams.get('search') ?? '').trim().toLowerCase();
+    const matches=schedules.filter(item => !term || [role === 'coordinator' ? item.patients.full_name : '',role === 'coordinator' ? item.patient_id : '',centre.name,item.kind==='single' ? 'Single Session Tuesday 20 Oct 2026 2026-10-20' : 'Recurring Monday'].some(value=>value.toLowerCase().includes(term)));
+    return route.fulfill({json:{centres:[centre],schedules:matches,context:matches,total:matches.length,page:1,pageSize:25}});
+  });
   await page.goto('/dashboard/schedules');
   await expect(page.getByRole('heading', { name: role === 'coordinator' ? 'Treatment Schedule List' : 'Treatment Schedules', exact: true })).toBeVisible();
   await expect(page.locator('.treatment-record')).toHaveCount(2);
@@ -2353,4 +2370,94 @@ for (const role of ['patient', 'coordinator']) test(`${role} schedule cards use 
     await search.fill('');
     await expect(page.locator('.treatment-record')).toHaveCount(2);
   }
+});
+
+
+test('schedule pagination sends search to the server and resets to the first page', async ({ page }) => {
+  await seedSession(page);
+  await page.route('**/api/auth/me',route=>route.fulfill({json:{account:{...activeAccount,role:'coordinator'}}}));
+  const centre={id:'77777777-7777-4777-8777-777777777777',name:'Fixture Centre',address:'Fixture street',postal_code:'560123'};
+  const schedules=Array.from({length:26},(_,i)=>({id:`schedule-${i}`,version:1,patient_id:`patient-${i}`,patients:{full_name:`Fixture Patient ${i+1}`},kind:'single',centre_id:centre.id,days:[2],effective_from:'2026-10-20',effective_to:'2026-10-20',start_time:'09:00',end_time:'10:00'}));
+  const requests:URLSearchParams[]=[];
+  await page.route('**/api/schedules?*',route=>{
+    const query=new URL(route.request().url()).searchParams; requests.push(query);
+    const number=Number(query.get('page')); const term=query.get('search');
+    const filtered=term ? schedules.filter(item=>item.patients.full_name.includes(term)) : schedules;
+    return route.fulfill({json:{centres:[centre],schedules:filtered.slice((number-1)*25,number*25),context:[],total:filtered.length,page:number,pageSize:25}});
+  });
+  await page.goto('/dashboard/schedules');
+  await expect(page.locator('.treatment-record')).toHaveCount(25);
+  await page.getByRole('button',{name:'Next',exact:true}).click();
+  await expect(page.locator('.treatment-record')).toHaveCount(1);
+  await expect(page.locator('.treatment-record')).toContainText('Fixture Patient 26');
+  await page.getByRole('searchbox',{name:'Search treatment schedules'}).fill('Fixture Patient 1');
+  await expect(page.locator('.treatment-record')).toHaveCount(11);
+  expect(requests.at(-1)!.get('page')).toBe('1');
+  expect(requests.at(-1)!.get('search')).toBe('Fixture Patient 1');
+  for(const width of [320,390,1440]) {
+    await page.setViewportSize({width,height:900});
+    await page.evaluate(()=>{document.documentElement.style.fontSize='32px';});
+    expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+  }
+});
+
+for (const operation of ['edit','delete']) test(`stale schedule ${operation} preserves input and requires reload`,async({page})=>{
+  await seedSession(page);
+  await page.route('**/api/auth/me',route=>route.fulfill({json:{account:{...activeAccount,role:'patient',profile_complete:true}}}));
+  const centre={id:'77777777-7777-4777-8777-777777777777',name:'Fixture Centre',address:'Fixture street',postal_code:'560123'};
+  let version=3;
+  const schedule=()=>({id:centre.id,version,patient_id:'fixture',patients:{full_name:'Fixture Patient'},kind:'recurring',centre_id:centre.id,days:[1],effective_from:'2026-10-19',effective_to:'2026-12-31',start_time:version===3?'09:00':'08:00',end_time:'13:00'});
+  await page.route('**/api/schedules**',route=>{
+    if(route.request().method()==='GET') return route.fulfill({json:{centres:[centre],schedules:[schedule()],context:[],total:1,page:1,pageSize:25}});
+    expect(route.request().postDataJSON().version).toBe(3); version=4;
+    return route.fulfill({status:409,json:{message:'Changed'}});
+  });
+  await page.goto('/dashboard/schedules');
+  await page.getByRole('button',{name:'Edit Schedule',exact:true}).click();
+  await page.getByLabel('Session start',{exact:true}).fill('10:00');
+  if(operation==='delete') {
+    await page.getByRole('button',{name:'Delete Schedule',exact:true}).click();
+    await page.getByRole('button',{name:'Confirm Delete',exact:true}).click();
+  }else await page.getByRole('button',{name:'Save Schedule',exact:true}).click();
+  await expect(page.getByRole('dialog').getByRole('alert')).toContainText('changed');
+  if(operation==='edit') await expect(page.getByLabel('Session start',{exact:true})).toHaveValue('10:00');
+  await page.getByRole('button',{name:'Reload schedules',exact:true}).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page.locator('.treatment-record')).toContainText('08:00');
+});
+
+for(const role of ['patient','coordinator']) test(`${role} patient edits retain drafts on version conflicts`,async({page})=>{
+  await seedSession(page);
+  await page.route('**/api/auth/me',route=>route.fulfill({json:{account:{...activeAccount,role,profile_complete:true}}}));
+  let patient={id:'11111111-1111-4111-8111-111111111111',version:3,full_name:'Fixture Patient',phone:'+65 81234567',pickup_address:'Fixture street',unit_no:'',postal_code:'560123',notes:'Original notes',mobility:'ambulant',assistance_required:false,status:'active'};
+  await page.route('**/api/profiles/patient**',route=>{
+    if(route.request().method()==='GET') return route.fulfill({json:role==='coordinator'?{patients:[patient],total:1,page:1,pageSize:25}:{patient}});
+    expect(route.request().postDataJSON().version).toBe(3);
+    patient={...patient,version:4,notes:'Latest server notes'};
+    return route.fulfill({status:409,json:{message:'Changed'}});
+  });
+  await page.goto(role==='coordinator'?'/dashboard/patients':'/dashboard/account');
+  if(role==='coordinator') {
+    await page.getByRole('button',{name:'View Fixture Patient',exact:true}).click();
+    await page.getByRole('button',{name:'Edit Patient',exact:true}).click();
+  }else await page.getByRole('button',{name:'Edit profile',exact:true}).click();
+  const notes=page.getByRole('dialog').getByLabel('Notes',{exact:true});
+  await notes.fill('My unsaved notes');
+  await page.getByRole('button',{name:role==='coordinator'?'Save Patient':'Save profile',exact:true}).click();
+  await expect(page.getByRole('dialog').getByRole('alert')).toContainText('changed');
+  await expect(notes).toHaveValue('My unsaved notes');
+  await expect(page.getByRole('button',{name:role==='coordinator'?'Save Patient':'Save profile',exact:true})).toBeDisabled();
+  await page.getByRole('button',{name:'Reload latest details',exact:true}).click();
+  if(role==='coordinator') await expect(page.getByRole('dialog').getByLabel('Notes',{exact:true})).toHaveValue('Latest server notes');
+  else await expect(page.getByRole('region',{name:'Your patient details'}).getByLabel('Notes',{exact:true})).toHaveValue('Latest server notes');
+});
+
+test('a legacy unsupported schedule date cannot crash the schedule list',async({page})=>{
+  await seedSession(page);
+  await page.route('**/api/auth/me',route=>route.fulfill({json:{account:{...activeAccount,role:'coordinator'}}}));
+  const centre={id:'77777777-7777-4777-8777-777777777777',name:'Fixture Centre',address:'Fixture street',postal_code:'560123'};
+  await page.route('**/api/schedules?*',route=>route.fulfill({json:{centres:[centre],schedules:[{id:centre.id,version:1,patient_id:'fixture',patients:{full_name:'Fixture Patient'},kind:'single',centre_id:centre.id,days:[6],effective_from:'10000-01-01',effective_to:'10000-01-01',start_time:'09:00',end_time:'10:00'}],context:[],total:1,page:1,pageSize:25}}));
+  await page.goto('/dashboard/schedules');
+  await expect(page.getByRole('heading',{name:'Treatment Schedule List',exact:true})).toBeVisible();
+  await expect(page.locator('.treatment-record')).toContainText('Invalid date');
 });

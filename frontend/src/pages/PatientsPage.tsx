@@ -4,6 +4,7 @@ import { ApiError, apiGet, apiRequest } from '../lib/api';
 
 export interface Patient {
   id: string;
+  version: number;
   full_name: string;
   phone: string;
   pickup_address: string;
@@ -14,7 +15,7 @@ export interface Patient {
   assistance_required: boolean;
   status: 'active' | 'inactive';
 }
-type PatientInput = Omit<Patient, 'id'>;
+type PatientInput = Omit<Patient, 'id' | 'version'>;
 interface PatientList { patients: Patient[]; total: number; page: number; pageSize: number }
 export function patientDraft(patient?: Patient | null): PatientInput {
   return { full_name: patient?.full_name ?? '', phone: patient?.phone ?? '', pickup_address: patient?.pickup_address ?? '', unit_no: patient?.unit_no ?? '', postal_code: patient?.postal_code ?? '', notes: patient?.notes ?? '', mobility: patient?.mobility ?? 'ambulant', assistance_required: patient?.assistance_required ?? false, status: patient?.status ?? 'active' };
@@ -49,6 +50,7 @@ export default function PatientsPage({ notify, onSessionExpired }: { notify: (me
   }, [editing]);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
+  const [conflict, setConflict] = useState(false);
   const alive = useRef(false);
   const editButton = useRef<HTMLButtonElement | null>(null);
   const formWasOpen = useRef(false);
@@ -84,33 +86,54 @@ export default function PatientsPage({ notify, onSessionExpired }: { notify: (me
   }
 
   function open(patient: Patient) {
+    setConflict(false);
     setEditingId(patient.id);
     setSelectedPatient(patient);
     setEditing(false);
     setSaveError('');
     setDraft(patientDraft(patient));
   }
-  function close() { setSelectedPatient(null); setDraft(null); setEditing(false); setSaveError(''); }
+  function close() { setConflict(false); setSelectedPatient(null); setDraft(null); setEditing(false); setSaveError(''); }
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!draft || !editingId || !editing || saving) return;
     setSaving(true);
     setSaveError('');
     try {
-      const patient = await apiRequest<Patient>(`/profiles/patients/${editingId}`, 'PATCH', { status: draft.status, notes: draft.notes });
+      const patient = await apiRequest<Patient>(`/profiles/patients/${editingId}`, 'PATCH', { status: draft.status, notes: draft.notes, version: selectedPatient?.version });
       if (!alive.current) return;
       notify('Patient details updated.');
       setSelectedPatient(patient);
       setDraft(patientDraft(patient));
       setEditing(false);
+      setConflict(false);
       setReload(value => value + 1);
     } catch (reason) {
       if (!alive.current) return;
       if (reason instanceof ApiError && reason.status === 401) onSessionExpired();
+      setConflict(reason instanceof ApiError && reason.status === 409);
       setSaveError(reason instanceof ApiError && reason.status === 400 ? 'Check the required patient details.'
         : reason instanceof ApiError && reason.status === 403 ? 'Coordinator access is required to save patients.'
         : reason instanceof ApiError && reason.status === 404 ? 'This patient record is no longer available. Cancel and reload the list.'
+        : reason instanceof ApiError && reason.status === 409 ? 'This patient changed since you opened it. Your edits are still here. Reload the latest details before saving.'
         : 'Patient could not be saved. Please try again.');
+    } finally { if (alive.current) setSaving(false); }
+  }
+
+  async function reloadSelected() {
+    if (!editingId || saving) return;
+    setSaving(true);
+    try {
+      const result = await apiGet<PatientList>(`/profiles/patients?search=${encodeURIComponent(editingId)}`);
+      if (!alive.current) return;
+      const patient = result.patients.find(item => item.id === editingId);
+      if (!patient) { setSaveError('This patient record is no longer available.'); return; }
+      setSelectedPatient(patient); setDraft(patientDraft(patient)); setConflict(false); setSaveError('');
+      setReload(value => value + 1);
+    } catch (reason) {
+      if (!alive.current) return;
+      if (reason instanceof ApiError && reason.status === 401) onSessionExpired();
+      setSaveError('Latest patient details could not be loaded. Your edits are still here.');
     } finally { if (alive.current) setSaving(false); }
   }
 
@@ -128,11 +151,12 @@ export default function PatientsPage({ notify, onSessionExpired }: { notify: (me
             {list.patients.map(patient => <tr key={patient.id}><td className="patient-record-id">{patient.id}</td><td>{patient.full_name}</td><td>{patient.phone}</td><td>{mobilityLabels[patient.mobility]}</td><td>{patient.status === 'active' ? 'Active' : 'Inactive'}</td><td><button type="button" aria-label={`View ${patient.full_name}`} disabled={updating} ref={patient.id === editingId ? editButton : undefined} onClick={() => open(patient)}>View</button></td></tr>)}
           </tbody></table></div>
         </>}
-          <div className="patients-pagination"><span>{list.total} {list.total === 1 ? 'patient' : 'patients'} · Page {list.page}</span><div className="patient-actions"><button type="button" disabled={updating || page === 1} onClick={() => setFilters(current => ({ ...current, page: current.page - 1 }))}>Previous</button><button type="button" disabled={updating || page * list.pageSize >= list.total} onClick={() => setFilters(current => ({ ...current, page: current.page + 1 }))}>Next</button></div></div>
       </>}
+    <div className="patients-pagination"><span>{list ? <>{list.total} {list.total === 1 ? 'patient' : 'patients'} · Page {list.page}</> : loading ? 'Loading...' : 'Patient count unavailable'}</span><div className="patient-actions"><button type="button" aria-label="Previous" title="Previous page" disabled={updating || !!error || page === 1} onClick={() => setFilters(current => ({ ...current, page: current.page - 1 }))}>{'<'}</button><button type="button" aria-label="Next" title="Next page" disabled={updating || !!error || !list || page * list.pageSize >= list.total} onClick={() => setFilters(current => ({ ...current, page: current.page + 1 }))}>{'>'}</button></div></div>
     {draft && selectedPatient && <Overlay title="Patient Details" description={<span className="profile-id">Patient ID: {selectedPatient.id}</span>} className="patient-dialog" busy={saving} onClose={close} onSubmit={editing ? save : undefined} error={saveError} onDismissError={() => setSaveError('')}
-      footer={editing ? <><button className="patient-primary" type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save Patient'}</button><button type="button" disabled={saving} onClick={() => { setDraft(patientDraft(selectedPatient)); setSaveError(''); setEditing(false); }}>Cancel</button></>
+      footer={editing ? <><button className="patient-primary" type="submit" disabled={saving || conflict}>{saving ? 'Saving…' : 'Save Patient'}</button><button type="button" disabled={saving} onClick={() => { setDraft(patientDraft(selectedPatient)); setSaveError(''); setEditing(false); }}>Cancel</button></>
         : <><button ref={detailsEditButton} className="patient-primary" type="button" onClick={() => { setDraft(patientDraft(selectedPatient)); setSaveError(''); setEditing(true); }}>Edit Patient</button><button type="button" onClick={close}>Close</button></>}>
+      {conflict && <button type="button" disabled={saving} onClick={reloadSelected}>Reload latest details</button>}
       <PatientFields draft={draft} onChange={setDraft} disabled={saving || !editing} showStatus personalDetailsReadOnly={editing} />
     </Overlay>}
   </section>;

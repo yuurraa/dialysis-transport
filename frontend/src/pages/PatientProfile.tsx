@@ -3,7 +3,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { ApiError, apiGet, apiRequest } from '../lib/api';
 import { PatientFields, patientDraft, type Patient } from './PatientsPage';
 
-type Details = Omit<Patient, 'id'>;
+type Details = Omit<Patient, 'id' | 'version'>;
 
 
 /** Ownership is derived on the server; the browser cannot select another patient's record. */
@@ -15,6 +15,7 @@ export default function PatientProfile({ notify, onSessionExpired, onProfileReso
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [saveError, setSaveError] = useState('');
+  const [conflict, setConflict] = useState(false);
   const [saving, setSaving] = useState(false);
   const [editing, setEditing] = useState(false);
   const [attempt, setAttempt] = useState(0);
@@ -48,18 +49,20 @@ export default function PatientProfile({ notify, onSessionExpired, onProfileReso
     setSaving(true); setSaveError('');
     const { status: unused, ...details } = draft;
     try {
-      const patient = await apiRequest<Patient>('/profiles/patient', 'PATCH', details);
+      const patient = await apiRequest<Patient>('/profiles/patient', 'PATCH', { ...details, version: profile.version });
       if (!alive.current) return;
       setProfile(patient);
       onProfileResolved(true, patient.full_name);
       notify('Profile saved.');
       setDraft(patientDraft(patient));
-      setEditing(false);
+      setEditing(false); setConflict(false);
     } catch (reason) {
       if (!alive.current) return;
       if (reason instanceof ApiError && reason.status === 401) onSessionExpired();
+      setConflict(reason instanceof ApiError && reason.status === 409);
       setSaveError(reason instanceof ApiError && reason.status === 400 ? 'Check the required profile details.'
         : reason instanceof ApiError && reason.status === 403 ? 'Your profile cannot be updated. Contact your transport coordinator.'
+        : reason instanceof ApiError && reason.status === 409 ? 'Your profile changed since you opened it. Your edits are still here. Reload the latest details before saving.'
         : 'Your profile could not be saved. Please try again.');
     } finally { if (alive.current) setSaving(false); }
   }
@@ -71,12 +74,13 @@ export default function PatientProfile({ notify, onSessionExpired, onProfileReso
       : form ? <>
           <div className="patient-readonly-fields panel-scroll" tabIndex={0} role="region" aria-label="Your patient details">{!editing && <PatientFields draft={draft} onChange={setDraft} disabled />}</div>
           {profile.status === 'inactive' ? <p role="status" className="patient-error">Your patient profile is inactive. Contact your transport coordinator.</p>
-            : <div className="patient-actions"><button ref={editButton} className="patient-primary" type="button" onClick={() => { setDraft(patientDraft(profile)); setSaveError(''); setEditing(true); }}>Edit profile</button></div>}
+            : <div className="patient-actions"><button ref={editButton} className="patient-primary" type="button" onClick={() => { setConflict(false); setDraft(patientDraft(profile)); setSaveError(''); setEditing(true); }}>Edit profile</button></div>}
       </> : null}
   </section>
   {editing && draft && profile && <Overlay title="Edit profile" description="Update your contact and transport details." busy={saving}
-    onClose={() => { setDraft(patientDraft(profile)); setSaveError(''); setEditing(false); }} onSubmit={save} error={saveError} onDismissError={() => setSaveError('')}
-    footer={<><button className="patient-primary" type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save profile'}</button><button type="button" disabled={saving} onClick={() => { setDraft(patientDraft(profile)); setSaveError(''); setEditing(false); }}>Cancel</button></>}>
+    onClose={() => { setConflict(false); setDraft(patientDraft(profile)); setSaveError(''); setEditing(false); }} onSubmit={save} error={saveError} onDismissError={() => setSaveError('')}
+    footer={<><button className="patient-primary" type="submit" disabled={saving || conflict}>{saving ? 'Saving…' : 'Save profile'}</button><button type="button" disabled={saving} onClick={() => { setConflict(false); setDraft(patientDraft(profile)); setSaveError(''); setEditing(false); }}>Cancel</button></>}>
+    {conflict && <button type="button" disabled={saving} onClick={() => { setEditing(false); setConflict(false); setSaveError(''); setAttempt(value => value + 1); }}>Reload latest details</button>}
     <PatientFields draft={draft} onChange={setDraft} disabled={saving} />
   </Overlay>}
   </>;

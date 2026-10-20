@@ -123,6 +123,13 @@ create table if not exists public.patients (
 alter table public.patients add column if not exists unit_no text not null default '' check (length(unit_no) <= 20);
 alter table public.patients add column if not exists postal_code text not null default '' check (postal_code = '' or postal_code ~ '^[0-9]{6}$');
 alter table public.patients add column if not exists notes text not null default '' check (length(notes) <= 1000);
+alter table public.patients add column if not exists version integer not null default 1 check (version > 0);
+create or replace function private.increment_patient_version() returns trigger
+language plpgsql set search_path = '' as $$
+begin new.version := old.version + 1; return new; end;
+$$;
+drop trigger if exists patients_version on public.patients;
+create trigger patients_version before update on public.patients for each row execute function private.increment_patient_version();
 -- Nullable ownership preserves coordinator-created records without guessing identities.
 alter table public.patients add column if not exists account_id uuid references public.accounts(id) on delete restrict;
 create unique index if not exists patients_account on public.patients(account_id);
@@ -135,7 +142,7 @@ grant execute on function private.patient_account_id() to authenticated;
 alter table public.patients enable row level security;
 revoke all on public.patients from public, anon, authenticated;
 grant select on public.patients to authenticated;
-grant update (status, notes) on public.patients to authenticated;
+revoke update (status, notes) on public.patients from authenticated;
 drop policy if exists patients_read on public.patients;
 create policy patients_read on public.patients for select to authenticated
   using ((select private.is_coordinator()) or account_id = (select private.patient_account_id()));
@@ -144,6 +151,35 @@ drop policy if exists patients_update on public.patients;
 create policy patients_update on public.patients for update to authenticated
   using ((select private.is_coordinator())) with check ((select private.is_coordinator()));
 create index if not exists patients_created on public.patients(created_at desc, id);
+
+-- All authenticated coordinator writes compare the version while holding the row lock.
+create or replace function private.save_patient(target uuid, details jsonb) returns jsonb
+language plpgsql security definer set search_path = '' as $$
+declare saved public.patients;
+begin
+  if not private.is_coordinator() then raise exception 'Coordinator access required.' using errcode = '42501'; end if;
+  if details is null or jsonb_typeof(details) <> 'object'
+    or details - array['version','status','notes'] <> '{}'::jsonb
+    or not (details ? 'status' or details ? 'notes')
+    or (details ? 'status' and (jsonb_typeof(details->'status') <> 'string' or details->>'status' not in ('active','inactive')))
+    or (details ? 'notes' and (jsonb_typeof(details->'notes') <> 'string' or length(details->>'notes') > 1000)) then
+    raise exception 'Invalid patient details.' using errcode = '22023';
+  end if;
+  if coalesce(jsonb_typeof(details->'version'), '') <> 'number' or coalesce(details->>'version','') !~ '^[1-9][0-9]*$' then
+    raise exception 'Patient version is required.' using errcode = '22023';
+  end if;
+  select * into saved from public.patients where id=target for update;
+  if not found then raise exception 'Patient not found.' using errcode = 'P0002'; end if;
+  if saved.version <> (details->>'version')::numeric then raise exception 'Patient has changed. Reload before saving.' using errcode = '40001'; end if;
+  update public.patients set status=coalesce(details->>'status',status), notes=case when details ? 'notes' then btrim(details->>'notes') else notes end
+    where id=target returning * into saved;
+  return to_jsonb(saved);
+end;
+$$;
+create or replace function public.save_patient(target uuid, details jsonb) returns jsonb
+language sql security invoker set search_path = '' as $$ select private.save_patient(target,details); $$;
+revoke all on function private.save_patient(uuid,jsonb), public.save_patient(uuid,jsonb) from public, anon;
+grant execute on function private.save_patient(uuid,jsonb), public.save_patient(uuid,jsonb) to authenticated;
 
 -- A narrow owner-save API prevents patients from assigning ownership or changing status.
 create or replace function private.save_my_patient(details jsonb) returns jsonb
@@ -156,7 +192,7 @@ begin
   if details is null or jsonb_typeof(details) <> 'object' then
     raise exception 'Invalid patient details.' using errcode = '22023';
   end if;
-  if details - array['full_name','phone','pickup_address','mobility','assistance_required','unit_no','postal_code','notes'] <> '{}'::jsonb
+  if details - array['full_name','phone','pickup_address','mobility','assistance_required','unit_no','postal_code','notes','version'] <> '{}'::jsonb
     or coalesce(jsonb_typeof(details->'full_name'), '') <> 'string'
     or coalesce(jsonb_typeof(details->'phone'), '') <> 'string'
     or coalesce(jsonb_typeof(details->'pickup_address'), '') <> 'string'
@@ -168,6 +204,18 @@ begin
     raise exception 'Invalid patient details.' using errcode = '22023';
   end if;
   candidate := jsonb_populate_record(null::public.patients, details);
+  -- Lock the account as well, serializing simultaneous first profile creations.
+  perform 1 from public.accounts where id=owner_id for update;
+  select * into saved from public.patients where account_id=owner_id for update;
+  if found then
+    if saved.status <> 'active' then raise exception 'Patient profile is inactive.' using errcode = '42501'; end if;
+    if coalesce(jsonb_typeof(details->'version'), '') <> 'number' or coalesce(details->>'version','') !~ '^[1-9][0-9]*$' then
+      raise exception 'Patient version is required.' using errcode = '22023';
+    end if;
+    if saved.version <> (details->>'version')::numeric then raise exception 'Patient has changed. Reload before saving.' using errcode = '40001'; end if;
+  elsif details ? 'version' then
+    raise exception 'Patient profile has changed. Reload before saving.' using errcode = '40001';
+  end if;
   insert into public.patients(account_id, full_name, phone, pickup_address, mobility, assistance_required, unit_no, postal_code, notes)
     values (owner_id, btrim(candidate.full_name), btrim(candidate.phone), btrim(candidate.pickup_address), candidate.mobility, candidate.assistance_required, coalesce(btrim(candidate.unit_no), ''), coalesce(btrim(candidate.postal_code), ''), coalesce(btrim(candidate.notes), ''))
     on conflict (account_id) do update set full_name = excluded.full_name, phone = excluded.phone,
@@ -303,6 +351,15 @@ alter table public.treatment_schedules add constraint treatment_schedules_days_c
 alter table public.treatment_schedules add column if not exists kind text not null default 'recurring';
 alter table public.treatment_schedules add column if not exists replaces_schedule_id uuid references public.treatment_schedules(id) on delete restrict;
 alter table public.treatment_schedules add column if not exists replaces_date date;
+alter table public.treatment_schedules add column if not exists version integer not null default 1;
+alter table public.treatment_schedules drop constraint if exists treatment_supported_dates;
+alter table public.treatment_schedules add constraint treatment_supported_dates check (
+  effective_from between date '0001-01-01' and date '9999-12-31'
+  and effective_to between date '0001-01-01' and date '9999-12-31'
+  and (replaces_date is null or replaces_date between date '0001-01-01' and date '9999-12-31')) not valid;
+alter table public.treatment_schedules drop constraint if exists treatment_has_occurrence;
+alter table public.treatment_schedules add constraint treatment_has_occurrence check (
+  effective_from + ((days[1]-extract(isodow from effective_from)::integer+7)%7) <= effective_to) not valid;
 alter table public.treatment_schedules drop constraint if exists treatment_kind_check;
 alter table public.treatment_schedules add constraint treatment_kind_check check (
   kind in ('recurring','single') and (kind<>'single' or
@@ -318,6 +375,9 @@ revoke all on public.dialysis_centres, public.treatment_schedules from public, a
 grant select on public.dialysis_centres, public.treatment_schedules to authenticated;
 grant insert(patient_id,centre_id,kind,days,start_time,end_time,effective_from,effective_to,replaces_schedule_id,replaces_date),
   update(centre_id,kind,days,start_time,end_time,effective_from,effective_to) on public.treatment_schedules to authenticated;
+-- Updates require a version-checked RPC; INSERT still validates through RLS/triggers.
+revoke update on public.treatment_schedules from authenticated;
+revoke update(centre_id,kind,days,start_time,end_time,effective_from,effective_to) on public.treatment_schedules from authenticated;
 
 -- Read/write ownership uses live account state, not user-editable JWT metadata.
 create or replace function private.owns_active_patient(target uuid) returns boolean
@@ -365,6 +425,7 @@ begin
   end if;
   perform 1 from public.patients where id=new.patient_id for update;
   if tg_op='UPDATE' then
+    new.version := old.version + 1;
     if new.kind<>old.kind then raise exception 'Schedule type cannot be changed.' using errcode='22023'; end if;
     if new.replaces_schedule_id is distinct from old.replaces_schedule_id or new.replaces_date is distinct from old.replaces_date then
       raise exception 'Original occurrence cannot be changed.' using errcode='22023';
@@ -408,10 +469,13 @@ create trigger treatment_overlap before insert or update on public.treatment_sch
 
 -- A narrow owner operation keeps linked replacements and restored occurrences atomic.
 -- Direct DELETE remains revoked; all changes serialize on the same Patient as saves.
-create or replace function private.delete_my_treatment(target uuid) returns uuid
+drop function if exists public.delete_my_treatment(uuid);
+drop function if exists private.delete_my_treatment(uuid);
+create or replace function private.delete_my_treatment(target uuid, expected_version integer) returns uuid
 language plpgsql security definer set search_path = '' as $$
 declare selected public.treatment_schedules;
 begin
+  if expected_version is null or expected_version < 1 then raise exception 'A schedule version is required.' using errcode='22023'; end if;
   select * into selected from public.treatment_schedules where id=target;
   if not found then
     if (select private.patient_account_id()) is null then
@@ -426,6 +490,7 @@ begin
   -- Recheck after the lock: another request may have deleted the schedule.
   select * into selected from public.treatment_schedules where id=target for update;
   if not found then return null; end if;
+  if selected.version <> expected_version then raise exception 'Schedule changed. Reload before deleting.' using errcode='40001'; end if;
   if not private.owns_active_patient(selected.patient_id) then
     raise exception 'Treatment access denied.' using errcode='42501';
   end if;
@@ -439,10 +504,92 @@ begin
   return target;
 end;
 $$;
-create or replace function public.delete_my_treatment(target uuid) returns uuid
-language sql security invoker set search_path = '' as $$ select private.delete_my_treatment(target); $$;
-revoke all on function private.delete_my_treatment(uuid), public.delete_my_treatment(uuid) from public, anon;
-grant execute on function private.delete_my_treatment(uuid), public.delete_my_treatment(uuid) to authenticated;
+create or replace function public.delete_my_treatment(target uuid, expected_version integer) returns uuid
+language sql security invoker set search_path = '' as $$ select private.delete_my_treatment(target,expected_version); $$;
+revoke all on function private.delete_my_treatment(uuid,integer), public.delete_my_treatment(uuid,integer) from public, anon;
+grant execute on function private.delete_my_treatment(uuid,integer), public.delete_my_treatment(uuid,integer) to authenticated;
+
+-- Serialize owner edits and compare the version while holding the same Patient lock
+-- used by inserts/deletion. Direct Data API UPDATE is intentionally unavailable.
+create or replace function private.update_my_treatment(target uuid, details jsonb, expected_version integer) returns jsonb
+language plpgsql security definer set search_path = '' as $$
+declare selected public.treatment_schedules; candidate public.treatment_schedules;
+begin
+  if expected_version is null or expected_version < 1 or details is null or jsonb_typeof(details)<>'object'
+    or details - array['kind','centre_id','days','start_time','end_time','effective_from','effective_to'] <> '{}'::jsonb then
+    raise exception 'Invalid schedule update.' using errcode='22023';
+  end if;
+  select * into selected from public.treatment_schedules where id=target;
+  if not found then return null; end if;
+  if not private.owns_active_patient(selected.patient_id) then raise exception 'Treatment access denied.' using errcode='42501'; end if;
+  perform 1 from public.patients where id=selected.patient_id for update;
+  select * into selected from public.treatment_schedules where id=target for update;
+  if not found then return null; end if;
+  if not private.owns_active_patient(selected.patient_id) then raise exception 'Treatment access denied.' using errcode='42501'; end if;
+  if selected.version<>expected_version then raise exception 'Schedule changed. Reload before saving.' using errcode='40001'; end if;
+  candidate := jsonb_populate_record(selected,details);
+  update public.treatment_schedules set kind=candidate.kind,centre_id=candidate.centre_id,days=candidate.days,
+    start_time=candidate.start_time,end_time=candidate.end_time,effective_from=candidate.effective_from,effective_to=candidate.effective_to
+    where id=target returning * into selected;
+  return to_jsonb(selected);
+end;
+$$;
+create or replace function public.update_my_treatment(target uuid, details jsonb, expected_version integer) returns jsonb
+language sql security invoker set search_path = '' as $$ select private.update_my_treatment(target,details,expected_version); $$;
+revoke all on function private.update_my_treatment(uuid,jsonb,integer), public.update_my_treatment(uuid,jsonb,integer) from public,anon;
+grant execute on function private.update_my_treatment(uuid,jsonb,integer), public.update_my_treatment(uuid,jsonb,integer) to authenticated;
+
+-- A replacement changes the series context seen by an open editor as well.
+create or replace function private.touch_treatment_parent() returns trigger
+language plpgsql security definer set search_path = '' as $$
+begin
+  if new.replaces_schedule_id is not null then
+    update public.treatment_schedules set start_time=start_time where id=new.replaces_schedule_id;
+  end if;
+  return null;
+end;
+$$;
+revoke all on function private.touch_treatment_parent() from public,anon,authenticated;
+drop trigger if exists treatment_parent_version on public.treatment_schedules;
+create trigger treatment_parent_version after insert or update on public.treatment_schedules
+  for each row execute function private.touch_treatment_parent();
+
+-- Filter and paginate inside PostgreSQL before returning a single JSON result,
+-- avoiding PostgREST row caps. All reads retain the caller's RLS permissions.
+create or replace function private.list_treatments(search_text text default '', page_no integer default 1) returns jsonb
+language plpgsql stable security invoker set search_path = '' as $$
+declare result jsonb;
+begin
+  if page_no is null or page_no<1 or page_no>1000000 or search_text is null or length(search_text)>100
+    or search_text ~ '[[:cntrl:]]' then raise exception 'Invalid schedule search.' using errcode='22023'; end if;
+  with visible as materialized (
+    select s.*,jsonb_build_object('full_name',p.full_name) as patients,c.name as centre_name
+    from public.treatment_schedules s join public.patients p on p.id=s.patient_id join public.dialysis_centres c on c.id=s.centre_id
+  ), matched as materialized (
+    select * from visible s where btrim(search_text)='' or exists (
+      select 1 from unnest(array[
+        case when private.is_coordinator() then s.patients->>'full_name' else '' end,
+        case when private.is_coordinator() then s.patient_id::text else '' end,
+        s.centre_name, (array['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'])[s.days[1]],
+        s.effective_from::text,s.effective_to::text,to_char(s.effective_from,'FMDD Mon YYYY'),to_char(s.effective_to,'FMDD Mon YYYY'),
+        case when s.kind='single' then 'Single Session' else 'Recurring' end,
+        case when s.replaces_schedule_id is not null then 'Rescheduled Session' else '' end
+      ]) field where strpos(lower(field),lower(btrim(search_text)))>0)
+  ), page as materialized (
+    select * from matched order by effective_from,id limit 25 offset ((page_no::bigint-1)*25)
+  ), parents as (select id from page union select replaces_schedule_id from page where replaces_schedule_id is not null)
+  select jsonb_build_object(
+    'centres',(select coalesce(jsonb_agg(to_jsonb(c) order by name,id),'[]'::jsonb) from public.dialysis_centres c),
+    'schedules',(select coalesce(jsonb_agg(to_jsonb(p)-'centre_name' order by effective_from,id),'[]'::jsonb) from page p),
+    'context',(select coalesce(jsonb_agg(to_jsonb(s)-'centre_name' order by effective_from,id),'[]'::jsonb) from visible s where s.id in (select id from parents) or s.replaces_schedule_id in (select id from parents)),
+    'total',(select count(*) from matched),'page',page_no,'pageSize',25) into result;
+  return result;
+end;
+$$;
+create or replace function public.list_treatments(search_text text default '', page_no integer default 1) returns jsonb
+language sql stable security invoker set search_path = '' as $$ select private.list_treatments(search_text,page_no); $$;
+revoke all on function private.list_treatments(text,integer), public.list_treatments(text,integer) from public,anon;
+grant execute on function private.list_treatments(text,integer), public.list_treatments(text,integer) to authenticated;
 
 notify pgrst, 'reload schema';
 commit;

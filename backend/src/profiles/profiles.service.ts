@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Inject, Injectable, NotFoundException, NotImplementedException, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, NotFoundException, NotImplementedException, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 import { AuthService } from '../auth/auth.service';
 import { SupabaseService } from '../supabase.module';
 import { patientInput } from './patient-input';
@@ -19,14 +19,17 @@ export class ProfilesService {
 
   async ownPatient(header?: string) {
     const { client, account } = await this.requireRole(header, 'patient');
-    const result = await client.from('patients').select('id,full_name,phone,pickup_address,mobility,assistance_required,status,created_at,unit_no,postal_code,notes,account_id').eq('account_id', account.id).maybeSingle();
+    const result = await client.from('patients').select('id,full_name,phone,pickup_address,mobility,assistance_required,status,created_at,unit_no,postal_code,notes,version,account_id').eq('account_id', account.id).maybeSingle();
     this.checkError(result.error);
     return { patient: result.data };
   }
 
   async saveOwnPatient(header: string | undefined, body: unknown) {
     const { client } = await this.requireRole(header, 'patient');
-    const details = patientInput(body, false);
+    if (!body || typeof body !== 'object' || Array.isArray(body)) throw new BadRequestException('Invalid patient details.');
+    const { version, ...input } = body as Record<string, unknown>;
+    if (!Number.isSafeInteger(version) || (version as number) < 1) throw new BadRequestException('Patient version is required.');
+    const details = { ...patientInput(input, false), version };
     const result = await client.rpc('save_my_patient', { details });
     this.checkError(result.error);
     return result.data;
@@ -40,7 +43,7 @@ export class ProfilesService {
       || !['created_at', 'id', 'full_name', 'phone', 'mobility', 'status'].includes(sort)
       || !['asc', 'desc'].includes(direction)) throw new BadRequestException('Invalid search or sort.');
     const pageSize = 25;
-    let query = client.from('patients').select('id,full_name,phone,pickup_address,mobility,assistance_required,status,created_at,unit_no,postal_code,notes', { count: 'exact' });
+    let query = client.from('patients').select('id,full_name,phone,pickup_address,mobility,assistance_required,status,created_at,unit_no,postal_code,notes,version', { count: 'exact' });
     const term = search.trim();
     if (term) {
       // Quote the entire PostgREST value and escape literal SQL LIKE characters.
@@ -61,12 +64,11 @@ export class ProfilesService {
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) throw new BadRequestException('Invalid patient.');
     if (!body || typeof body !== 'object' || Array.isArray(body)) throw new BadRequestException('Invalid patient update.');
     const input = body as Record<string, unknown>;
-    if (!Object.keys(input).length || Object.keys(input).some(key => !['status', 'notes'].includes(key))
+    if (!Number.isSafeInteger(input.version) || (input.version as number) < 1 || !('status' in input || 'notes' in input) || Object.keys(input).some(key => !['status', 'notes', 'version'].includes(key))
       || ('status' in input && (typeof input.status !== 'string' || !['active', 'inactive'].includes(input.status)))
       || ('notes' in input && (typeof input.notes !== 'string' || input.notes.length > 1000))) throw new BadRequestException('Only Status and Notes may be updated.');
-    const data = { ...('status' in input ? { status: input.status } : {}), ...('notes' in input ? { notes: (input.notes as string).trim() } : {}) };
-    const fields = 'id,full_name,phone,pickup_address,mobility,assistance_required,status,created_at,unit_no,postal_code,notes';
-    const result = await client.from('patients').update(data).eq('id', id).select(fields).maybeSingle();
+    const data = { version: input.version, ...('status' in input ? { status: input.status } : {}), ...('notes' in input ? { notes: (input.notes as string).trim() } : {}) };
+    const result = await client.rpc('save_patient', { target: id, details: data });
     this.checkError(result.error);
     if (!result.data) throw new NotFoundException('Patient not found.');
     return result.data;
@@ -74,6 +76,8 @@ export class ProfilesService {
 
   private checkError(error: { code?: string } | null) {
     if (!error) return;
+    if (error.code === '40001') throw new ConflictException('This patient was changed by someone else. Reload before saving.');
+    if (error.code === 'P0002') throw new NotFoundException('Patient not found.');
     if (error.code === '42501') throw new ForbiddenException('Patient access denied.');
     if (error.code === '23514' || error.code === '22P02' || error.code === '22023' || error.code === '23502') throw new BadRequestException('Invalid patient details.');
     throw new ServiceUnavailableException('Patient service is unavailable. Please try again.');

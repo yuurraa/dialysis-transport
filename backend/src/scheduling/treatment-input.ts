@@ -26,5 +26,7 @@ export function treatmentInput(body: unknown): TreatmentDetails {
   }
   if (!Array.isArray(b.days) || b.days.length !== 1 || !Number.isInteger(b.days[0]) || b.days[0] < 1 || b.days[0] > 7
     || !validDate(b.effective_from) || !validDate(b.effective_to) || b.effective_to < b.effective_from) throw new BadRequestException('Check the treatment day and effective dates.');
+  const first = Date.parse(b.effective_from) + ((b.days[0] - (new Date(b.effective_from).getUTCDay() || 7) + 7) % 7) * 86400000;
+  if (first > Date.parse(b.effective_to)) throw new BadRequestException('The date range must contain the selected weekday.');
   return { kind:'recurring', centre_id:b.centre_id, days:[b.days[0]], start_time:b.start_time, end_time:b.end_time, effective_from:b.effective_from, effective_to:b.effective_to };
 }

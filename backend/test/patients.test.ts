@@ -12,17 +12,18 @@ const id = '11111111-1111-4111-8111-111111111111';
 let role = 'coordinator';
 let status = 'active';
 let failure = false;
+let conflict = false;
 let missing = false;
 let writes = 0;
 let saved: unknown;
 let filters = '';
 let orders: Array<[string, boolean]> = [];
 let bounds: number[] = [];
-const record = { id, full_name: 'Test Patient', phone: '81234567', pickup_address: 'Test address', mobility: 'wheelchair', assistance_required: true, status: 'active' };
+const record = { id, version: 1, full_name: 'Test Patient', phone: '81234567', pickup_address: 'Test address', mobility: 'wheelchair', assistance_required: true, status: 'active' };
 const gateway = { forUser: () => ({
   auth: { getUser: async (token: string) => token === 'invalid' ? { data: { user: null }, error: { status: 401 } } : { data: { user: { id, email_confirmed_at: '2026-01-01', identities: [{ provider: 'google' }] } }, error: null } },
   rpc: async (name: string, args?: { details: unknown }) => {
-    if (name === 'save_my_patient') { writes++; saved = args?.details; return { data: { ...record, ...(saved as object), account_id: id }, error: null }; }
+    if (name === 'save_my_patient' || name === 'save_patient') { writes++; saved = args?.details; return { data: { ...record, ...(saved as object), account_id: id }, error: conflict ? { code: '40001' } : missing ? { code: 'P0002' } : null }; }
     return { data: { id, role, status }, error: null };
   },
   from: () => {
@@ -86,12 +87,12 @@ test('search and column sorting run before pagination and reject unsupported que
 });
 test('coordinators may update only Status and Notes, never create or overwrite personal details', async () => {
   assert.equal((await request('', 'POST', record)).status, 404);
-  const result = await request(`/${id}`, 'PATCH', { status: 'inactive', notes: 'Call coordinator.' });
+  const result = await request(`/${id}`, 'PATCH', { status: 'inactive', notes: 'Call coordinator.', version: 1 });
   assert.equal(result.status, 200);
-  assert.deepEqual(saved, { status: 'inactive', notes: 'Call coordinator.' });
+  assert.deepEqual(saved, { status: 'inactive', notes: 'Call coordinator.', version: 1 });
   const before = writes;
   for (const body of [{ full_name: 'Changed' }, { phone: '87654321' }, { pickup_address: 'Changed' }, { mobility: 'ambulant' }, { assistance_required: false }, { unit_no: '#01-01' }, { postal_code: '123456' }, { account_id: id }, { status: 'deleted' }, { notes: 'x'.repeat(1001) }, {}]) {
-    assert.equal((await request(`/${id}`, 'PATCH', body)).status, 400);
+    assert.equal((await request(`/${id}`, 'PATCH', { ...body, version: 1 })).status, 400);
   }
   assert.equal(writes, before);
   assert.equal((await request('/not-an-id', 'PATCH', { status: 'active' })).status, 400);
@@ -99,7 +100,7 @@ test('coordinators may update only Status and Notes, never create or overwrite p
 test('missing records and database failures are distinct and do not leak details', async () => {
   const { id: unused, ...input } = record;
   missing = true;
-  assert.equal((await request(`/${id}`, 'PATCH', { status: 'active' })).status, 404);
+  assert.equal((await request(`/${id}`, 'PATCH', { status: 'active', version: 1 })).status, 404);
   missing = false; failure = true;
   const result = await request();
   assert.equal(result.status, 503);
@@ -136,4 +137,20 @@ test('patients read and save only their own profile without accepting ownership 
   status = 'active';
   assert.equal((await selfRequest('GET', undefined, 'invalid')).status, 401);
   role = 'coordinator';
+});
+
+test('patient edits require a version and stale database writes return conflict', async () => {
+  const before = writes;
+  for (const version of [undefined, 0, -1, 1.5, '1']) {
+    assert.equal((await request(`/${id}`, 'PATCH', { status: 'active', version })).status, 400);
+  }
+  assert.equal(writes, before);
+  conflict = true;
+  assert.equal((await request(`/${id}`, 'PATCH', { status: 'active', version: 1 })).status, 409);
+  role = 'patient';
+  const { id: unused, status: ignored, ...details } = record;
+  assert.equal((await selfRequest('PATCH', details)).status, 409);
+  const { version: omitted, ...withoutVersion } = details;
+  assert.equal((await selfRequest('PATCH', withoutVersion)).status, 400);
+  conflict = false; role = 'coordinator';
 });
