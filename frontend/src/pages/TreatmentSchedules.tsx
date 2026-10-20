@@ -2,6 +2,7 @@ import { Dropdown } from '../components/Dropdown';
 import { Overlay, PageHeading } from '../components/DashboardUI';
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { ApiError, apiGet, apiRequest } from '../lib/api';
+import { addDays, singaporeToday } from './TripsPage';
 
 interface Centre { id: string; name: string; address: string; postal_code: string }
 interface Details { kind: 'recurring' | 'single'; centre_id: string; days: number[]; start_time: string; end_time: string; effective_from: string; effective_to: string }
@@ -22,6 +23,11 @@ export default function TreatmentSchedules({ coordinator, notify, onSessionExpir
   const [reload, setReload] = useState(0);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
+  const [generatingSchedule, setGeneratingSchedule] = useState<Schedule | null>(null);
+  const [generationDates, setGenerationDates] = useState({ from: '', until: '' });
+  const [generating, setGenerating] = useState(false);
+  const [generationError, setGenerationError] = useState('');
+  const [generationConflict, setGenerationConflict] = useState(false);
   const [filters, setFilters] = useState({page: 1, search: ''});
   useEffect(() => {
     const timer = window.setTimeout(() => setFilters(current => current.search === search.trim() ? current : {page:1,search:search.trim()}),300);
@@ -146,6 +152,46 @@ export default function TreatmentSchedules({ coordinator, notify, onSessionExpir
         : 'The schedule could not be deleted. Please try again.');
     } finally { if (alive.current) setSaving(false); }
   }
+  function openGeneration(schedule: Schedule) {
+    const from = schedule.effective_from > singaporeToday() ? schedule.effective_from : singaporeToday();
+    setGeneratingSchedule(schedule); setGenerationError(''); setGenerationConflict(false);
+    const until = schedule.kind === 'single' ? from : schedule.effective_to >= from && schedule.effective_to < addDays(from, 30) ? schedule.effective_to : addDays(from, 30);
+    setGenerationDates({ from, until });
+  }
+  async function reloadGeneration() {
+    if (!generatingSchedule || generating) return;
+    setGenerating(true);
+    try {
+      const result = await apiGet<Data>(`/schedules?${new URLSearchParams({ page: String(filters.page), search: filters.search })}`);
+      if (!alive.current) return;
+      setData(result);
+      const latest = [...result.schedules, ...(result.context ?? [])].find(schedule => schedule.id === generatingSchedule.id);
+      if (!latest) { setGenerationError('This schedule is no longer available. Cancel and choose another schedule.'); return; }
+      setGeneratingSchedule(latest); setGenerationConflict(false); setGenerationError('');
+    } catch (reason) {
+      if (!alive.current) return;
+      if (reason instanceof ApiError && reason.status === 401) onSessionExpired();
+      setGenerationError('Schedules could not be reloaded. Please try again.');
+    } finally { if (alive.current) setGenerating(false); }
+  }
+  async function generateTrips(event: FormEvent) {
+    event.preventDefault();
+    if (!generatingSchedule || generating || generationConflict) return;
+    const { from, until } = generationDates;
+    if (!supportedDate(from) || !supportedDate(until) || from < singaporeToday() || until < from || until > addDays(from, 89)) { setGenerationError('Choose dates from today within a maximum of 90 days.'); return; }
+    setGenerating(true); setGenerationError('');
+    try {
+      const result = await apiRequest<{ created: number; updated: number; unchanged: number; skipped?: number; total: number }>('/trips/generate', 'POST', { schedule_id: generatingSchedule.id, from_date: from, until_date: until, version: generatingSchedule.version });
+      if (!alive.current) return;
+      setGeneratingSchedule(null);
+      notify(`Trips generated: ${result.created} created, ${result.updated} updated, ${result.unchanged} unchanged (${result.total} total).${result.skipped ? ` ${result.skipped} deleted ${result.skipped === 1 ? 'trip' : 'trips'} skipped.` : ''} No duplicate trips created.`);
+    } catch (reason) {
+      if (!alive.current) return;
+      if (reason instanceof ApiError && reason.status === 401) onSessionExpired();
+      if (reason instanceof ApiError && reason.status === 409) { setGenerationConflict(true); setGenerationError('This schedule changed. Reload schedules before generating again.'); }
+      else setGenerationError(reason instanceof ApiError && reason.status === 400 ? 'Check the selected schedule and dates before trying again.' : 'Trips could not be generated. Please try again.');
+    } finally { if (alive.current) setGenerating(false); }
+  }
   return <section className="dashboard-trips treatment-panel page-panel" aria-labelledby="treatment-title" aria-busy={loading}>
     <PageHeading id="treatment-title" title={coordinator ? "Treatment Schedule List" : "Treatment Schedules"} eyebrow={coordinator ? "Schedule Management" : "Treatment planning"}
       actions={<><label className="patient-search"><svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 5 5" /></svg><input type="search" aria-label="Search treatment schedules" placeholder={coordinator ? "Patient or schedule details" : "Centre, day, date or type"} title={coordinator ? "Search by patient name, ID, centre, day, date or schedule type" : "Search by centre, day, date or schedule type"} maxLength={100} value={search} onChange={event => setSearch(event.target.value)} /></label>{!coordinator && <button ref={addButton} className="patient-primary" type="button" disabled={loading || !data?.centres.length} onClick={() => open()}>Add Schedule</button>}</>} />
@@ -154,11 +200,17 @@ export default function TreatmentSchedules({ coordinator, notify, onSessionExpir
         {!data?.centres.length && <div className="dashboard-data-status patients-status" role="status">{scheduleIcon}<div><h3>No dialysis centres are available.</h3><p>{coordinator ? 'The dialysis centre directory has not been loaded yet.' : 'Contact your Transport Coordinator.'}</p></div></div>}
         {(data?.total ?? data?.schedules.length) === 0 ? (data?.centres.length ?? 0) > 0 && <div className="dashboard-data-status patients-status" role="status">{scheduleIcon}<div><h3>{searchTerm ? 'No matching schedules.' : 'No treatment schedules yet.'}</h3><p>{searchTerm ? 'Try another search.' : coordinator ? 'Patient treatment schedules will appear here once submitted.' : 'Add your treatment schedule to share your dialysis requirements.'}</p></div></div> : searchTerm && visibleSchedules.length === 0 ? <div className="dashboard-data-status patients-status" role="status">{scheduleIcon}<div><h3>No matching schedules.</h3><p>{coordinator ? 'Try another patient name, ID, centre, day, date or schedule type.' : 'Try another centre, day, date or schedule type.'}</p></div></div> : <div className="treatment-records panel-scroll" tabIndex={0} role="region" aria-label="Treatment schedules">{visibleSchedules.map(schedule => <article className="treatment-record" key={schedule.id}>
           <div><div className="treatment-identity"><p>{schedule.patients.full_name}</p>{coordinator && <p className="treatment-patient-id"><span className="treatment-identity-separator" aria-hidden="true">·</span>Patient ID: {schedule.patient_id}</p>}<p className="treatment-kind">{schedule.replaces_schedule_id ? 'Rescheduled Session' : schedule.kind === 'single' ? 'Single Session' : 'Recurring'}</p></div><h2><span>{schedule.kind === 'single' ? formatDayDate(schedule.effective_from) : `Every ${schedule.days.map(day => weekdays[day-1]).join(', ')}`}</span><span className="treatment-time">{schedule.start_time.slice(0,5)}–{schedule.end_time.slice(0,5)}</span></h2><p>{data?.centres.find(c => c.id === schedule.centre_id)?.name}</p>{schedule.kind !== 'single' && <p>From {formatDate(schedule.effective_from)} until {formatDate(schedule.effective_to)}</p>}{schedule.replaces_date && <p>Replaces {formatDate(schedule.replaces_date)}</p>}{replacements.has(schedule.id) && <button className="reschedule-summary" type="button" onClick={() => setHistorySchedule(schedule)}>{replacements.get(schedule.id)!.length} rescheduled {replacements.get(schedule.id)!.length === 1 ? 'session' : 'sessions'}</button>}</div>
-          {!coordinator && <div className="patient-actions"><button type="button" onClick={() => open(schedule)}>Edit Schedule</button></div>}
+          <div className="patient-actions">{coordinator ? <button type="button" disabled={!schedule.version || !supportedDate(schedule.effective_from) || (schedule.kind === 'single' && schedule.effective_from < singaporeToday())} onClick={() => openGeneration(schedule)}>Generate Trips</button> : <button type="button" onClick={() => open(schedule)}>Edit Schedule</button>}</div>
         </article>)}</div>}
       </>}
     </>}
     <div className="patients-pagination" aria-label="Schedule pages"><span>{data ? <>{data.total ?? visibleSchedules.length} {(data.total ?? visibleSchedules.length)===1 ? 'schedule' : 'schedules'} · Page {filters.page} of {Math.max(1,Math.ceil((data.total ?? visibleSchedules.length)/(data.pageSize ?? 25)))}</> : loading ? 'Loading...' : 'Schedule count unavailable'}</span><div className="patient-actions"><button type="button" aria-label="Previous" title="Previous page" disabled={loading || !!error || search.trim()!==filters.search || filters.page===1} onClick={() => setFilters(current => ({...current,page:current.page-1}))}>{'<'}</button><button type="button" aria-label="Next" title="Next page" disabled={loading || !!error || search.trim()!==filters.search || !data || filters.page*(data.pageSize ?? 25)>=(data.total ?? visibleSchedules.length)} onClick={() => setFilters(current => ({...current,page:current.page+1}))}>{'>'}</button></div></div>
+    {generatingSchedule && coordinator && <Overlay title="Generate Trips" description="Create outbound and return journeys from treatment requirements." busy={generating} onClose={() => setGeneratingSchedule(null)} onSubmit={generateTrips} noValidate error={generationError} onDismissError={() => setGenerationError('')}
+      footer={<><button className="patient-primary" type={generationConflict ? 'button' : 'submit'} disabled={generating} onClick={generationConflict ? () => void reloadGeneration() : undefined}>{generating ? 'Loading…' : generationConflict ? 'Reload schedules' : 'Generate Trips'}</button><button type="button" disabled={generating} onClick={() => setGeneratingSchedule(null)}>Cancel</button></>}>
+      <dl className="signup-review"><div><dt>Patient</dt><dd>{generatingSchedule.patients.full_name}</dd></div><div><dt>Patient ID</dt><dd>{generatingSchedule.patient_id}</dd></div><div><dt>Dialysis centre</dt><dd>{data?.centres.find(centre => centre.id === generatingSchedule.centre_id)?.name}</dd></div><div><dt>Source</dt><dd>{generatingSchedule.kind === 'single' ? `Single session · ${formatDate(generatingSchedule.effective_from)}` : 'Recurring series, including rescheduled sessions in this date range'}</dd></div></dl>
+      <fieldset className="patient-form-fields trip-generation-dates" disabled={generating}><div className="patient-field"><label htmlFor="generation-from">From date</label><input id="generation-from" type="date" min={singaporeToday()} max={generationDates.until} value={generationDates.from} onChange={event => setGenerationDates(current => ({ ...current, from: event.target.value }))} /></div><div className="patient-field"><label htmlFor="generation-until">Until date</label><input id="generation-until" type="date" min={generationDates.from} max={supportedDate(generationDates.from) ? addDays(generationDates.from, 89) : undefined} value={generationDates.until} onChange={event => setGenerationDates(current => ({ ...current, until: event.target.value }))} /></div></fieldset>
+      <p className="patient-overview-note">Trips start as Unfilled. Home pickup time, driver and vehicle assignment are pending. Outbound arrival is 15 minutes before treatment; return pickup is no earlier than 15 minutes after treatment ends. Existing trips are updated without duplicates.</p>
+    </Overlay>}
     {draft && !coordinator && <Overlay title={confirmingDelete ? 'Delete Schedule' : id || rescheduling ? 'Edit Schedule' : 'Add Schedule'}
       description={confirmingDelete ? 'Review what will be removed before confirming.' : rescheduling ? 'Change one session. Other weeks stay unchanged.' : currentSchedule?.kind !== 'single' && currentSchedule ? 'Changes apply to the entire recurring schedule.' : 'Record the centre, date and treatment times.'}
       className={confirmingDelete ? '' : 'schedule-editor'} busy={saving} onClose={close} onSubmit={confirmingDelete ? undefined : save} noValidate error={error} onDismissError={() => setError('')}

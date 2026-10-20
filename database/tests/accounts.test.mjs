@@ -563,7 +563,7 @@ test('real PostgreSQL serializes overlapping writes and rejects stale concurrent
   const authenticated = (sql, user = patient) => `begin; set local role authenticated;
     select set_config('request.jwt.claim.sub',${literal(user)},true);
     set local statement_timeout='8s'; set local idle_in_transaction_session_timeout='8s'; ${sql}`;
-  async function race(label, leaderSql, followerSql, expectedState, user = patient) {
+  async function race(label, leaderSql, followerSql, expectedState, user = patient, followerUser = user) {
     const leader = spawn(binary, [...args(database), '-f', '-'], {
       env: { ...environment, PGAPPNAME: `${database}_leader` }, stdio: ['pipe', 'pipe', 'pipe'],
     });
@@ -584,7 +584,7 @@ test('real PostgreSQL serializes overlapping writes and rejects stale concurrent
     leader.stdin.write(`${authenticated(leaderSql, user)} select 'PROBE_LOCK_HELD';\n`);
     try {
       await ready;
-      const follower = query(`${authenticated(followerSql, user)} commit;`, database, `${database}_follower`);
+      const follower = query(`${authenticated(followerSql, followerUser)} commit;`, database, `${database}_follower`);
       let blocked = false;
       for (let attempt = 0; attempt < 60; attempt++) {
         if (await checked(`select count(*) from pg_stat_activity where application_name=${literal(`${database}_follower`)} and wait_event_type='Lock'`) === '1') {
@@ -644,6 +644,41 @@ test('real PostgreSQL serializes overlapping writes and rejects stale concurrent
     row = await seed();
     await race('delete then edit', remove(row.id, row.version), edit(row.id, row.version));
     assert.equal(await checked('select count(*) from public.treatment_schedules'), '0');
+    const future = await checked("select ((now() at time zone 'Asia/Singapore')::date+8)::text");
+    await checked(`${authenticated(`insert into public.treatment_schedules(patient_id,centre_id,kind,days,start_time,end_time,effective_from,effective_to)
+      values (${literal(patientId)},${literal(centreId)},'single',array[extract(isodow from ${literal(future)}::date)::integer],
+        '09:00','10:00',${literal(future)},${literal(future)});`)} commit;`);
+    const [tripSource, tripVersion] = (await checked('select id,version from public.treatment_schedules limit 1')).split('|');
+    const generate = version => `select public.generate_treatment_trips(${literal(tripSource)},${literal(future)},${literal(future)},${version});`;
+    await race('simultaneous duplicate trip generation', generate(tripVersion), generate(tripVersion), undefined, coordinator);
+    assert.equal(await checked('select count(*) from public.trips'), '2');
+    assert.equal(await checked('select count(*) from public.trip_history'), '2', 'Idempotent generation must not duplicate generated history.');
+    const changeSource = version => `select public.update_my_treatment(${literal(tripSource)},'{"start_time":"11:00","end_time":"12:00"}'::jsonb,${version});`;
+    await race('generation followed by patient source edit', generate(tripVersion), changeSource(tripVersion), undefined, coordinator, patient);
+    assert.equal(await checked('select count(*) from public.trips where review_required'), '2', 'Source edit after generation must flag both journeys.');
+    const changedVersion = Number(tripVersion) + 1;
+    await race('patient source edit followed by stale generation', changeSource(changedVersion), generate(changedVersion), '40001', patient, coordinator);
+    assert.equal(await checked('select count(*) from public.trips'), '2');
+    assert.equal(await checked('select count(*) from public.trips where review_required'), '2');
+    const [outboundId, outboundVersion] = (await checked("select id,version from public.trips where direction='outbound'")).split('|');
+    const deleteTrip = (id, version) => `select public.delete_trip(${literal(id)},${version});`;
+    const sourceVersion = changedVersion + 1;
+    const actualSourceChange = `select public.update_my_treatment(${literal(tripSource)},'{"start_time":"13:00","end_time":"14:00"}'::jsonb,${sourceVersion});`;
+    await race('patient source change blocks stale trip deletion', actualSourceChange, deleteTrip(outboundId, outboundVersion), '40001', patient, coordinator);
+    assert.equal(await checked('select count(*) from public.trips where deleted_at is null'), '2');
+    const refreshedSourceVersion = sourceVersion + 1;
+    const staleTripVersion = await checked(`select version from public.trips where id=${literal(outboundId)}`);
+    await race('generation refresh blocks stale trip deletion', generate(refreshedSourceVersion), deleteTrip(outboundId, staleTripVersion), '40001', coordinator);
+    assert.equal(await checked('select count(*) from public.trips where deleted_at is null'), '2');
+    const currentTripVersion = await checked(`select version from public.trips where id=${literal(outboundId)}`);
+    await race('trip deletion survives simultaneous regeneration', deleteTrip(outboundId, currentTripVersion), generate(refreshedSourceVersion), undefined, coordinator);
+    assert.equal(await checked('select count(*) from public.trips'), '2', 'The deleted journey remains as an audit tombstone.');
+    assert.equal(await checked('select count(*) from public.trips where deleted_at is null'), '1', 'Regeneration must not resurrect the deleted journey or delete its other leg.');
+    assert.equal(await checked("select count(*) from public.trip_history where event='deleted'"), '1');
+    const coordinatorRead = sql => `set role authenticated; select set_config('request.jwt.claim.sub',${literal(coordinator)},false); ${sql}`;
+    assert.equal(await checked(coordinatorRead(`select public.list_trips(1,${literal(future)},${literal(future)},'all')->>'total'`)), '1');
+    const skipped = await checked(coordinatorRead(generate(refreshedSourceVersion)));
+    assert.ok(skipped.includes('"skipped": 1'), 'Later generation must report the deleted leg as skipped.');
     const version = Number(await checked(`select version from public.patients where id=${literal(patientId)}`));
     const update = (status, notes) => `select public.save_patient(${literal(patientId)},${literal(JSON.stringify({ version, status, notes }))}::jsonb);`;
     await race('stale patient status', update('inactive', 'First coordinator'), update('active', 'Stale notes edit'), '40001', coordinator);
@@ -691,4 +726,169 @@ test('schedule search paginates all matching records and retains replacement con
     assert.equal((await list()).context.length,0);
     await assert.rejects(list('',0),/Invalid/);
   } finally { await local.close(); }
+});
+
+
+test('coordinators generate idempotent unfilled journeys with buffers, exceptions and private history', async () => {
+  const local=await databaseWithAuth();
+  try {
+    await local.exec(schema);
+    await local.exec(`insert into public.accounts(auth_user_id,email,display_name,role) values
+      ('${patient}','patient@example.test','Patient','patient'),('${coordinator}','coordinator@example.test','Coordinator','coordinator'),('${driver}','driver@example.test','Driver','driver'),('${stranger}','stranger@example.test','Other','patient');
+      insert into public.patients(account_id,full_name,phone,pickup_address,mobility,postal_code)
+      select id,display_name,'81234567','Fixture street','ambulant','560123' from public.accounts where role='patient';`);
+    const own=async(who,sql,params=[])=>{
+      await local.exec('begin; set local role authenticated;');
+      try {await local.query("select set_config('request.jwt.claim.sub',$1,true)",[who]);const result=await local.query(sql,params);await local.exec('commit');return result.rows;}
+      catch(error){await local.exec('rollback');throw error;}
+    };
+    const first=(await local.query(`select ((now() at time zone 'Asia/Singapore')::date+8+
+      ((1-extract(isodow from (now() at time zone 'Asia/Singapore')::date+8)::integer+7)%7))::text as date`)).rows[0].date;
+    const dates=(await local.query("select ($1::date+1)::text as moved,($1::date+14)::text as until",[first])).rows[0];
+    const ids=(await own(patient,'select p.id as patient,c.id as centre from public.patients p cross join public.dialysis_centres c order by c.id limit 1'))[0];
+    const [series]=await own(patient,`insert into public.treatment_schedules(patient_id,centre_id,days,start_time,end_time,effective_from,effective_to)
+      values($1,$2,array[1],'09:00','13:00',$3,$4) returning *`,[ids.patient,ids.centre,first,dates.until]);
+    const [moved]=await own(patient,`insert into public.treatment_schedules(patient_id,centre_id,kind,days,start_time,end_time,effective_from,effective_to,replaces_schedule_id,replaces_date)
+      values($1,$2,'single',array[2],'10:00','14:00',$3,$3,$4,$5) returning *`,[ids.patient,ids.centre,dates.moved,series.id,first]);
+    const generate=async(who,version)=>(await own(who,'select public.generate_treatment_trips($1,$2,$3,$4) as result',[series.id,first,dates.until,version]))[0].result;
+    for(const who of [patient,driver,stranger]) await assert.rejects(generate(who,2),/Coordinator|denied/i);
+    assert.equal((await generate(coordinator,2)).created,6);
+    const [again]=await own(coordinator,'select public.list_trips($1,$2,$3,$4) as result',[1,first,dates.until,'all']);
+    assert.equal(again.result.total,6);
+    assert.equal(again.result.counts.unfilled,6);
+    assert.equal(again.result.trips.filter(trip=>trip.session_date===first).length,0);
+    assert.ok(again.result.trips.every(trip=>trip.pickup_at===null&&trip.status==='unfilled'&&!trip.review_required));
+    for(const trip of again.result.trips) {
+      if(trip.direction==='outbound') assert.equal(Date.parse(trip.treatment_start)-Date.parse(trip.arrival_by),15*60000);
+      else assert.equal(Date.parse(trip.pickup_not_before)-Date.parse(trip.treatment_end),15*60000);
+    }
+    assert.equal((await generate(coordinator,2)).unchanged,6);
+    assert.equal((await own(patient,'select * from public.trips')).length,6);
+    assert.equal((await own(stranger,'select * from public.trips')).length,0);
+    assert.equal((await own(driver,'select * from public.trips')).length,0);
+    await assert.rejects(own(coordinator,"update public.trips set status='unfilled'"),/permission/i);
+    const edit={start_time:'10:00',end_time:'14:00'};
+    await own(patient,'select public.update_my_treatment($1,$2::jsonb,$3)',[series.id,JSON.stringify(edit),2]);
+    assert.equal((await own(coordinator,'select * from public.trips where review_required')).length,6);
+    await assert.rejects(generate(coordinator,2),/changed/i);
+    assert.equal((await generate(coordinator,3)).updated,6);
+    assert.equal((await own(coordinator,'select * from public.trips where review_required')).length,0);
+    await own(patient,'select public.save_my_patient($1::jsonb)',[JSON.stringify({...signupDetails,pickup_address:'Updated fixture street',version:1})]);
+    assert.equal((await own(coordinator,'select * from public.trips where review_required')).length,6);
+    assert.equal((await generate(coordinator,3)).updated,6);
+    assert.ok((await own(patient,"select * from public.trips where direction='outbound'")).every(trip=>trip.origin.includes('Updated fixture street')));
+    await own(patient,'select public.delete_my_treatment($1,$2)',[moved.id,1]);
+    assert.equal((await generate(coordinator,4)).updated,6);
+    assert.equal((await own(coordinator,'select * from public.trips')).length,6);
+    await own(patient,'select public.delete_my_treatment($1,$2)',[series.id,4]);
+    assert.equal((await own(coordinator,'select * from public.trips where review_required')).length,6);
+    assert.ok((await own(patient,'select * from public.trip_history')).length>=12);
+    assert.equal((await own(stranger,'select * from public.trip_history')).length,0);
+    await assert.rejects(generate(coordinator,4),/not found/i);
+    // A return pickup is still pending after treatment ends, and Next pickup is
+    // independent of the list's chosen date window.
+    await local.query(`update public.trips set session_date=((now()-interval '1 hour') at time zone 'Asia/Singapore')::date,
+      treatment_start=now()-interval '1 hour',treatment_end=now()-interval '5 minutes',pickup_not_before=now()+interval '10 minutes',review_required=false
+      where id=(select id from public.trips where direction='return' limit 1)`);
+    const upcoming=(await own(patient,'select public.list_trips($1,$2,$3,$4) as result',[1,first,dates.until,'all']))[0].result.next_trip;
+    assert.equal(upcoming.direction,'return');
+    assert.equal(upcoming.review_required,false);
+    await own(patient,'select public.save_my_patient($1::jsonb)',[JSON.stringify({...signupDetails,pickup_address:'Another fixture street',version:2})]);
+    assert.equal((await own(patient,'select review_required from public.trips where id=$1',[upcoming.id]))[0].review_required,true);
+  } finally {await local.close();}
+});
+
+
+test('trip listing paginates before returning rows and independent sessions retain their trip identities',async()=>{
+  const local=await databaseWithAuth();
+  try {
+    await local.exec(schema);
+    await local.exec(`insert into public.accounts(auth_user_id,email,display_name,role) values
+      ('${patient}','patient@example.test','Patient','patient'),('${coordinator}','coordinator@example.test','Coordinator','coordinator');
+      insert into public.patients(account_id,full_name,phone,pickup_address,mobility) select id,'Patient','81234567','Fixture street','ambulant' from public.accounts where role='patient';`);
+    const own=async(who,sql,params=[])=>{
+      await local.exec('begin; set local role authenticated;');
+      try{await local.query("select set_config('request.jwt.claim.sub',$1,true)",[who]);const r=await local.query(sql,params);await local.exec('commit');return r.rows;}
+      catch(error){await local.exec('rollback');throw error;}
+    };
+    const dates=(await local.query(`select ((now() at time zone 'Asia/Singapore')::date+8)::text as first,
+      ((now() at time zone 'Asia/Singapore')::date+92)::text as until,
+      extract(isodow from (now() at time zone 'Asia/Singapore')::date+8)::integer as day`)).rows[0];
+    const ids=(await own(patient,'select p.id as patient,c.id as centre from public.patients p cross join public.dialysis_centres c limit 1'))[0];
+    const [series]=await own(patient,`insert into public.treatment_schedules(patient_id,centre_id,days,start_time,end_time,effective_from,effective_to)
+      values($1,$2,array[$3::integer],'09:00','13:00',$4,$5) returning *`,[ids.patient,ids.centre,dates.day,dates.first,dates.until]);
+    const gen=async(id,version)=>(await own(coordinator,'select public.generate_treatment_trips($1,$2,$3,$4) as result',[id,dates.first,dates.until,version]))[0].result;
+    assert.equal((await gen(series.id,1)).created,26);
+    const list=async(page=1,status='all')=>(await own(patient,'select public.list_trips($1,$2,$3,$4) as result',[page,dates.first,dates.until,status]))[0].result;
+    assert.equal((await list()).trips.length,25);
+    assert.equal((await list(2)).trips.length,1);
+    assert.equal((await list(2)).total,26);
+    assert.equal((await list(1,'on-track')).total,0);
+    assert.equal((await list(1,'on-track')).counts.unfilled,26);
+    await assert.rejects(own(coordinator,'select public.generate_treatment_trips($1,$2::date-1,$2::date+90,1)',[series.id,dates.first]),/90 days/i);
+    const [single]=await own(patient,`insert into public.treatment_schedules(patient_id,centre_id,kind,days,start_time,end_time,effective_from,effective_to)
+      values($1,$2,'single',array[$3::integer],'14:00','15:00',$4,$4) returning *`,[ids.patient,ids.centre,dates.day,dates.first]);
+    assert.equal((await gen(single.id,1)).created,2);
+    const before=(await own(patient,'select id from public.trips where root_schedule_id=$1 order by id',[single.id])).map(r=>r.id);
+    const next=(await local.query('select ($1::date+1)::text as date,extract(isodow from $1::date+1)::integer as day',[dates.first])).rows[0];
+    await own(patient,'select public.update_my_treatment($1,$2::jsonb,$3)',[single.id,JSON.stringify({days:[next.day],effective_from:next.date,effective_to:next.date}),1]);
+    assert.equal((await gen(single.id,2)).updated,2);
+    assert.deepEqual((await own(patient,'select id from public.trips where root_schedule_id=$1 order by id',[single.id])).map(r=>r.id),before);
+    const [overflow]=await own(patient,`insert into public.treatment_schedules(patient_id,centre_id,kind,days,start_time,end_time,effective_from,effective_to)
+      values($1,$2,'single',array[extract(isodow from date '9999-12-31')::integer],'23:30','23:55','9999-12-31','9999-12-31') returning *`,[ids.patient,ids.centre]);
+    await assert.rejects(own(coordinator,"select public.generate_treatment_trips($1,'9999-12-31','9999-12-31',1)",[overflow.id]),/buffer.*range/i);
+    assert.equal((await own(coordinator,'select * from public.trips where source_schedule_id=$1',[overflow.id])).length,0);
+    await local.exec(schema);
+    assert.equal((await list()).total,28);
+  }finally{await local.close();}
+});
+
+
+test('trip search precedes pagination and coordinator deletion preserves history without regeneration',async()=>{
+  const local=await databaseWithAuth();
+  try {
+    await local.exec(schema);
+    await local.exec(`insert into public.accounts(auth_user_id,email,display_name,role) values
+      ('${patient}','patient@example.test','Fixture Patient','patient'),('${coordinator}','coordinator@example.test','Coordinator','coordinator'),('${driver}','driver@example.test','Driver','driver');
+      insert into public.patients(account_id,full_name,phone,pickup_address,mobility) select id,'Fixture Patient','81234567','Fixture street','ambulant' from public.accounts where role='patient';`);
+    const own=async(who,sql,params=[])=>{await local.exec('begin; set local role authenticated;');try{
+      await local.query("select set_config('request.jwt.claim.sub',$1,true)",[who]); const result=await local.query(sql,params); await local.exec('commit');return result.rows;
+    }catch(error){await local.exec('rollback');throw error;}};
+    const dates=(await local.query(`select ((now() at time zone 'Asia/Singapore')::date+7)::text as first,
+      ((now() at time zone 'Asia/Singapore')::date+91)::text as until,
+      extract(isodow from (now() at time zone 'Asia/Singapore')::date+7)::integer as day`)).rows[0];
+    const ids=(await own(patient,'select p.id as patient,c.id as centre from public.patients p cross join public.dialysis_centres c limit 1'))[0];
+    const [source]=await own(patient,`insert into public.treatment_schedules(patient_id,centre_id,days,start_time,end_time,effective_from,effective_to)
+      values($1,$2,array[$3::integer],'09:00','13:00',$4,$5) returning *`,[ids.patient,ids.centre,dates.day,dates.first,dates.until]);
+    const gen=async()=>(await own(coordinator,'select public.generate_treatment_trips($1,$2,$3,1) as result',[source.id,dates.first,dates.until]))[0].result;
+    await gen();
+    const list=async(who=coordinator,term='',direction='all')=>(await own(who,'select public.list_trips(1,$1,$2,$3,$4,$5) as result',[dates.first,dates.until,'all',term,direction]))[0].result;
+    assert.equal((await list(coordinator,' RETURN ')).total,13);
+    assert.equal((await list(coordinator,'09:00')).total,26);
+    assert.equal((await list(coordinator,'Fixture street')).total,26);
+    assert.equal((await list(coordinator,'Fixture Patient')).total,26);
+    assert.equal((await list(coordinator,ids.patient)).total,26);
+    assert.equal((await list(patient,ids.patient)).total,0);
+    assert.equal((await list(coordinator,'','outbound')).total,13);
+    assert.equal((await list(coordinator,'%')).total,0);
+    const trip=(await list()).trips[0];
+    const remove=(who,version)=>own(who,'select public.delete_trip($1,$2) as id',[trip.id,version]);
+    for(const who of [patient,driver]) await assert.rejects(remove(who,trip.version),/Coordinator|denied/i);
+    await assert.rejects(own(coordinator,'delete from public.trips where id=$1',[trip.id]),/permission/i);
+    await assert.rejects(remove(coordinator,trip.version+1),/changed/i);
+    assert.equal((await remove(coordinator,trip.version))[0].id,trip.id);
+    assert.equal((await list()).total,25);
+    assert.equal((await list()).counts.unfilled,25);
+    assert.notEqual((await list()).next_trip?.id,trip.id);
+    assert.ok((await own(coordinator,"select * from public.trip_history where trip_id=$1 and event='deleted'",[trip.id])).length===1);
+    const again=await gen();
+    assert.equal(again.created,0);
+    assert.equal(again.skipped,1);
+    assert.equal((await list()).total,25);
+    await assert.rejects(remove(coordinator,trip.version),/not found|deleted/i);
+    await assert.rejects(list(coordinator,'x'.repeat(101)),/Invalid/i);
+    await assert.rejects(list(coordinator,'','unknown'),/Invalid/i);
+    await local.exec(schema);
+    assert.equal((await list()).total,25);
+  }finally{await local.close();}
 });

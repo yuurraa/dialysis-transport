@@ -591,5 +591,252 @@ language sql stable security invoker set search_path = '' as $$ select private.l
 revoke all on function private.list_treatments(text,integer), public.list_treatments(text,integer) from public,anon;
 grant execute on function private.list_treatments(text,integer), public.list_treatments(text,integer) to authenticated;
 
+-- Operational journeys are created explicitly by a Coordinator. Treatment source
+-- UUIDs are retained as history even after a requirement is removed.
+create table if not exists public.trips (
+  id uuid primary key default gen_random_uuid(),
+  patient_id uuid not null references public.patients(id) on delete restrict,
+  patient_name text not null,
+  source_schedule_id uuid not null,
+  root_schedule_id uuid not null,
+  occurrence_key text not null,
+  original_session_date date not null,
+  session_date date not null check (session_date between date '0001-01-01' and date '9999-12-31'),
+  direction text not null check (direction in ('outbound','return')),
+  origin text not null,
+  destination text not null,
+  treatment_start timestamptz not null,
+  treatment_end timestamptz not null check (treatment_end>treatment_start),
+  arrival_by timestamptz,
+  pickup_not_before timestamptz,
+  pickup_at timestamptz check (pickup_at is null),
+  status text not null default 'unfilled' check (status='unfilled'),
+  review_required boolean not null default false,
+  source_version integer not null,
+  patient_version integer not null,
+  created_by uuid not null references public.accounts(id) on delete restrict,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique(root_schedule_id,occurrence_key,direction),
+  check ((direction='outbound' and arrival_by is not null and arrival_by=treatment_start-interval '15 minutes' and pickup_not_before is null)
+    or (direction='return' and pickup_not_before is not null and pickup_not_before=treatment_end+interval '15 minutes' and arrival_by is null))
+);
+create index if not exists trips_patient_date on public.trips(patient_id,session_date,id);
+create index if not exists trips_session_date on public.trips(session_date,id);
+alter table public.trips add column if not exists version integer not null default 1 check (version>0);
+alter table public.trips add column if not exists deleted_at timestamptz;
+create or replace function private.increment_trip_version() returns trigger
+language plpgsql security definer set search_path = '' as $$
+begin new.version:=old.version+1; return new; end;
+$$;
+revoke all on function private.increment_trip_version() from public,anon,authenticated;
+drop trigger if exists trips_version on public.trips;
+create trigger trips_version before update on public.trips for each row execute function private.increment_trip_version();
+create table if not exists public.trip_history (
+  id uuid primary key default gen_random_uuid(),
+  trip_id uuid not null references public.trips(id) on delete restrict,
+  actor_id uuid references public.accounts(id) on delete restrict,
+  event text not null check (event in ('generated','refreshed','requirements_changed')),
+  details jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now()
+);
+create index if not exists trip_history_trip on public.trip_history(trip_id,created_at,id);
+alter table public.trip_history drop constraint if exists trip_history_event_check;
+alter table public.trip_history add constraint trip_history_event_check check (event in ('generated','refreshed','requirements_changed','deleted'));
+alter table public.trips enable row level security;
+alter table public.trip_history enable row level security;
+revoke all on public.trips,public.trip_history from public,anon,authenticated;
+grant select on public.trips,public.trip_history to authenticated;
+drop policy if exists trips_read on public.trips;
+create policy trips_read on public.trips for select to authenticated
+  using ((select private.is_coordinator()) or private.owns_active_patient(patient_id));
+drop policy if exists trip_history_read on public.trip_history;
+create policy trip_history_read on public.trip_history for select to authenticated
+  using (exists(select 1 from public.trips t where t.id=trip_id));
+
+-- Every source mutation locks the Patient before touching Trips, just as explicit
+-- generation does. Source edits flag future journeys instead of silently treating
+-- an old transport snapshot as current. No history or transport row is deleted.
+create or replace function private.flag_trip_review() returns trigger
+language plpgsql security definer set search_path = '' as $$
+declare root uuid; original date; subject uuid; changed uuid; actor uuid;
+begin
+  select id into actor from public.accounts where auth_user_id=(select auth.uid());
+  if tg_table_name='patients' then
+    if (to_jsonb(old)-'version') is not distinct from (to_jsonb(new)-'version') then return null; end if;
+    subject := new.id;
+  elsif tg_op='DELETE' then
+    root := coalesce(old.replaces_schedule_id,old.id); original := old.replaces_date;
+  else
+    if tg_op='UPDATE' and row(old.centre_id,old.days,old.start_time,old.end_time,old.effective_from,old.effective_to)
+      is not distinct from row(new.centre_id,new.days,new.start_time,new.end_time,new.effective_from,new.effective_to) then return null; end if;
+    root := coalesce(new.replaces_schedule_id,new.id); original := new.replaces_date;
+  end if;
+  for changed in update public.trips set review_required=true,updated_at=now()
+    where deleted_at is null and (coalesce(pickup_not_before,treatment_end) at time zone 'Asia/Singapore')::date >= (now() at time zone 'Asia/Singapore')::date
+      and (patient_id=subject or (root_schedule_id=root and (original is null or original_session_date=original))) returning id
+  loop
+    insert into public.trip_history(trip_id,actor_id,event,details)
+      values(changed,actor,'requirements_changed',jsonb_build_object('source',tg_table_name,'operation',tg_op));
+  end loop;
+  return null;
+end;
+$$;
+revoke all on function private.flag_trip_review() from public,anon,authenticated;
+drop trigger if exists treatment_trip_review on public.treatment_schedules;
+create trigger treatment_trip_review after insert or update or delete on public.treatment_schedules
+  for each row execute function private.flag_trip_review();
+drop trigger if exists patient_trip_review on public.patients;
+create trigger patient_trip_review after update on public.patients for each row execute function private.flag_trip_review();
+
+create or replace function private.generate_treatment_trips(target uuid,from_date date,until_date date,expected_version integer) returns jsonb
+language plpgsql security definer set search_path = '' as $$
+declare chosen public.treatment_schedules; person public.patients; old_trip public.trips; saved public.trips;
+  session record; leg text; actor uuid; source_root uuid; key text; origin_text text; destination_text text;
+  session_start timestamptz; session_end timestamptz; due timestamptz; ready timestamptz;
+  inserted integer:=0; refreshed integer:=0; unchanged integer:=0; skipped integer:=0;
+begin
+  if not private.is_coordinator() then raise exception 'Coordinator access required.' using errcode='42501'; end if;
+  if from_date is null or until_date is null or not isfinite(from_date) or not isfinite(until_date)
+    or from_date<(now() at time zone 'Asia/Singapore')::date or until_date>date '9999-12-31'
+    or until_date<from_date or until_date-from_date>89 or expected_version is null or expected_version<1 then
+    raise exception 'Choose a future trip window of up to 90 days and a schedule version.' using errcode='22023';
+  end if;
+  select * into chosen from public.treatment_schedules where id=target;
+  if not found then raise exception 'Treatment schedule not found.' using errcode='P0002'; end if;
+  select * into person from public.patients where id=chosen.patient_id for update;
+  if not found or person.status<>'active' then raise exception 'An active Patient profile is required.' using errcode='42501'; end if;
+  select * into chosen from public.treatment_schedules where id=target for update;
+  if not found then raise exception 'Treatment schedule not found.' using errcode='P0002'; end if;
+  if chosen.version<>expected_version then raise exception 'Treatment schedule changed. Reload before generating Trips.' using errcode='40001'; end if;
+  select id into actor from public.accounts where auth_user_id=(select auth.uid());
+  for session in
+    with sources as (
+      select s.*,c.name as centre_name,c.address as centre_address,c.postal_code as centre_postal
+      from public.treatment_schedules s join public.dialysis_centres c on c.id=s.centre_id
+      where s.id=target or (chosen.kind='recurring' and s.replaces_schedule_id=target)
+    )
+    select s.*,d::date as actual_date,coalesce(s.replaces_date,d::date) as original_date
+    from sources s cross join lateral generate_series(greatest(s.effective_from,from_date)::timestamp,least(s.effective_to,until_date)::timestamp,interval '1 day') d
+    where extract(isodow from d)::integer=s.days[1]
+      and not exists(select 1 from public.treatment_schedules r where r.replaces_schedule_id=s.id and r.replaces_date=d::date)
+    order by d,s.id
+  loop
+    session_start := (session.actual_date+session.start_time) at time zone 'Asia/Singapore';
+    session_end := (session.actual_date+session.end_time) at time zone 'Asia/Singapore';
+    if ((session_end+interval '15 minutes') at time zone 'Asia/Singapore')::date>date '9999-12-31' then
+      raise exception 'The return buffer exceeds the supported date range.' using errcode='22023';
+    end if;
+    -- Do not manufacture past journeys when generating from today's date.
+    if session_start<=now() then continue; end if;
+    source_root := coalesce(session.replaces_schedule_id,session.id);
+    key := case when session.kind='single' and session.replaces_schedule_id is null then 'single' else session.original_date::text end;
+    foreach leg in array array['outbound','return'] loop
+      origin_text := concat_ws(', ',person.pickup_address,nullif(person.unit_no,''),case when person.postal_code<>'' then 'Singapore '||person.postal_code end);
+      destination_text := concat_ws(', ',session.centre_name,session.centre_address,'Singapore '||session.centre_postal);
+      if leg='return' then origin_text := destination_text; destination_text := concat_ws(', ',person.pickup_address,nullif(person.unit_no,''),case when person.postal_code<>'' then 'Singapore '||person.postal_code end); end if;
+      due := case when leg='outbound' then session_start-interval '15 minutes' end;
+      ready := case when leg='return' then session_end+interval '15 minutes' end;
+      select * into old_trip from public.trips where root_schedule_id=source_root and occurrence_key=key and direction=leg for update;
+      if found and old_trip.deleted_at is not null then skipped:=skipped+1; continue; end if;
+      if found and not old_trip.review_required and old_trip.source_version=session.version and old_trip.patient_version=person.version
+        and old_trip.source_schedule_id=session.id and old_trip.session_date=session.actual_date and old_trip.origin=origin_text and old_trip.destination=destination_text
+        and old_trip.treatment_start=session_start and old_trip.treatment_end=session_end then
+        unchanged:=unchanged+1; continue;
+      end if;
+      if old_trip.id is null then
+        insert into public.trips(patient_id,patient_name,source_schedule_id,root_schedule_id,occurrence_key,original_session_date,session_date,direction,origin,destination,
+          treatment_start,treatment_end,arrival_by,pickup_not_before,source_version,patient_version,created_by)
+        values(person.id,person.full_name,session.id,source_root,key,session.original_date,session.actual_date,leg,origin_text,destination_text,
+          session_start,session_end,due,ready,session.version,person.version,actor) returning * into saved;
+        inserted:=inserted+1;
+      else
+        update public.trips set patient_name=person.full_name,source_schedule_id=session.id,session_date=session.actual_date,
+          origin=origin_text,destination=destination_text,treatment_start=session_start,treatment_end=session_end,arrival_by=due,pickup_not_before=ready,
+          source_version=session.version,patient_version=person.version,review_required=false,updated_at=now()
+          where id=old_trip.id returning * into saved;
+        refreshed:=refreshed+1;
+      end if;
+      insert into public.trip_history(trip_id,actor_id,event,details) values(saved.id,actor,
+        case when old_trip.id is null then 'generated' else 'refreshed' end,
+        jsonb_build_object('source_schedule_id',session.id,'source_version',session.version,'session_date',session.actual_date));
+    end loop;
+  end loop;
+  return jsonb_build_object('created',inserted,'updated',refreshed,'unchanged',unchanged,'skipped',skipped,'total',inserted+refreshed+unchanged+skipped);
+end;
+$$;
+create or replace function public.generate_treatment_trips(target uuid,from_date date,until_date date,expected_version integer) returns jsonb
+language sql security invoker set search_path = '' as $$ select private.generate_treatment_trips(target,from_date,until_date,expected_version); $$;
+revoke all on function private.generate_treatment_trips(uuid,date,date,integer),public.generate_treatment_trips(uuid,date,date,integer) from public,anon;
+grant execute on function private.generate_treatment_trips(uuid,date,date,integer),public.generate_treatment_trips(uuid,date,date,integer) to authenticated;
+
+-- A deletion hides one journey while retaining history and its unique occurrence
+-- key. Re-generating the source must not silently recreate a deleted journey.
+create or replace function private.delete_trip(target uuid,expected_version integer) returns uuid
+language plpgsql security definer set search_path = '' as $$
+declare selected public.trips; actor uuid;
+begin
+  if not private.is_coordinator() then raise exception 'Coordinator access required.' using errcode='42501'; end if;
+  if expected_version is null or expected_version<1 then raise exception 'A trip version is required.' using errcode='22023'; end if;
+  select * into selected from public.trips where id=target and deleted_at is null;
+  if not found then raise exception 'Trip not found or already deleted.' using errcode='P0002'; end if;
+  perform 1 from public.patients where id=selected.patient_id for update;
+  select * into selected from public.trips where id=target and deleted_at is null for update;
+  if not found then raise exception 'Trip not found or already deleted.' using errcode='P0002'; end if;
+  if selected.version<>expected_version then raise exception 'Trip changed. Reload before deleting.' using errcode='40001'; end if;
+  if selected.status<>'unfilled' or selected.pickup_at is not null then raise exception 'Only unassigned trips may be deleted.' using errcode='22023'; end if;
+  select id into actor from public.accounts where auth_user_id=(select auth.uid());
+  update public.trips set deleted_at=now(),updated_at=now() where id=target;
+  insert into public.trip_history(trip_id,actor_id,event,details) values(target,actor,'deleted',
+    jsonb_build_object('direction',selected.direction,'session_date',selected.session_date));
+  return target;
+end;
+$$;
+create or replace function public.delete_trip(target uuid,expected_version integer) returns uuid
+language sql security invoker set search_path = '' as $$ select private.delete_trip(target,expected_version); $$;
+revoke all on function private.delete_trip(uuid,integer),public.delete_trip(uuid,integer) from public,anon;
+grant execute on function private.delete_trip(uuid,integer),public.delete_trip(uuid,integer) to authenticated;
+
+drop function if exists public.list_trips(integer,date,date,text);
+drop function if exists private.list_trips(integer,date,date,text);
+create or replace function private.list_trips(page_no integer,from_date date,until_date date,status_filter text default 'all',search_text text default '',direction_filter text default 'all') returns jsonb
+language plpgsql stable security invoker set search_path = '' as $$
+declare result jsonb;
+begin
+  if not private.is_coordinator() and private.patient_account_id() is null then raise exception 'Trip access denied.' using errcode='42501'; end if;
+  if page_no is null or page_no<1 or page_no>1000000 or from_date is null or until_date is null or not isfinite(from_date) or not isfinite(until_date)
+    or from_date<date '0001-01-01' or until_date>date '9999-12-31' or until_date<from_date or until_date-from_date>89
+    or status_filter is null or status_filter not in ('all','unfilled','at-risk','on-track','resolved')
+    or direction_filter is null or direction_filter not in ('all','outbound','return')
+    or search_text is null or length(search_text)>100 or search_text ~ '[[:cntrl:]]' then raise exception 'Invalid trip filters.' using errcode='22023'; end if;
+  with windowed as materialized (select * from public.trips t where deleted_at is null and session_date between from_date and until_date
+    and (direction_filter='all' or direction=direction_filter)
+    and (btrim(search_text)='' or exists(select 1 from unnest(array[
+      case when private.is_coordinator() then patient_name else '' end,
+      case when private.is_coordinator() then patient_id::text else '' end,
+      origin,destination,direction,status,case when review_required then 'Needs review' else '' end,
+      case when pickup_at is null then 'Pickup pending' else '' end,
+      session_date::text,to_char(session_date,'FMDD Mon YYYY'),to_char(session_date,'FMDay'),
+      to_char(treatment_start at time zone 'Asia/Singapore','HH24:MI'),to_char(treatment_end at time zone 'Asia/Singapore','HH24:MI'),
+      to_char(arrival_by at time zone 'Asia/Singapore','HH24:MI'),to_char(pickup_not_before at time zone 'Asia/Singapore','HH24:MI'),
+      to_char(arrival_by at time zone 'Asia/Singapore','YYYY-MM-DD'),to_char(pickup_not_before at time zone 'Asia/Singapore','YYYY-MM-DD')
+    ]) field where strpos(lower(field),lower(btrim(search_text)))>0))),
+    filtered as materialized (select * from windowed where status_filter='all' or status=status_filter),
+    page as (select * from filtered order by session_date,treatment_start,case direction when 'outbound' then 0 else 1 end,id limit 25 offset ((page_no::bigint-1)*25))
+  select jsonb_build_object('trips',(select coalesce(jsonb_agg(to_jsonb(p) order by session_date,treatment_start,case direction when 'outbound' then 0 else 1 end,id),'[]'::jsonb) from page p),
+    'total',(select count(*) from filtered),'page',page_no,'pageSize',25,
+    'counts',jsonb_build_object('unfilled',(select count(*) from windowed where status='unfilled'),'at-risk',0,'on-track',0,'resolved',0),
+    'next_trip',(select to_jsonb(t) from public.trips t where deleted_at is null and (
+      (direction='outbound' and treatment_start>now()) or
+      (direction='return' and (pickup_not_before at time zone 'Asia/Singapore')::date >= (now() at time zone 'Asia/Singapore')::date))
+      order by session_date,coalesce(pickup_at,pickup_not_before,arrival_by),id limit 1)) into result;
+  return result;
+end;
+$$;
+create or replace function public.list_trips(page_no integer,from_date date,until_date date,status_filter text default 'all',search_text text default '',direction_filter text default 'all') returns jsonb
+language sql stable security invoker set search_path = '' as $$ select private.list_trips(page_no,from_date,until_date,status_filter,search_text,direction_filter); $$;
+revoke all on function private.list_trips(integer,date,date,text,text,text),public.list_trips(integer,date,date,text,text,text) from public,anon;
+grant execute on function private.list_trips(integer,date,date,text,text,text),public.list_trips(integer,date,date,text,text,text) to authenticated;
+
 notify pgrst, 'reload schema';
 commit;

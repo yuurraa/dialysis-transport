@@ -60,6 +60,7 @@ async function openAccountDropdown(page: Page) {
 }
 
 test.beforeEach(async ({ page }) => {
+  await page.route('**/api/trips?*', route => route.fulfill({ status: 503, json: {} }));
   await page.route('**/api/profiles/patient', route => route.fulfill({ json: { patient: { id: session.user.id, full_name: 'Test Patient', phone: '+65 81234567', pickup_address: 'Test street', unit_no: '', postal_code: '560123', notes: '', mobility: 'ambulant', assistance_required: false, status: 'active' } } }));
   await page.route('**/api/auth/me', route => route.fulfill({ json: { id: session.user.id, email: session.user.email, account: null } }));
   await page.route('**/api/health', route => route.fulfill({ json: { status: 'ok' } }));
@@ -179,12 +180,22 @@ test('clears the local identity but reports when server sign-out cannot be confi
 
 const activeAccount = { id: '55555555-5555-4555-8555-555555555555', email: 'patient@example.test', display_name: 'testpatient', role: 'patient', status: 'active', profile_complete: true };
 
-test('welcome uses the profile full name but coordinators keep their username', async ({ page }) => {
+test('all account types show the clock in the top bar without a welcome section', async ({ page }) => {
   await seedSession(page);
   for (const role of ['patient', 'driver', 'caregiver', 'coordinator']) {
     await page.route('**/api/auth/me', route => route.fulfill({ json: { account: { ...activeAccount, role, full_name: 'Alex Tan' } } }));
     await page.goto('/dashboard/trips');
-    await expect(page.getByRole('heading', { name: `Welcome back, ${role === 'coordinator' ? activeAccount.display_name : 'Alex Tan'}.`, exact: true })).toBeVisible();
+    await expect(page.locator('.dashboard-header-clock')).toBeVisible();
+    await expect(page.getByRole('heading', { name: /Welcome back/ })).toHaveCount(0);
+    await expect(page.locator('.dashboard-welcome')).toHaveCount(0);
+    for (const width of [320, 390, 768, 1440]) {
+      await page.setViewportSize({ width, height: 900 });
+      const clock = await page.locator('.dashboard-header-clock').boundingBox();
+      const notifications = await page.getByRole('button', { name: 'Notifications', exact: true }).boundingBox();
+      expect(clock!.x + clock!.width).toBeLessThanOrEqual(notifications!.x);
+      expect(Math.abs(clock!.y + clock!.height / 2 - notifications!.y - notifications!.height / 2)).toBeLessThan(2);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    }
   }
 });
 
@@ -207,17 +218,17 @@ test('patient signup collects profile before account creation and survives reloa
   await page.getByLabel('Username').fill('testpatient');
   await chooseOption(page.getByLabel('Role'), 'patient');
   await submitSignup(page);
-  await expect(page.getByRole('heading', { name: /^Welcome back,/ })).toBeVisible();
+  await expect(page.locator('.dashboard-header-clock')).toBeVisible();
   await openAccountDropdown(page);
   await expect(page.getByRole('button', { name: 'Sign out', exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Awaiting approval' })).toHaveCount(0);
   await page.reload();
-  await expect(page.getByRole('heading', { name: /^Welcome back,/ })).toBeVisible();
+  await expect(page.locator('.dashboard-header-clock')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Sign Up', exact: true })).toHaveCount(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });
 
-for (const [role, heading] of [['driver', 'Your rides'], ['caregiver', 'Your rides'], ['coordinator', "Today's trips"]]) {
+for (const [role, heading] of [['driver', 'Your rides'], ['caregiver', 'Your rides'], ['coordinator', 'Trip List']]) {
   test(`opens the active ${role} view without an account approval queue`, async ({ page }) => {
     await seedSession(page);
     await page.route('**/api/auth/me', route => route.fulfill({ json: { account: { ...activeAccount, role } } }));
@@ -253,7 +264,7 @@ test('unavailable account service shows a labelled spinner and recovers automati
   await expect(page.locator('body')).not.toContainText('PRIVATE_DATABASE_DETAIL');
   await page.route('**/api/auth/me', route => route.fulfill({ json: { account: activeAccount } }));
   await page.clock.fastForward(5100);
-  await expect(page.getByRole('heading', { name: /^Welcome back,/ })).toBeVisible();
+  await expect(page.locator('.dashboard-header-clock')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Try again', exact: true })).toHaveCount(0);
 });
 
@@ -269,7 +280,7 @@ test('registration errors keep entered details and allow retry without refresh c
   await expect(page.getByRole('button', { name: /Refresh account|Sign out/ })).toHaveCount(0);
   await page.route('**/api/auth/register', route => route.fulfill({ status: 201, json: activeAccount }));
   await submitSignup(page);
-  await expect(page.getByRole('heading', { name: /^Welcome back,/ })).toBeVisible();
+  await expect(page.locator('.dashboard-header-clock')).toBeVisible();
 });
 
 test('a sign-out event during account lookup cannot reveal a stale role view', async ({ page }) => {
@@ -434,7 +445,7 @@ test.describe('touch phone layouts', () => {
           const overlap = brandText!.x < signOut!.x + signOut!.width && brandText!.x + brandText!.width > signOut!.x
             && brandText!.y < signOut!.y + signOut!.height && brandText!.y + brandText!.height > signOut!.y;
           expect(overlap).toBe(false);
-          if (scale === '200%') expect((await page.locator('.dashboard-metric').first().boundingBox())!.width).toBeGreaterThan(width / 2);
+          await expect(page.locator('.dashboard-metrics')).toHaveCount(0);
         }
 
           for (const element of await page.locator('.entry-card button, .entry-card input, .entry-card select, .dashboard-page button:visible, .dashboard-page a:visible').all()) {
@@ -656,7 +667,7 @@ test('account retry attempts do not reset the slow-loading reminder', async ({ p
   await expect(page.locator('.auth-toast')).toContainText('This is taking us longer than expected.');
   await page.route('**/api/auth/me', route => route.fulfill({ json: { account: activeAccount } }));
   await page.clock.fastForward(5200);
-  await expect(page.getByRole('heading', { name: /^Welcome back,/ })).toBeVisible();
+  await expect(page.locator('.dashboard-header-clock')).toBeVisible();
   await expect(page.locator('.auth-toast')).toHaveAttribute('data-closing', 'true');
 });
 
@@ -730,7 +741,7 @@ test('a hung account request times out and recovers on a fresh request', async (
   // The timed-out request remains hung; only a new request can use this recovered response.
   await page.route('**/api/auth/me', route => route.fulfill({ json: { account: activeAccount } }));
   await page.clock.fastForward(5100);
-  await expect(page.getByRole('heading', { name: /^Welcome back,/ })).toBeVisible();
+  await expect(page.locator('.dashboard-header-clock')).toBeVisible();
   expect(await page.evaluate(() => JSON.parse(localStorage.getItem('sb-auth-auth-token')!).access_token)).toBe(session.access_token);
 });
 
@@ -753,7 +764,7 @@ test('a timed-out registration response recovers an account already created by t
   await page.locator('.signup-form').dispatchEvent('submit');
   await requested;
   await page.clock.fastForward(15000);
-  await expect(page.getByRole('heading', { name: /^Welcome back,/ })).toBeVisible();
+  await expect(page.locator('.dashboard-header-clock')).toBeVisible();
   expect(registrations).toBe(1);
 });
 
@@ -763,18 +774,19 @@ test('active coordinators land on a separate dashboard with honest unavailable m
   await page.route('**/api/auth/me', route => route.fulfill({ json: { account: { ...activeAccount, display_name: 'Test Coordinator', role: 'coordinator' } } }));
   await page.goto('/');
   await expect(page).toHaveURL('http://127.0.0.1:5199/dashboard/trips');
-  await expect(page.getByRole('heading', { name: "Today's trips" })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Trip List' })).toBeVisible();
   await expect(page.locator('.landing-page')).toHaveCount(0);
   await expect(page.getByRole('heading', { name: 'Every patient.' })).toHaveCount(0);
-  await expect(page.locator('.dashboard-metric-value')).toHaveText(['-', '-', '-', '-']);
+  await expect(page.locator('.trip-status-filters')).toHaveCount(0);
   await expect(page.getByText('Trip information is not available.')).toBeVisible();
-  for (const status of ['Unfilled', 'At-Risk', 'On-Track', 'Resolved']) {
-    await page.getByRole('button', { name: status, exact: true }).click();
-    await expect(page.getByRole('button', { name: status, exact: true })).toHaveAttribute('aria-pressed', 'true');
-    await expect(page.getByRole('heading', { name: `${status} trips`, exact: true })).toBeVisible();
+  for (const [value, label] of [['unfilled', 'Unfilled'], ['at-risk', 'At-Risk'], ['on-track', 'On-Track'], ['resolved', 'Resolved'], ['all', 'Trip List']]) {
+    await page.getByRole('button', { name: 'Filters', exact: true }).click();
+    await chooseOption(page.getByLabel('Status', { exact: true }), value);
+    if (value !== 'all') await expect(page.getByLabel('Status', { exact: true })).toContainText(`${label} (-)`);
+    await page.getByRole('button', { name: 'Apply Filters', exact: true }).click();
+    await expect(page.getByRole('heading', { name: value === 'all' ? label : `${label} trips`, exact: true })).toBeVisible();
   }
-  await page.getByRole('button', { name: 'All trips', exact: true }).click();
-  await expect(page.getByRole('heading', { name: "Today's trips", exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Trip List', exact: true })).toBeVisible();
 });
 
 test('coordinator account navigation, browser history and refresh preserve the dashboard', async ({ page }) => {
@@ -833,7 +845,7 @@ test('coordinator overview fills desktop space with an aligned gap above the foo
   await seedSession(page);
   await page.route('**/api/auth/me', route => route.fulfill({ json: { account: { ...activeAccount, role: 'coordinator' } } }));
   await page.goto('/dashboard');
-  await expect(page.getByRole('heading', { name: /Welcome back/ })).toBeVisible();
+  await expect(page.locator('.dashboard-header-clock')).toBeVisible();
   for (const [width, height] of [[1280, 720], [1366, 768], [1440, 900], [1728, 972], [1920, 1080]]) {
     await page.setViewportSize({ width, height });
     expect(await page.evaluate(() => {
@@ -844,18 +856,9 @@ test('coordinator overview fills desktop space with an aligned gap above the foo
     })).toBe(true);
     const trips = await page.locator('.dashboard-trips').boundingBox();
     const footer = await page.locator('.dashboard-footer').boundingBox();
-    const metrics = await page.locator('.dashboard-metrics').boundingBox();
-    const cards = await page.locator('.dashboard-metric').all();
-    const first = await cards[0].boundingBox();
-    const second = await cards[1].boundingBox();
-    const third = await cards[2].boundingBox();
-    expect(first!.y).toBeCloseTo(second!.y, 1);
-    const fourth = await cards[3].boundingBox();
-    expect(third!.y).toBeCloseTo(first!.y, 1);
-    expect(fourth!.y).toBeCloseTo(first!.y, 1);
-    expect(trips!.y).toBeGreaterThanOrEqual(metrics!.y + metrics!.height);
-    expect(trips!.x).toBeCloseTo(metrics!.x, 1);
-    expect(trips!.width).toBeCloseTo(metrics!.width, 1);
+    await expect(page.locator('.dashboard-metrics')).toHaveCount(0);
+    await expect(page.locator('.trip-status-filters')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Filters', exact: true })).toBeVisible();
     const sidebar = await page.locator('.dashboard-sidebar').boundingBox();
     expect(footer!.y - (trips!.y + trips!.height)).toBeCloseTo(24, 0);
     expect(sidebar!.y + sidebar!.height).toBeCloseTo(trips!.y + trips!.height, 0);
@@ -874,7 +877,7 @@ test('landing and dashboard bars share desktop dimensions with a seamless dashbo
   await seedSession(page);
   await page.route('**/api/auth/me', route => route.fulfill({ json: { account: { ...activeAccount, role: 'coordinator' } } }));
   await page.goto('/dashboard');
-  await expect(page.getByRole('heading', { name: /Welcome back/ })).toBeVisible();
+  await expect(page.locator('.dashboard-header-clock')).toBeVisible();
   const dashboardHeader = await page.locator('.dashboard-header-inner').boundingBox();
   const dashboardFooter = await page.locator('.dashboard-footer').boundingBox();
   for (const dimension of ['x', 'width', 'height'] as const) {
@@ -890,15 +893,21 @@ test('coordinator navigation and status filters work with the keyboard', async (
   await seedSession(page);
   await page.route('**/api/auth/me', route => route.fulfill({ json: { account: { ...activeAccount, role: 'coordinator' } } }));
   await page.goto('/dashboard');
-  await expect(page.getByRole('heading', { name: /Welcome back/ })).toBeVisible();
+  await expect(page.locator('.dashboard-header-clock')).toBeVisible();
   await page.keyboard.press('Tab');
   await expect(page.getByRole('link', { name: 'Skip to content' })).toBeFocused();
   await page.keyboard.press('Enter');
   await expect(page.locator('#dashboard-main')).toBeFocused();
-  const filter = page.getByRole('button', { name: 'At-Risk', exact: true });
+  await page.getByRole('button', { name: 'Filters', exact: true }).focus();
+  await page.keyboard.press('Space');
+  const filter = page.getByLabel('Status', { exact: true });
   await filter.focus();
   await page.keyboard.press('Space');
-  await expect(filter).toHaveAttribute('aria-pressed', 'true');
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Enter');
+  await page.getByRole('button', { name: 'Apply Filters', exact: true }).focus();
+  await page.keyboard.press('Enter');
   await expect(page.getByRole('heading', { name: 'At-Risk trips', exact: true })).toBeVisible();
   await expect(page.getByText('Trip information is not available.')).toBeVisible();
   await expect(page.getByText(/No trips scheduled|No trips matching/)).toHaveCount(0);
@@ -923,12 +932,12 @@ test('mobile navigation overlays without reflow, traps focus and closes through 
     await expect(page.locator('.dashboard-header .dashboard-brand')).toBeHidden();
     const header = await page.locator('.dashboard-header-inner').boundingBox();
     expect(header!.height).toBeLessThanOrEqual(64);
-    const before = await page.locator('.dashboard-welcome h1').boundingBox();
+    const before = await page.locator('.dashboard-main').boundingBox();
     await toggle.click();
     await expect(drawer).toBeVisible();
     await expect(drawer.getByRole('button', { name: 'Close navigation' })).toBeFocused();
     expect(await page.evaluate(() => document.body.style.overflow)).toBe('hidden');
-    expect(await page.locator('.dashboard-welcome h1').boundingBox()).toEqual(before);
+    expect(await page.locator('.dashboard-main').boundingBox()).toEqual(before);
     await page.keyboard.press('Tab');
     await expect(drawer.getByRole('link', { name: 'Trips', exact: true })).toBeFocused();
     await page.keyboard.press('Tab');
@@ -994,19 +1003,18 @@ test('coordinator clock ticks in Singapore time and updates the date at midnight
   await page.route('**/api/auth/me', route => route.fulfill({ json: { account: { ...activeAccount, role: 'coordinator' } } }));
   await page.goto('/dashboard');
   await expect(page.locator('.dashboard-clock')).toHaveText('23:59:58');
-  await expect(page.locator('.dashboard-welcome time')).toContainText('Friday, 16 October 2026');
+  await expect(page.locator('.dashboard-header-clock')).toContainText('Friday, 16 October 2026');
   await page.clock.fastForward(2000);
   await expect(page.locator('.dashboard-clock')).toHaveText('00:00:00');
-  await expect(page.locator('.dashboard-welcome time')).toContainText('Saturday, 17 October 2026');
+  await expect(page.locator('.dashboard-header-clock')).toContainText('Saturday, 17 October 2026');
   await expect(page.getByText("Here's your transport overview.")).toHaveCount(0);
-  await expect(page.locator('.dashboard-time-separator')).toBeHidden();
+  await expect(page.locator('.dashboard-welcome')).toHaveCount(0);
   for (const width of [390, 430]) {
     await page.setViewportSize({ width, height: 844 });
-    await expect(page.locator('.dashboard-time-separator')).toBeVisible();
-    await expect(page.locator('.dashboard-welcome h1')).toHaveCSS('font-size', '24px');
-    const date = await page.locator('.dashboard-welcome time > span').first().boundingBox();
-    const clock = await page.locator('.dashboard-clock').boundingBox();
-    expect(Math.abs(date!.y - clock!.y)).toBeLessThan(2);
+    await expect(page.locator('.dashboard-header-clock .dashboard-date-compact')).toBeVisible();
+    await expect(page.locator('.dashboard-header-clock .dashboard-clock')).toBeVisible();
+    // Date filters add content on phones; the workspace scrolls within the fixed footer.
+    await page.locator('.dashboard-main').evaluate(element => { element.scrollTop = element.scrollHeight; });
     const trips = await page.locator('.dashboard-trips').boundingBox();
     const footer = await page.locator('.dashboard-footer').boundingBox();
     expect(Math.abs(footer!.y - trips!.y - trips!.height - 24)).toBeLessThan(2);
@@ -1038,7 +1046,7 @@ test('account controls stay in the header on desktop and mobile, outside Menu', 
       await page.getByRole('button', { name: 'Open navigation' }).click();
       await page.getByRole('dialog', { name: 'Menu navigation' }).getByRole('link', { name: 'Trips', exact: true }).click();
     } else await page.getByRole('link', { name: 'Dialysis Transport dashboard', exact: true }).click();
-    await expect(page.getByRole('heading', { name: /Welcome back/ })).toBeVisible();
+    await expect(page.locator('.dashboard-header-clock')).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   }
 });
@@ -1430,7 +1438,7 @@ test('patient dashboard completes and edits its own profile with shared styling 
   await expect(page.getByLabel('Street', { exact: true })).toBeDisabled();
   await expect(page.getByLabel('Street', { exact: true })).toHaveValue('Saved address');
   await page.getByRole('link', { name: 'Trips', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Welcome back, Updated Patient.', exact: true })).toBeVisible();
+  await expect(page.locator('.dashboard-header-clock')).toBeVisible();
   await page.goto('/dashboard/patients');
   await expect(page).toHaveURL(/\/dashboard\/trips$/);
   await expect(page.getByRole('link', { name: 'Patients', exact: true })).toHaveCount(0);
@@ -1878,12 +1886,12 @@ for (const scenario of [
   }
 });
 
-test('schedule loading indicator is centred inside the panel on desktop and mobile', async ({ page }) => {
+for (const [path, panelClass, role] of [['schedules', 'treatment-panel', 'coordinator'], ['trips', 'trips-panel', 'coordinator'], ['trips', 'trips-panel', 'patient']]) test(`${role} ${path} loading indicator is centred inside the panel on desktop and mobile`, async ({ page }) => {
   await seedSession(page);
-  await page.route('**/api/auth/me',route => route.fulfill({json:{account:{...activeAccount,role:'coordinator'}}}));
-  await page.route('**/api/schedules?*', () => {});
-  await page.goto('/dashboard/schedules');
-  const panel=page.locator('.treatment-panel');
+  await page.route('**/api/auth/me',route => route.fulfill({json:{account:{...activeAccount,role}}}));
+  await page.route(`**/api/${path}?*`, () => {});
+  await page.goto(`/dashboard/${path}`);
+  const panel=page.locator(`.${panelClass}`);
   const loader=panel.locator('.account-loading');
   await expect(loader).toBeVisible();
   for(const width of [1440,390]) {
@@ -2460,4 +2468,233 @@ test('a legacy unsupported schedule date cannot crash the schedule list',async({
   await page.goto('/dashboard/schedules');
   await expect(page.getByRole('heading',{name:'Treatment Schedule List',exact:true})).toBeVisible();
   await expect(page.locator('.treatment-record')).toContainText('Invalid date');
+});
+
+const fixtureTrip = { id: 'trip-1', version: 1, patient_id: session.user.id, patient_name: 'Test Patient', source_schedule_id: '88888888-8888-4888-8888-888888888888', session_date: '2026-10-21', direction: 'outbound', origin: 'Fixture home', destination: 'Fixture Centre', treatment_start: '2026-10-21T09:00:00+08:00', treatment_end: '2026-10-21T13:00:00+08:00', arrival_by: '2026-10-21T08:45:00+08:00', pickup_not_before: null, pickup_at: null, review_required: false, status: 'unfilled', created_at: '2026-10-21T00:00:00Z' };
+for (const role of ['patient', 'coordinator']) test(`real ${role} trips show pending pickup and bounded lists`, async ({ page }) => {
+  await seedSession(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.route('**/api/auth/me', route => route.fulfill({ json: { account: { ...activeAccount, role } } }));
+  await page.route('**/api/trips?*', route => route.fulfill({ json: { trips: Array.from({ length: 25 }, (_, index) => ({ ...fixtureTrip, id: `trip-${index}`, ...(index === 1 ? { direction: 'return', arrival_by: null, pickup_not_before: '2026-10-20T13:15:00+08:00', review_required: true } : {}) })), total: 26, page: 1, pageSize: 25, counts: { unfilled: 26, 'at-risk': 0, 'on-track': 0, resolved: 0 }, next_trip: fixtureTrip } }));
+  await page.goto('/dashboard/trips');
+  const list = page.getByRole('region', { name: 'Trip list', exact: true });
+  await expect(list).toBeVisible();
+  await expect(list.locator('article')).toHaveCount(25);
+  await expect(list.locator('article').first()).toContainText('Pickup pending');
+  await expect(list.locator('article').first()).toContainText('Arrival by');
+  await expect(list.locator('article').nth(1)).toContainText('Earliest return pickup');
+  await expect(list.locator('article').nth(1)).toContainText('13:15');
+  await expect(list.locator('article').nth(1)).toContainText('Needs review');
+  await expect(list.locator('article').nth(1)).not.toContainText('Arrival by');
+  await expect(page.getByRole('button', { name: 'Next', exact: true })).toBeEnabled();
+  expect(await list.evaluate(element => element.scrollHeight > element.clientHeight && getComputedStyle(element).overflowY === 'auto')).toBe(true);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  if (role === 'coordinator') await expect(page.locator('.trip-status-count')).toHaveText(['26', '0', '0', '0']);
+  else { await expect(page.locator('.patient-next-pickup')).toContainText('Pickup pending'); await expect(page.locator('.dashboard-metrics')).toHaveCount(0); }
+});
+
+test('coordinator generates unfilled trips and preserves dates after a stale schedule conflict', async ({ page }) => {
+  await seedSession(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.clock.install({ time: new Date('2026-10-20T02:00:00Z') });
+  await page.route('**/api/auth/me', route => route.fulfill({ json: { account: { ...activeAccount, role: 'coordinator' } } }));
+  const centre = { id: '77777777-7777-4777-8777-777777777777', name: 'Fixture Centre', address: 'Fixture street', postal_code: '560123' };
+  let version = 1;
+  await page.route('**/api/schedules?*', route => route.fulfill({ json: { centres: [centre], schedules: [{ id: fixtureTrip.source_schedule_id, version, patient_id: session.user.id, patients: { full_name: 'Test Patient' }, kind: 'recurring', centre_id: centre.id, days: [2], start_time: '09:00', end_time: '13:00', effective_from: '2026-10-20', effective_to: '2026-12-31' }], context: [], total: 1, page: 1, pageSize: 25 } }));
+  await page.route('**/api/trips/generate', route => {
+    const body = route.request().postDataJSON();
+    expect(body).toEqual({ schedule_id: fixtureTrip.source_schedule_id, version: body.version, from_date: '2026-10-21', until_date: '2026-11-19' });
+    if (body.version === 1) { version = 2; return route.fulfill({ status: 409, json: {} }); }
+    return route.fulfill({ json: { created: 8, updated: 0, unchanged: 2, total: 10 } });
+  });
+  await page.goto('/dashboard/schedules');
+  await page.getByRole('button', { name: 'Generate Trips', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Generate Trips', exact: true });
+  await expect(dialog).toContainText('Test Patient');
+  await expect(dialog).toContainText('Unfilled');
+  expect(await dialog.evaluate(element => element.getBoundingClientRect().bottom <= innerHeight)).toBe(true);
+  await dialog.getByLabel('From date', { exact: true }).fill('2026-10-21');
+  await dialog.getByRole('button', { name: 'Generate Trips', exact: true }).click();
+  await expect(dialog.getByRole('alert')).toContainText('Reload schedules');
+  await expect(dialog.getByLabel('From date', { exact: true })).toHaveValue('2026-10-21');
+  await dialog.getByRole('button', { name: 'Reload schedules', exact: true }).click();
+  await expect(dialog.getByRole('button', { name: 'Generate Trips', exact: true })).toBeEnabled();
+  await dialog.getByRole('button', { name: 'Generate Trips', exact: true }).click();
+  await expect(dialog).not.toBeVisible();
+  await expect(page.getByRole('status').filter({ hasText: '8 created' })).toContainText('2 unchanged');
+});
+
+test('successful empty trip data differs from an unavailable trip service', async ({ page }) => {
+  await seedSession(page);
+  await page.route('**/api/auth/me', route => route.fulfill({ json: { account: activeAccount } }));
+  await page.route('**/api/trips?*', route => route.fulfill({ json: { trips: [], total: 0, page: 1, pageSize: 25, counts: { unfilled: 0, 'at-risk': 0, 'on-track': 0, resolved: 0 }, next_trip: null } }));
+  await page.goto('/dashboard/trips');
+  await expect(page.getByText('No trips scheduled.', { exact: true })).toBeVisible();
+  await expect(page.getByText('Trip information is not available.', { exact: true })).toHaveCount(0);
+  await page.route('**/api/trips?*', route => route.fulfill({ status: 503, json: {} }));
+  await page.reload();
+  await expect(page.getByText('Trip information is not available.', { exact: true })).toBeVisible();
+  await expect(page.getByText('No trips scheduled.', { exact: true })).toHaveCount(0);
+  await page.route('**/api/trips?*', route => route.fulfill({ json: { trips: [], total: 0, page: 1, pageSize: 25, counts: { unfilled: 0, 'at-risk': 0, 'on-track': 0, resolved: 0 }, next_trip: null } }));
+  await page.getByRole('button', { name: 'Retry trips', exact: true }).click();
+  await expect(page.getByText('No trips scheduled.', { exact: true })).toBeVisible();
+});
+
+test('compact trip tools search on the server and apply filters only after confirmation', async ({ page }) => {
+  await seedSession(page);
+  await page.route('**/api/auth/me', route => route.fulfill({ json: { account: { ...activeAccount, role: 'coordinator' } } }));
+  const queries: URLSearchParams[] = [];
+  await page.route('**/api/trips?*', route => {
+    const query = new URL(route.request().url()).searchParams; queries.push(query);
+    return route.fulfill({ json: { trips: [{ ...fixtureTrip, version: 1 }], total: query.get('search') ? 1 : 26, page: Number(query.get('page')), pageSize: 25, counts: { unfilled: 26, 'at-risk': 0, 'on-track': 0, resolved: 0 }, next_trip: fixtureTrip } });
+  });
+  await page.goto('/dashboard/trips');
+  await expect(page.locator('.dashboard-metrics')).toHaveCount(0);
+  await expect(page.locator('.trip-filter-summary')).toHaveCount(0);
+  await expect(page.locator('.trip-search-tools').getByRole('button', { name: 'Filters', exact: true })).toBeVisible();
+  await expect(page.locator('.trip-filter-badge')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Next', exact: true }).click();
+  await expect.poll(() => queries.at(-1)?.get('page')).toBe('2');
+  await page.getByRole('searchbox', { name: 'Search trips' }).fill('Fixture');
+  await expect.poll(() => queries.at(-1)?.get('search')).toBe('Fixture');
+  expect(queries.at(-1)?.get('page')).toBe('1');
+  await page.getByRole('button', { name: 'Filters', exact: true }).click();
+  const filters = page.getByRole('dialog', { name: 'Trip filters', exact: true });
+  await chooseOption(filters.getByLabel('Direction', { exact: true }), 'return');
+  await chooseOption(filters.getByLabel('Status', { exact: true }), 'at-risk');
+  await filters.getByRole('button', { name: 'Cancel', exact: true }).click();
+  expect(queries.at(-1)?.get('direction')).toBe('all');
+  expect(queries.at(-1)?.get('status')).toBe('all');
+  await page.getByRole('button', { name: 'Filters', exact: true }).click();
+  await chooseOption(filters.getByLabel('Direction', { exact: true }), 'return');
+  await filters.getByRole('button', { name: 'Apply Filters', exact: true }).click();
+  await expect.poll(() => queries.at(-1)?.get('direction')).toBe('return');
+  await expect(page.locator('.trip-filter-badge')).toHaveText('1');
+  await page.getByRole('button', { name: 'Filters', exact: true }).click();
+  await chooseOption(filters.getByLabel('Status', { exact: true }), 'unfilled');
+  expect(queries.at(-1)?.get('status')).toBe('all');
+  await filters.getByRole('button', { name: 'Apply Filters', exact: true }).click();
+  await expect.poll(() => queries.at(-1)?.get('status')).toBe('unfilled');
+  await expect(page.locator('.trip-filter-badge')).toHaveText('2');
+  await page.getByRole('button', { name: 'Filters', exact: true }).click();
+  await filters.getByLabel('Until date', { exact: true }).fill(await filters.getByLabel('From date', { exact: true }).inputValue());
+  await filters.getByRole('button', { name: 'Apply Filters', exact: true }).click();
+  await expect(page.locator('.trip-filter-badge')).toHaveText('3');
+  await page.getByRole('button', { name: 'View details', exact: true }).first().click();
+  const details = page.getByRole('dialog', { name: 'Trip details', exact: true });
+  await expect(details).toContainText('Fixture home');
+  await expect(details).toContainText('Fixture Centre');
+  await expect(details.locator('.overlay-footer button').first()).toHaveText('Close');
+  await expect(details.getByRole('button', { name: 'Delete Trip', exact: true })).toHaveClass(/overlay-delete/);
+});
+
+test('trip deletion preserves context on errors and reloads stale versions before retry', async ({ page }) => {
+  await seedSession(page);
+  await page.route('**/api/auth/me', route => route.fulfill({ json: { account: { ...activeAccount, role: 'coordinator' } } }));
+  let version = 1; let deleted = false; let attempts = 0;
+  await page.route('**/api/trips?*', route => route.fulfill({ json: { trips: deleted ? [] : [{ ...fixtureTrip, version }], total: deleted ? 0 : 1, page: 1, pageSize: 25, counts: { unfilled: deleted ? 0 : 1, 'at-risk': 0, 'on-track': 0, resolved: 0 }, next_trip: deleted ? null : { ...fixtureTrip, version } } }));
+  await page.route('**/api/trips/trip-1', route => {
+    expect(route.request().method()).toBe('DELETE');
+    expect(route.request().postDataJSON()).toEqual({ version });
+    attempts++;
+    if (attempts === 1) return route.fulfill({ status: 503, json: {} });
+    if (attempts === 2) { version = 2; return route.fulfill({ status: 409, json: {} }); }
+    deleted = true; return route.fulfill({ json: { id: fixtureTrip.id } });
+  });
+  await page.goto('/dashboard/trips');
+  await page.getByRole('button', { name: 'View details', exact: true }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Delete Trip', exact: true }).click();
+  const confirmation = page.getByRole('dialog', { name: 'Delete Trip', exact: true });
+  await expect(confirmation).toContainText('one journey');
+  await confirmation.getByRole('button', { name: 'Delete Trip', exact: true }).click();
+  await expect(confirmation.getByRole('alert')).toContainText('could not be deleted');
+  await expect(confirmation).toContainText('Fixture Centre');
+  await confirmation.getByRole('button', { name: 'Delete Trip', exact: true }).click();
+  await expect(confirmation.getByRole('alert')).toContainText('Reload trips');
+  await confirmation.getByRole('button', { name: 'Reload trips', exact: true }).click();
+  await confirmation.getByRole('button', { name: 'Delete Trip', exact: true }).click();
+  await expect(confirmation).not.toBeVisible();
+  await expect(page.getByText('No trips scheduled.', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Filters', exact: true }).click();
+  await chooseOption(page.getByLabel('Status', { exact: true }), 'unfilled');
+  await expect(page.getByLabel('Status', { exact: true })).toContainText('Unfilled (0)');
+});
+
+test('trip date guards keep unsupported dates and changed treatment timings reviewable', async ({ page }) => {
+  await seedSession(page);
+  await page.route('**/api/auth/me', route => route.fulfill({ json: { account: activeAccount } }));
+  const changed = { ...fixtureTrip, treatment_start: '10000-01-01T09:00:00+08:00', treatment_end: 'invalid', arrival_by: 'invalid', review_required: true };
+  await page.route('**/api/trips?*', route => route.fulfill({ json: { trips: [changed], total: 1, page: 1, pageSize: 25, counts: { unfilled: 1, 'at-risk': 0, 'on-track': 0, resolved: 0 }, next_trip: changed } }));
+  await page.goto('/dashboard/trips');
+  const list = page.getByRole('region', { name: 'Trip list', exact: true });
+  await expect(list).toContainText('Unavailable');
+  await list.getByRole('button', { name: 'View details', exact: true }).click();
+  await expect(page.getByRole('dialog')).toContainText('Treatment requirements changed; timings need review.');
+  await page.getByRole('dialog').getByRole('button', { name: 'Close', exact: true }).click();
+  await page.getByRole('button', { name: 'Filters', exact: true }).click();
+  await page.getByLabel('From date', { exact: true }).fill('9999-12-31');
+  await expect(page.getByLabel('Until date', { exact: true })).toHaveValue('9999-12-31');
+  await page.getByRole('button', { name: 'Apply Filters', exact: true }).click();
+  await expect(list).toBeVisible();
+});
+
+for (const role of ['patient', 'coordinator']) for (const width of [390, 1440]) test(`compact ${role} trip layout preserves scroll and footer at ${width}px`, async ({ page }) => {
+  await seedSession(page);
+  await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
+  await page.clock.install({ time: new Date('2026-10-21T02:00:00Z') });
+  await page.route('**/api/auth/me', route => route.fulfill({ json: { account: { ...activeAccount, role } } }));
+  const trip = { ...fixtureTrip, version: 1, review_required: role === 'patient', origin: 'Fixture home, 123 Test Street, Singapore 560123', destination: 'Fixture Dialysis Centre, 456 Treatment Road, Singapore 560456' };
+  await page.route('**/api/trips?*', route => route.fulfill({ json: { trips: Array.from({ length: 25 }, (_, index) => ({ ...trip, id: `trip-${index}` })), total: 25, page: 1, pageSize: 25, counts: { unfilled: 25, 'at-risk': 0, 'on-track': 0, resolved: 0 }, next_trip: trip } }));
+  await page.goto('/dashboard/trips');
+  const list = page.getByRole('region', { name: 'Trip list', exact: true });
+  await expect(list).toBeVisible();
+  expect(await list.evaluate(element => element.scrollHeight > element.clientHeight && getComputedStyle(element).overflowY === 'auto')).toBe(true);
+  const record = list.locator('article').first();
+  expect(await record.evaluate(element => parseFloat(getComputedStyle(element).borderTopWidth))).toBeGreaterThan(0);
+  await expect(page.getByRole('button', { name: 'Previous', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Next', exact: true })).toBeVisible();
+  const bounds = await page.locator('.trips-panel').evaluate(panel => {
+    const frame = panel.getBoundingClientRect();
+    const footer = panel.querySelector('.patients-pagination')!.getBoundingClientRect();
+    return { footer: footer.bottom, panel: frame.bottom, viewport: innerHeight, controls: [...panel.querySelectorAll('.patients-pagination button')].map(button => { const rect = button.getBoundingClientRect(); return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom }; }) };
+  });
+  expect(bounds.footer).toBeLessThanOrEqual(bounds.panel);
+  expect(bounds.footer).toBeLessThanOrEqual(bounds.viewport);
+  for (const control of bounds.controls) { expect(control.left).toBeGreaterThanOrEqual(0); expect(control.right).toBeLessThanOrEqual(width); expect(control.bottom).toBeLessThanOrEqual(bounds.panel); }
+  if (role === 'patient') { expect((await page.locator('.patient-next-pickup').boundingBox())!.height).toBeLessThan(200); await expect(page.locator('.trip-next-reading').getByText('Needs review', { exact: true })).toBeVisible(); await expect(page.getByRole('button', { name: 'Delete Trip', exact: true })).toHaveCount(0); }
+  await page.screenshot({ path: `C:/Users/joshu/AppData/Local/Temp/dialysis-trips-ui-${role}-${width}.png` });
+  await list.getByRole('button', { name: 'View details', exact: true }).first().click();
+  const details = page.getByRole('dialog', { name: 'Trip details', exact: true });
+  await expect(details.getByRole('list', { name: 'Journey route' }).getByRole('listitem')).toHaveCount(2);
+  await expect(details.locator('.trip-detail-route')).toContainText(trip.origin);
+  await expect(details.locator('.trip-detail-route')).toContainText(trip.destination);
+  await expect(details.locator('.trip-detail-id')).toContainText(trip.patient_id);
+  for (const size of ['16px', '32px']) {
+    await page.evaluate(size => { document.documentElement.style.fontSize = size; }, size);
+    const alignment = await details.locator('.trip-detail-route li').evaluateAll(items => items.map(item => {
+      const marker = getComputedStyle(item, '::before');
+      const label = item.querySelector('span')!.getBoundingClientRect();
+      return Math.abs(item.getBoundingClientRect().y + parseFloat(marker.marginTop) + parseFloat(marker.height) / 2 - label.y - label.height / 2);
+    }));
+    for (const offset of alignment) expect(offset).toBeLessThan(1);
+    const layout = await details.evaluate(element => {
+      const dialog = element.getBoundingClientRect();
+      const footer = element.querySelector('.overlay-footer')!.getBoundingClientRect();
+      const body = element.querySelector('.overlay-body')!;
+      return { bottom: dialog.bottom, right: dialog.right, footer: footer.bottom, overflow: body.scrollWidth > body.clientWidth };
+    });
+    expect(layout.bottom).toBeLessThanOrEqual(width === 390 ? 844 : 900);
+    expect(layout.right).toBeLessThanOrEqual(width);
+    expect(layout.footer).toBeLessThanOrEqual(layout.bottom);
+    expect(layout.overflow).toBe(false);
+  }
+  await page.evaluate(() => { document.documentElement.style.fontSize = '16px'; });
+  await page.screenshot({ path: `C:/Users/joshu/AppData/Local/Temp/dialysis-trip-details-${role}-${width}.png` });
+  await details.getByRole('button', { name: 'Close', exact: true }).click();
+  await page.evaluate(() => { document.documentElement.style.fontSize = '32px'; });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.getByRole('button', { name: 'Filters', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Trip filters', exact: true });
+  expect(await dialog.evaluate(element => element.getBoundingClientRect().bottom <= innerHeight)).toBe(true);
+  await expect(dialog.getByRole('button', { name: 'Apply Filters', exact: true })).toBeVisible();
 });

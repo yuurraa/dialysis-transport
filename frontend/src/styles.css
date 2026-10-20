@@ -194,12 +194,8 @@ button:hover:not(:disabled) { filter: brightness(1.12); box-shadow: inset 0 0 0 
 .dashboard-eyebrow { margin: 0 0 12px; font-size: .75rem; font-weight: 600; letter-spacing: .17em; text-transform: uppercase; color: #b4c5cc; line-height: 1.6; }
 .dashboard-intro h1 { font-size: clamp(1.625rem, 4vw, 2.75rem); line-height: 1.15; letter-spacing: -.045em; font-weight: 600; margin: 0; }
 .dashboard-intro > p:last-child { color: #c4d0d8; margin-top: 14px; font-size: 1rem; line-height: 1.6; }
-.dashboard-welcome { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 24px; margin-bottom: 20px; }
-.dashboard-welcome h1 { flex: 1; min-width: 0; margin: 0; font-size: 1.5rem; font-weight: 400; line-height: 1.5; }
-.dashboard-welcome strong { font-weight: 600; }
-.dashboard-welcome time { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; color: #b4c5cc; font-size: 1rem; line-height: 1.6; }
-.dashboard-time { display: inline-flex; align-items: baseline; gap: 8px; white-space: nowrap; }
-.dashboard-time-separator { display: none; }
+.dashboard-header-clock { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; margin-right: 12px; color: var(--ui-muted); font-size: .8125rem; line-height: 1.4; white-space: nowrap; }
+.dashboard-date-compact { display: none; }
 .dashboard-clock { font-variant-numeric: tabular-nums; color: #c4d0d8; }
 .dashboard-access { display: inline-flex; align-items: center; border: 1px solid rgb(196 231 239 / 25%); background: #203740; color: #c4e7ef; padding: 5px 10px; border-radius: 999px; font-size: .75rem; line-height: 1.6; }
 .dashboard-overview { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(min-content, 1fr); gap: 20px; }
@@ -254,7 +250,7 @@ button:hover:not(:disabled) { filter: brightness(1.12); box-shadow: inset 0 0 0 
   .dashboard-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .landing-brand { min-height: 64px; padding: 16px 0; font-size: .75rem; white-space: nowrap; flex-wrap: nowrap; }
   .landing-brand .brand-symbol { display: none; }
-  .dashboard-header-inner { min-height: 64px; padding: 10px 0; gap: 8px; flex-wrap: nowrap; }
+  .dashboard-header-inner { min-height: 64px; padding: 10px 0; gap: 8px; flex-wrap: wrap; }
   .dashboard-header .dashboard-brand { display: none; }
   .dashboard-mobile-heading { display: flex; flex: 1; align-items: center; gap: 8px; min-width: 0; }
   .dashboard-mobile-title { min-width: 0; overflow-wrap: anywhere; font-size: 1rem; font-weight: 600; line-height: 1.3; }
@@ -262,9 +258,9 @@ button:hover:not(:disabled) { filter: brightness(1.12); box-shadow: inset 0 0 0 
   .dashboard-account-actions { flex-shrink: 0; }
   .dashboard-sidebar { display: none; }
   .dashboard-main { padding: 12px 0 24px; }
-  .dashboard-welcome { margin-bottom: 16px; }
-  .dashboard-welcome time { width: 100%; flex-direction: row; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; }
-  .dashboard-time-separator { display: inline; }
+  .dashboard-header-clock { margin-right: 4px; font-size: .75rem; }
+  .dashboard-date-full { display: none; }
+  .dashboard-date-compact { display: inline; }
   .dashboard-filters { flex-wrap: nowrap; overflow-x: auto; padding: 4px; }
   .dashboard-filters button { flex-shrink: 0; white-space: nowrap; }
 }
@@ -374,6 +370,68 @@ button:hover:not(:disabled) { filter: brightness(1.12); box-shadow: inset 0 0 0 
 .patient-trip-details { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin: 0; padding-top: 16px; border-top: 1px solid rgb(196 231 239 / 16%); }
 .patient-trip-details dt { color: #b4c5cc; font-size: .875rem; }
 .patient-trip-details dd { margin: 6px 0 0; font-weight: 600; }
+.trips-workspace { display: flex; flex-direction: column; flex: 1; min-height: 0; gap: 20px; }
+.trips-workspace > .patient-next-pickup { flex-shrink: 0; }
+.trips-panel { flex: 1; min-height: 0; }
+.trips-panel .page-heading-actions { flex: 0 1 24rem; width: 100%; }
+.trip-search-tools { display: flex; align-items: center; gap: 10px; width: 100%; min-width: 0; }
+.trip-search-tools .patient-search { flex: 1; min-width: 0; }
+.trips-panel .trip-filter-button { position: relative; display: grid; place-items: center; flex-shrink: 0; width: 44px; height: 44px; padding: 0; }
+.trip-filter-badge { position: absolute; top: -6px; right: -6px; display: grid; place-items: center; min-width: 20px; height: 20px; padding: 0 4px; border: 2px solid var(--ui-field); border-radius: 999px; background: var(--ui-accent); color: #10252b; font-size: .6875rem; font-weight: 700; line-height: 1; }
+.trip-records { display: flex; flex-direction: column; gap: 12px; }
+.trip-record { flex-shrink: 0; padding: 16px; border: 1px solid var(--ui-border); border-radius: 14px; background: var(--ui-field); overflow-wrap: anywhere; }
+.trip-record-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.trip-record-heading h3 { flex: 1 1 13rem; margin: 0; font-size: .9375rem; }
+.trip-record > p { margin: 10px 0; font-size: .875rem; }
+.trip-patient-identity { color: var(--ui-muted); font-size: .75rem !important; }
+.trip-route { line-height: 1.5; }
+.trip-route > span { display: block; }
+.trip-route > span + span { margin-top: 4px; }
+.trip-card-bottom { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; }
+.trip-key-times { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; font-size: .8125rem; }
+.trip-key-times > span { color: var(--ui-muted); }
+.trips-panel .trip-delete-control { width: 44px; padding: 0; color: #f4b2b6; }
+.trip-next-summary { padding: 16px 20px; }
+.trip-next-summary .page-heading { margin-bottom: 8px; }
+.trip-next-reading { display: flex; flex-wrap: wrap; gap: 4px 16px; align-items: center; font-size: .8125rem; }
+.trip-next-reading strong { font-size: 1rem; }
+.trip-next-destination { margin: 6px 0 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ui-muted); font-size: .8125rem; }
+.trip-next-summary .patient-overview-note { margin: 0; }
+.trip-next-summary button { min-height: 44px; padding: 8px 12px; border: 1px solid #607780; border-radius: var(--ui-control-radius); background: #20343e; color: var(--ui-text); font-size: .8125rem; }
+.trip-toast-region { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); z-index: 100; width: min(90vw, 32rem); }
+.trip-pickup-pending { color: var(--ui-accent); font-weight: 600; }
+.trip-detail-identity { margin-bottom: 20px; }
+.trip-detail-name { margin: 0; font-size: 1.0625rem; font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; }
+.trip-detail-id { margin: 4px 0 0; color: var(--ui-muted); font-size: .75rem; line-height: 1.6; overflow-wrap: anywhere; }
+.trip-detail-badges { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.trip-journey-details { display: grid; gap: 16px; }
+.trip-detail-route { margin: 0; padding: 0; list-style: none; }
+.trip-detail-route li { position: relative; display: grid; grid-template-columns: 12px minmax(0, 1fr); gap: 12px; }
+.trip-detail-route li::before { content: ''; box-sizing: border-box; width: 10px; height: 10px; margin-top: calc(.5625rem - 5px); border: 2px solid var(--ui-accent); border-radius: 50%; background: var(--ui-surface); z-index: 1; }
+.trip-detail-route li:first-child { padding-bottom: 20px; }
+.trip-detail-route li:first-child::after { content: ''; position: absolute; left: 4px; top: calc(.5625rem + 5px); bottom: calc(5px - .5625rem); border-left: 1px solid var(--ui-border); }
+.trip-detail-route li:last-child::before { background: var(--ui-accent); }
+.trip-detail-route li span { display: block; }
+.trip-detail-route li span, .trip-detail-timings dt { color: var(--ui-muted); font-size: .75rem; line-height: 1.5; }
+.trip-detail-route p { margin: 4px 0 0; font-size: .9375rem; font-weight: 500; line-height: 1.6; overflow-wrap: anywhere; }
+.trip-detail-timings { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin: 0; padding-top: 16px; border-top: 1px solid var(--ui-border); }
+.trip-detail-timings dd { margin: 6px 0 0; font-size: 1rem; font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; }
+.trip-detail-review { margin: 0; padding: 12px 16px; border-left: 3px solid #ebbd78; border-radius: 4px; background: rgb(235 189 120 / 8%); color: #ebbd78; font-size: .875rem; line-height: 1.6; }
+@media (max-width: 480px) { .trip-detail-timings { grid-template-columns: minmax(0, 1fr); } }
+.trip-generation-dates { margin-top: 20px; }
+@media (max-width: 760px) {
+  .trips-workspace { gap: 12px; }
+  .trips-panel { padding: 16px; }
+  .trips-panel .page-heading { gap: 12px; margin-bottom: 12px; }
+  .trips-panel .page-heading-actions { flex-basis: 100%; }
+  .trip-record { padding: 12px; }
+  .trip-record-heading { gap: 6px; }
+  .trip-record-heading h3 { flex-basis: 100%; }
+  .trip-next-summary { padding: 12px 16px; }
+  .trip-next-summary .page-heading > div:first-child { flex-basis: 8rem; }
+  .trip-next-summary .dashboard-eyebrow { margin-top: 4px; }
+  .trips-panel .patients-pagination { gap: 8px; padding-top: 12px; }
+}
 .patient-overview-note { margin: 20px 0 0; color: #b4c5cc; font-size: .875rem; line-height: 1.6; }
 .patient-upcoming-rides { flex: 1; min-height: 200px; }
 @media (max-width: 1200px) { .patient-overview-top { grid-template-columns: minmax(0, 1fr); } }
@@ -423,7 +481,7 @@ button:hover:not(:disabled) { filter: brightness(1.12); box-shadow: inset 0 0 0 
 .treatment-time { white-space: nowrap; }
 .treatment-record button { flex-shrink: 0; }
 .treatment-hint { margin: 0; color: var(--ui-muted); font-size: .8125rem; line-height: 1.6; }
-.treatment-panel > .account-loading { flex: 1; }
+:is(.treatment-panel, .trips-panel) > .account-loading { flex: 1; min-height: 0; }
 @media (max-width: 760px) {
   .treatment-record { align-items: flex-start; flex-direction: column; padding: 16px; }
   .treatment-record .patient-actions { width: 100%; justify-content: flex-start; }
@@ -497,3 +555,11 @@ button:hover:not(:disabled) { filter: brightness(1.12); box-shadow: inset 0 0 0 
 .reschedule-history dt, .reschedule-history p { color: var(--ui-muted); font-size: .875rem; line-height: 1.6; }
 .reschedule-history dd { margin: 4px 0 0; line-height: 1.6; }
 @media (max-width: 760px) { .reschedule-history dl { grid-template-columns: minmax(0, 1fr); gap: 8px; } }
+
+@media (max-width: 600px) {
+  .dashboard-mobile-title { display: none; }
+  .dashboard-header-clock { font-size: .6875rem; }
+}
+@media (max-width: 380px) {
+  .dashboard-mobile-mark { display: none; }
+}

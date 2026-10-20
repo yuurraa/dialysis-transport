@@ -3,14 +3,8 @@ import TreatmentSchedules from './TreatmentSchedules';
 import { useCallback, useEffect, useRef, useState, type MouseEvent } from 'react';
 import PatientProfile from './PatientProfile';
 import PatientsPage from './PatientsPage';
+import TripsPage from './TripsPage';
 import { roleNames, type Account } from './AccountPanel';
-
-const categories = [
-  { key: 'unfilled', label: 'Unfilled' },
-  { key: 'at-risk', label: 'At-Risk' },
-  { key: 'on-track', label: 'On-Track' },
-  { key: 'resolved', label: 'Resolved' },
-] as const;
 
 const unavailableTripsIcon = <span className="dashboard-data-status-icon" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="5" width="16" height="16" rx="3" /><path d="M8 3v4m8-4v4M4 11h16m-10 4 4 4m0-4-4 4" /></svg></span>;
 
@@ -26,9 +20,8 @@ interface Props {
   onPatientProfileMissing: () => void;
 }
 
-/** Shared role workspace. Operational data is intentionally unavailable until trip services exist. */
+/** Shared role workspace with server-authorized trip data for patients and coordinators. */
 export default function Dashboard({ account, avatarUrl, path, onNavigate, onSignOut, signingOut, notify, onSessionExpired, onPatientProfileMissing }: Props) {
-  const [filter, setFilter] = useState('all');
   const [now, setNow] = useState(() => new Date());
   useEffect(() => {
     const timer = window.setInterval(() => setNow(new Date()), 1000);
@@ -91,18 +84,14 @@ export default function Dashboard({ account, avatarUrl, path, onNavigate, onSign
     setMenuOpen(false);
   }
   const patient = account.role === 'patient';
-  const [profileName, setProfileName] = useState<{ accountId: string; name: string } | null>(null);
-  const fullName = profileName?.accountId === account.id ? profileName.name : account.full_name;
-  const greetingName = account.role === 'coordinator' ? account.display_name : fullName?.trim() || account.display_name;
   const accountPage = path === '/dashboard/account';
-  const profileResolved = useCallback((complete: boolean, fullName?: string) => {
-    if (fullName) setProfileName({ accountId: account.id, name: fullName });
+  const profileResolved = useCallback((complete: boolean) => {
     if (!complete) onPatientProfileMissing();
-  }, [account.id, onPatientProfileMissing]);
+  }, [onPatientProfileMissing]);
   const schedulesPage = ['patient', 'coordinator'].includes(account.role) && path === '/dashboard/schedules';
   const patientsPage = account.role === 'coordinator' && path === '/dashboard/patients';
-  const selected = categories.find(category => category.key === filter);
   const date = new Intl.DateTimeFormat('en-SG', { dateStyle: 'full', timeZone: 'Asia/Singapore' }).format(now);
+  const compactDate = new Intl.DateTimeFormat('en-SG', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Singapore' }).format(now);
   const time = new Intl.DateTimeFormat('en-SG', { hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23', timeZone: 'Asia/Singapore' }).format(now);
   function follow(event: MouseEvent<HTMLAnchorElement>, target: string) {
     if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
@@ -135,6 +124,7 @@ export default function Dashboard({ account, avatarUrl, path, onNavigate, onSign
           <span className="dashboard-mobile-mark" aria-label="Dialysis Transport">DT</span><span className="dashboard-mobile-title">{accountPage ? 'My Account' : patientsPage ? 'Patients' : schedulesPage ? 'Schedules' : 'Trips'}</span>
         </div>
         <div className="dashboard-account-actions" ref={headerActions}>
+          <time className="dashboard-header-clock" dateTime={now.toISOString()} aria-label={`${date}, ${time} Singapore time`}><span className="dashboard-date-full">{date}</span><span className="dashboard-date-compact" aria-hidden="true">{compactDate}</span><span className="dashboard-clock">{time}</span></time>
           <button className="dashboard-icon-button" ref={notificationsButton} type="button" aria-label="Notifications" aria-expanded={dropdown === 'notifications'} aria-controls="dashboard-notifications" onClick={() => toggleDropdown('notifications')}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4" /></svg>
           </button>
@@ -167,11 +157,7 @@ export default function Dashboard({ account, avatarUrl, path, onNavigate, onSign
         {navigation}
       </aside>
     <main className="dashboard-main" id="dashboard-main" tabIndex={-1}>
-      {!patientsPage && !accountPage && !schedulesPage && <header className="dashboard-welcome">
-        <h1>Welcome back, <strong>{greetingName}</strong>.</h1>
-        <time dateTime={now.toISOString()}><span>{date}</span><span className="dashboard-time"><span className="dashboard-time-separator" aria-hidden="true">|</span><span className="dashboard-clock">{time}</span></span></time>
-      </header>}
-      {schedulesPage ? <TreatmentSchedules coordinator={account.role === 'coordinator'} notify={notify} onSessionExpired={onSessionExpired} /> : patientsPage ? <PatientsPage notify={notify} onSessionExpired={onSessionExpired} /> : accountPage ? <>{!patient && <section className="dashboard-trips" aria-labelledby={account.role === 'coordinator' ? 'account-details-title' : 'role-profile-title'}><PageHeading id={account.role === 'coordinator' ? 'account-details-title' : 'role-profile-title'} title="Account Details" description={<span className="profile-id">{roleNames[account.role]} ID: {account.id}</span>} />{account.role === 'coordinator' && <dl className="dashboard-account-fields"><div><dt>Username</dt><dd>{account.display_name}</dd></div><div><dt>Email</dt><dd>{account.email}</dd></div><div><dt>Role</dt><dd>{roleNames[account.role]}</dd></div><div><dt>Status</dt><dd>Active</dd></div></dl>}</section>}{patient && <div className="patient-account-profile"><PatientProfile notify={notify} onSessionExpired={onSessionExpired} onProfileResolved={profileResolved} /></div>}</> : account.role !== 'coordinator' ? <div className="patient-home">
+      {schedulesPage ? <TreatmentSchedules coordinator={account.role === 'coordinator'} notify={notify} onSessionExpired={onSessionExpired} /> : patientsPage ? <PatientsPage notify={notify} onSessionExpired={onSessionExpired} /> : accountPage ? <>{!patient && <section className="dashboard-trips" aria-labelledby={account.role === 'coordinator' ? 'account-details-title' : 'role-profile-title'}><PageHeading id={account.role === 'coordinator' ? 'account-details-title' : 'role-profile-title'} title="Account Details" description={<span className="profile-id">{roleNames[account.role]} ID: {account.id}</span>} />{account.role === 'coordinator' && <dl className="dashboard-account-fields"><div><dt>Username</dt><dd>{account.display_name}</dd></div><div><dt>Email</dt><dd>{account.email}</dd></div><div><dt>Role</dt><dd>{roleNames[account.role]}</dd></div><div><dt>Status</dt><dd>Active</dd></div></dl>}</section>}{patient && <div className="patient-account-profile"><PatientProfile notify={notify} onSessionExpired={onSessionExpired} onProfileResolved={profileResolved} /></div>}</> : ['coordinator', 'patient'].includes(account.role) ? <TripsPage coordinator={account.role === 'coordinator'} onSessionExpired={onSessionExpired} /> : <div className="patient-home">
         <div className="patient-overview-top">
           <section className="dashboard-trips patient-next-pickup" aria-labelledby="patient-pickup-title">
             <PageHeading id="patient-pickup-title" title="Next pickup" eyebrow="Your next journey" level={2} actions={<span className="dashboard-access">Unavailable</span>} />
@@ -186,30 +172,6 @@ export default function Dashboard({ account, avatarUrl, path, onNavigate, onSign
           <div className="dashboard-data-status patients-status" role="status">{unavailableTripsIcon}<div><h3>Trip information is not available.</h3><p>Your upcoming rides will appear here.</p></div></div>
         </section>
 
-      </div> : <div className="dashboard-overview">
-        <section className="dashboard-metrics" aria-label="Trip status overview">
-          {categories.map(category => <div className="dashboard-metric" key={category.key}>
-            <span className="dashboard-metric-label">{category.label}</span>
-            <div className="dashboard-metric-reading">
-              <span className="dashboard-metric-value" aria-label={`${category.label} count unavailable`}>-</span>
-              <span className={`dashboard-dot ${category.key}`} aria-hidden="true" />
-            </div>
-          </div>)}
-        </section>
-        <section className="dashboard-trips" aria-labelledby="trips-title">
-          <PageHeading id="trips-title" title={selected ? `${selected.label} trips` : "Today's trips"} eyebrow="Trip management" level={2} />
-          <div className="dashboard-filters" role="group" aria-label="Filter trips by status">
-            <button type="button" aria-label="All trips" aria-pressed={filter === 'all'} onClick={() => setFilter('all')}>All trips</button>
-            {categories.map(category => <button type="button" key={category.key} aria-pressed={filter === category.key} onClick={() => setFilter(category.key)}>{category.label}</button>)}
-          </div>
-          <div className="dashboard-data-status" role="status">
-            {unavailableTripsIcon}
-            <div>
-              <h3>Trip information is not available.</h3>
-              <p>Trip statuses and counts cannot be displayed right now.</p>
-            </div>
-          </div>
-        </section>
       </div>}
     </main>
     </div>
