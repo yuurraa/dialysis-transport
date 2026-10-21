@@ -1,4 +1,4 @@
-import { useId, useLayoutEffect, useRef, type FormEventHandler, type ReactNode, type Ref } from 'react';
+import { useId, useLayoutEffect, useRef, useState, type FormEventHandler, type ReactNode, type Ref } from 'react';
 
 export function InfoButton({ label, onClick, disabled, buttonRef }: {
   label: string; onClick: () => void; disabled?: boolean; buttonRef?: Ref<HTMLButtonElement>;
@@ -21,7 +21,7 @@ export function PageHeading({ id, title, description, eyebrow, actions, level = 
 
 /** Native modal with one scrolling body, persistent controls, and restored keyboard focus. */
 export function Overlay({ title, description, children, footer, onClose, onSubmit, busy = false, className = '', noValidate = false, error, onDismissError }: {
-  title: string; description?: ReactNode; children: ReactNode; footer: ReactNode;
+  title: string; description?: ReactNode; children: ReactNode; footer?: ReactNode;
   error?: string; onDismissError?: () => void; noValidate?: boolean;
   onClose: () => void; onSubmit?: FormEventHandler<HTMLFormElement>; busy?: boolean; className?: string;
 }) {
@@ -43,7 +43,7 @@ export function Overlay({ title, description, children, footer, onClose, onSubmi
     };
   }, []);
   useLayoutEffect(() => { heading.current?.focus(); }, [title]);
-  const content = <><div className="overlay-body">{children}</div>{error && <div className="overlay-toast-region"><div className="auth-toast error-toast" role="alert"><p>{error}</p><button type="button" aria-label="Dismiss error" onClick={onDismissError}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg></button></div></div>}<footer className="overlay-footer patient-actions">{footer}</footer></>;
+  const content = <><div className="overlay-body">{children}</div>{error && <div className="overlay-toast-region"><div className="auth-toast error-toast" role="alert"><p>{error}</p><button type="button" aria-label="Dismiss error" onClick={onDismissError}>Dismiss</button></div></div>}<footer className="overlay-footer patient-actions">{footer ?? <button type="button" aria-label={`Close ${title}`} disabled={busy} onClick={onClose}>Close</button>}</footer></>;
   return <dialog className={`dashboard-dialog ${className}`} ref={dialog} aria-labelledby={titleId} aria-describedby={description ? descriptionId : undefined} aria-busy={busy}
     onCancel={event => { event.preventDefault(); if (!busy) onClose(); }}
     onKeyDown={event => {
@@ -61,8 +61,91 @@ export function Overlay({ title, description, children, footer, onClose, onSubmi
       if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) onClose();
     }}>
     <header className="overlay-header"><div><h2 id={titleId} ref={heading} tabIndex={-1}>{title}</h2>{description && <p id={descriptionId} className="page-description">{description}</p>}</div>
-      <button className="overlay-close" type="button" aria-label={`Close ${title}`} disabled={busy} onClick={onClose}><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg></button>
     </header>
     {onSubmit ? <form className="overlay-content patient-form" onSubmit={onSubmit} noValidate={noValidate}>{content}</form> : <div className="overlay-content">{content}</div>}
   </dialog>;
+}
+
+/** The same search/filter/sort order is used by every record list. */
+export function ListToolbar({ search, onSearch, label, placeholder, filterCount, onFilter, onSort, sortLabel }: {
+  search: string; onSearch: (value: string) => void; label: string; placeholder: string;
+  filterCount: number; onFilter: () => void; onSort: () => void; sortLabel: string;
+}) {
+  const toolbar = useRef<HTMLDivElement>(null);
+  const [compact, setCompact] = useState(() => window.matchMedia('(max-width: 760px)').matches);
+  useLayoutEffect(() => {
+    const media = window.matchMedia('(max-width: 760px)');
+    const resized = () => setCompact(media.matches);
+    media.addEventListener('change', resized);
+    const header = document.querySelector('.dashboard-header');
+    if (!header) return () => media.removeEventListener('change', resized);
+    const measure = () => toolbar.current?.style.setProperty('--list-header-height', `${header.getBoundingClientRect().height}px`);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(header);
+    return () => { observer.disconnect(); media.removeEventListener('change', resized); };
+  }, []);
+  return <div ref={toolbar} className="list-toolbar" role="group" aria-label="Search, filter and sort records">
+    <label className="patient-search"><svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 5 5" /></svg>
+      <input type="search" aria-label={label} placeholder={compact ? label.replace('treatment ', '') : placeholder} title={placeholder} maxLength={100} value={search} onChange={event => onSearch(event.target.value)} />
+    </label>
+    <button className="list-tool-button trip-filter-button" type="button" aria-label="Filters" aria-haspopup="dialog" title={filterCount ? `Filters (${filterCount} active)` : 'Filters'} onClick={onFilter}>
+      <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M4 5h16l-6 7v6l-4 2v-8z" /></svg>
+      {filterCount > 0 && <span className="trip-filter-badge" aria-label={`${filterCount} active filters`}>{filterCount}</span>}
+    </button>
+    <button className="list-tool-button" type="button" aria-label="Sort" aria-haspopup="dialog" title={`Sort: ${sortLabel}`} onClick={onSort}>
+      <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M8 4v16m-4-4 4 4 4-4M16 20V4m-4 4 4-4 4 4" /></svg>
+    </button>
+  </div>;
+}
+
+export function ChoiceGroup({ label, value, options, onChange }: {
+  label: string; value: string; options: readonly { value: string; label: string; title?: string }[]; onChange: (value: string) => void;
+}) {
+  const name = useId();
+  return <fieldset className="list-choice-group"><legend>{label}</legend><div className="list-choices">
+    {options.map(option => <label key={option.value} className="list-choice" title={option.title}><input type="radio" name={name} value={option.value} checked={value === option.value} onChange={() => onChange(option.value)} /><span>{option.label}</span></label>)}
+  </div></fieldset>;
+}
+
+export interface SortOption { value: string; label: string; ascending?: string; descending?: string }
+
+export function sortOrderLabel(option: SortOption | undefined, order: string) {
+  return order === 'desc' ? option?.descending ?? 'Z–A' : option?.ascending ?? 'A–Z';
+}
+
+export function sortSummary(options: readonly SortOption[], sort: string, order: string) {
+  const option = options.find(item => item.value === sort);
+  return `${option?.label ?? sort} · ${sortOrderLabel(option, order)}`;
+}
+
+export function SortOverlay({ sort, order, options, defaultSort, defaultOrder, onClose, onApply }: {
+  sort: string; order: string; options: readonly SortOption[]; defaultSort: string; defaultOrder: 'asc' | 'desc';
+  onClose: () => void; onApply: (sort: string, order: 'asc' | 'desc') => void;
+}) {
+  const [field, setField] = useState(sort);
+  const [direction, setDirection] = useState(order);
+  const selected = options.find(option => option.value === field);
+  return <Overlay title="Sort records" description="Choose a field and its order." className="list-options-dialog" onClose={onClose}
+    onSubmit={event => { event.preventDefault(); onApply(field, direction as 'asc' | 'desc'); }}
+    footer={<><button className="patient-primary" type="submit">Apply Sort</button><button type="button" onClick={() => { setField(defaultSort); setDirection(defaultOrder); }}>Reset</button><button type="button" onClick={onClose}>Cancel</button></>}>
+    <ChoiceGroup label="Sort by" value={field} options={options} onChange={setField} />
+    <ChoiceGroup label="Order" value={direction} options={[{ value: 'asc', label: 'Ascending', title: sortOrderLabel(selected, 'asc') }, { value: 'desc', label: 'Descending', title: sortOrderLabel(selected, 'desc') }]} onChange={setDirection} />
+    <p className="list-choice-hint" aria-live="polite">{selected?.label}: {sortOrderLabel(selected, direction)}.</p>
+  </Overlay>;
+}
+
+/** A consistent recovery state keeps the list's flat visual language. */
+export function ListError({ title, message, onRetry }: { title: string; message: string; onRetry: () => void }) {
+  return <div className="list-error-state" role="alert">
+    <span className="list-error-icon" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="m12 3 10 18H2L12 3Z" /><path d="M12 9v5m0 3h.01" /></svg></span>
+    <div><h3>{title}</h3><p>{message}</p></div>
+    <button className="patient-primary" type="button" onClick={onRetry}>Try again</button>
+  </div>;
+}
+
+export function ScheduleActionIcon({ action }: { action: 'add' | 'edit' | 'generate' }) {
+  return <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    {action === 'add' ? <path d="M12 5v14M5 12h14" /> : action === 'edit' ? <><path d="m15 4 5 5M4 15 16 3a2.1 2.1 0 0 1 5 5L9 20l-6 1 1-6Z" /></> : <><circle cx="6" cy="5" r="2" /><path d="M6 7v8a3 3 0 0 0 3 3h11m-4-4 4 4-4 4" /></>}
+  </svg>;
 }

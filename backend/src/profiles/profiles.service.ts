@@ -35,13 +35,14 @@ export class ProfilesService {
     return result.data;
   }
 
-  async listPatients(header?: string, requestedPage = '1', search = '', sort = 'created_at', direction = 'desc') {
+  async listPatients(header?: string, requestedPage = '1', search = '', sort = 'created_at', direction = 'desc', status = 'all', mobility = 'all') {
     const { client } = await this.requireRole(header, 'coordinator');
     const page = Number(requestedPage);
     if (typeof requestedPage !== 'string' || !/^\d+$/.test(requestedPage) || !Number.isSafeInteger(page) || page < 1 || page > 1000000) throw new BadRequestException('Invalid page.');
     if (typeof search !== 'string' || search.length > 100 || /[\u0000-\u001f\u007f]/.test(search)
       || !['created_at', 'id', 'full_name', 'phone', 'mobility', 'status'].includes(sort)
-      || !['asc', 'desc'].includes(direction)) throw new BadRequestException('Invalid search or sort.');
+      || !['asc', 'desc'].includes(direction) || !['all', 'active', 'inactive'].includes(status)
+      || !['all', 'ambulant', 'walking-aid', 'wheelchair'].includes(mobility)) throw new BadRequestException('Invalid search or sort.');
     const pageSize = 25;
     let query = client.from('patients').select('id,full_name,phone,pickup_address,mobility,assistance_required,status,created_at,unit_no,postal_code,notes,version', { count: 'exact' });
     const term = search.trim();
@@ -52,6 +53,8 @@ export class ProfilesService {
       if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(term)) filters.push(`id.eq.${term}`);
       query = query.or(filters.join(','));
     }
+    if (status !== 'all') query = query.eq('status', status);
+    if (mobility !== 'all') query = query.eq('mobility', mobility);
     query = query.order(sort, { ascending: direction === 'asc' });
     if (sort !== 'id') query = query.order('id', { ascending: true });
     const result = await query.range((page - 1) * pageSize, page * pageSize - 1);

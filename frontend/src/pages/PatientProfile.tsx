@@ -1,4 +1,4 @@
-import { Overlay, PageHeading } from '../components/DashboardUI';
+import { PageHeading } from '../components/DashboardUI';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { ApiError, apiGet, apiRequest } from '../lib/api';
 import { PatientFields, patientDraft, type Patient } from './PatientsPage';
@@ -21,9 +21,11 @@ export default function PatientProfile({ notify, onSessionExpired, onProfileReso
   const [attempt, setAttempt] = useState(0);
   const alive = useRef(false);
   const editButton = useRef<HTMLButtonElement>(null);
+  const profileForm = useRef<HTMLFormElement>(null);
   const wasEditing = useRef(false);
   useEffect(() => {
-    if (wasEditing.current && !editing) editButton.current?.focus();
+    if (editing) profileForm.current?.querySelector<HTMLInputElement>('input:not(:disabled)')?.focus({ preventScroll: true });
+    else if (wasEditing.current) editButton.current?.focus();
     wasEditing.current = editing;
   }, [editing]);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
@@ -66,22 +68,29 @@ export default function PatientProfile({ notify, onSessionExpired, onProfileReso
         : 'Your profile could not be saved. Please try again.');
     } finally { if (alive.current) setSaving(false); }
   }
+  function cancelEditing() {
+    if (saving) return;
+    setConflict(false); setDraft(patientDraft(profile)); setSaveError(''); setEditing(false);
+  }
   const form = !loading && !error && draft && profile;
-  return <><section className="dashboard-trips patients-panel page-panel" aria-labelledby="patient-profile-title">
+  return <section className="dashboard-trips patients-panel page-panel" aria-labelledby="patient-profile-title">
     <PageHeading id="patient-profile-title" title="Account Details" description={profile ? <span className="profile-id">Patient ID: {profile.id}</span> : undefined} />
     {loading ? <div className="account-loading patients-loading" role="status" aria-label="Loading profile"><span className="account-spinner" aria-hidden="true" /><span>Loading...</span></div>
       : error ? <div className="dashboard-data-status patients-status"><div><h3 role="alert">{error}</h3></div><button type="button" onClick={() => setAttempt(value => value + 1)}>Try again</button></div>
-      : form ? <>
-          <div className="patient-readonly-fields panel-scroll" tabIndex={0} role="region" aria-label="Your patient details">{!editing && <PatientFields draft={draft} onChange={setDraft} disabled />}</div>
-          {profile.status === 'inactive' ? <p role="status" className="patient-error">Your patient profile is inactive. Contact your transport coordinator.</p>
-            : <div className="patient-actions"><button ref={editButton} className="patient-primary" type="button" onClick={() => { setConflict(false); setDraft(patientDraft(profile)); setSaveError(''); setEditing(true); }}>Edit profile</button></div>}
-      </> : null}
-  </section>
-  {editing && draft && profile && <Overlay title="Edit profile" description="Update your contact and transport details." busy={saving}
-    onClose={() => { setConflict(false); setDraft(patientDraft(profile)); setSaveError(''); setEditing(false); }} onSubmit={save} error={saveError} onDismissError={() => setSaveError('')}
-    footer={<><button className="patient-primary" type="submit" disabled={saving || conflict}>{saving ? 'Saving…' : 'Save profile'}</button><button type="button" disabled={saving} onClick={() => { setConflict(false); setDraft(patientDraft(profile)); setSaveError(''); setEditing(false); }}>Cancel</button></>}>
-    {conflict && <button type="button" disabled={saving} onClick={() => { setEditing(false); setConflict(false); setSaveError(''); setAttempt(value => value + 1); }}>Reload latest details</button>}
-    <PatientFields draft={draft} onChange={setDraft} disabled={saving} />
-  </Overlay>}
-  </>;
+      : form ? <form ref={profileForm} className={`patient-profile-form${editing ? ' patient-editing' : ''}`} aria-label="Patient profile" aria-busy={saving} onSubmit={save}
+          onKeyDown={event => { if (event.key === 'Escape' && editing && !saving) { event.preventDefault(); cancelEditing(); } }}>
+          <div className="patient-readonly-fields panel-scroll" tabIndex={0} role="region" aria-label="Your patient details">
+            <PatientFields draft={draft} onChange={setDraft} disabled={!editing || saving || profile.status !== 'active'} />
+          </div>
+          <div className="patient-profile-actions">
+            {saveError && <div className="profile-save-error" role="alert"><p>{saveError}</p><button type="button" aria-label="Dismiss error" onClick={() => setSaveError('')}>Dismiss</button></div>}
+            {conflict && <div className="patient-actions"><button type="button" disabled={saving} onClick={() => { setEditing(false); setConflict(false); setSaveError(''); setAttempt(value => value + 1); }}>Reload latest details</button></div>}
+            {profile.status === 'inactive' ? <p role="status" className="patient-error">Your patient profile is inactive. Contact your transport coordinator.</p>
+              : <div className="patient-actions">{editing ? <>
+                  <button key="save-profile" className="patient-primary" type="submit" disabled={saving || conflict}>{saving ? 'Saving…' : 'Save profile'}</button>
+                  <button type="button" disabled={saving} onClick={cancelEditing}>Cancel</button>
+                </> : <button key="edit-profile" ref={editButton} className="patient-primary" type="button" onClick={event => { event.preventDefault(); setConflict(false); setDraft(patientDraft(profile)); setSaveError(''); setEditing(true); }}>Edit profile</button>}</div>}
+          </div>
+        </form> : null}
+  </section>;
 }

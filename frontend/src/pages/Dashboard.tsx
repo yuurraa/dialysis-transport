@@ -156,7 +156,12 @@ export default function Dashboard({ account, avatarUrl, path, onNavigate, onSign
 
     <div className="dashboard-workspace">
     <main className="dashboard-main" id="dashboard-main" tabIndex={-1}>
-      {schedulesPage ? <TreatmentSchedules coordinator={account.role === 'coordinator'} notify={notify} onSessionExpired={onSessionExpired} /> : patientsPage ? <PatientsPage notify={notify} onSessionExpired={onSessionExpired} /> : accountPage ? <>{!patient && <section className="dashboard-trips" aria-labelledby={account.role === 'coordinator' ? 'account-details-title' : 'role-profile-title'}><PageHeading id={account.role === 'coordinator' ? 'account-details-title' : 'role-profile-title'} title="Account Details" description={<span className="profile-id">{roleNames[account.role]} ID: {account.id}</span>} />{account.role === 'coordinator' && <dl className="dashboard-account-fields"><div><dt>Username</dt><dd>{account.display_name}</dd></div><div><dt>Email</dt><dd>{account.email}</dd></div><div><dt>Role</dt><dd>{roleNames[account.role]}</dd></div><div><dt>Status</dt><dd>Active</dd></div></dl>}</section>}{patient && <div className="patient-account-profile"><PatientProfile notify={notify} onSessionExpired={onSessionExpired} onProfileResolved={profileResolved} /></div>}</> : ['coordinator', 'patient'].includes(account.role) ? <TripsPage coordinator={account.role === 'coordinator'} onSessionExpired={onSessionExpired} /> : <div className="patient-home">
+      {schedulesPage ? <TreatmentSchedules coordinator={account.role === 'coordinator'} notify={notify} onSessionExpired={onSessionExpired} /> : patientsPage ? <PatientsPage notify={notify} onSessionExpired={onSessionExpired} /> : accountPage ? <>{!patient && <section className="dashboard-trips" aria-labelledby={account.role === 'coordinator' ? 'account-details-title' : 'role-profile-title'}><PageHeading id={account.role === 'coordinator' ? 'account-details-title' : 'role-profile-title'} title="Account Details" description={<span className="profile-id">{roleNames[account.role]} ID: {account.id}</span>} />{account.role === 'coordinator' && <fieldset className="patient-form-fields coordinator-account-fields" disabled aria-label="Coordinator account details">
+        <div className="patient-field"><label htmlFor="coordinator-username">Username</label><input id="coordinator-username" value={account.display_name} readOnly autoComplete="username" /></div>
+        <div className="patient-field"><label htmlFor="coordinator-email">Email</label><input id="coordinator-email" type="email" value={account.email} readOnly autoComplete="email" /></div>
+        <div className="patient-field"><label htmlFor="coordinator-role">Role</label><input id="coordinator-role" value={roleNames[account.role]} readOnly /></div>
+        <div className="patient-field"><label htmlFor="coordinator-status">Status</label><input id="coordinator-status" value={account.status === 'active' ? 'Active' : 'Inactive'} readOnly /></div>
+      </fieldset>}</section>}{patient && <div className="patient-account-profile"><PatientProfile notify={notify} onSessionExpired={onSessionExpired} onProfileResolved={profileResolved} /></div>}</> : ['coordinator', 'patient'].includes(account.role) ? <TripsPage coordinator={account.role === 'coordinator'} onSessionExpired={onSessionExpired} /> : <div className="patient-home">
         <div className="patient-overview-top">
           <section className="dashboard-trips patient-next-pickup trip-next-summary" aria-labelledby="patient-pickup-title">
             <h2 id="patient-pickup-title">Next pickup</h2>
@@ -189,8 +194,8 @@ export default function Dashboard({ account, avatarUrl, path, onNavigate, onSign
     }}>
       <header className="dashboard-drawer-header">
         <span>Dialysis Transport</span>
-        <button className="dashboard-icon-button" ref={drawerClose} type="button" aria-label="Close navigation" onClick={() => setMenuOpen(false)}>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg>
+        <button className="dashboard-drawer-close" ref={drawerClose} type="button" aria-label="Close navigation" onClick={() => setMenuOpen(false)}>
+          Close
         </button>
       </header>
       <p className="dashboard-eyebrow">Menu</p>

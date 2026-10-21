@@ -45,7 +45,7 @@ export class TripsService {
   }
 
   /** Database pagination and patient ownership checks run before returning trip records. */
-  async listTrips(header?: string, page = '1', from = this.today(), until?: string, status = 'all', search = '', direction = 'all') {
+  async listTrips(header?: string, page = '1', from = this.today(), until?: string, status = 'all', search = '', direction = 'all', sort = 'treatment_start', order = 'asc') {
     const client = await this.access(header);
     const start = this.date(from);
     until ??= new Date(start + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
@@ -53,8 +53,9 @@ export class TripsService {
     if (typeof page !== 'string' || !/^\d+$/.test(page) || !Number.isSafeInteger(Number(page)) || Number(page) < 1 || Number(page) > 1000000
       || typeof status !== 'string' || !['all', 'unfilled', 'at-risk', 'on-track', 'resolved'].includes(status)
       || typeof search !== 'string' || search.length > 100 || /[\u0000-\u001f\u007f]/.test(search)
-      || typeof direction !== 'string' || !['all', 'outbound', 'return'].includes(direction)) throw new BadRequestException('Invalid trip filters.');
-    const result = await client.rpc('list_trips', { page_no: Number(page), from_date: from, until_date: until, status_filter: status, search_text: search.trim(), direction_filter: direction });
+      || typeof direction !== 'string' || !['all', 'outbound', 'return'].includes(direction)
+      || !['treatment_start', 'patient_name', 'direction', 'status'].includes(sort) || !['asc', 'desc'].includes(order)) throw new BadRequestException('Invalid trip filters.');
+    const result = await client.rpc('list_trips', { page_no: Number(page), from_date: from, until_date: until, status_filter: status, search_text: search.trim(), direction_filter: direction, sort_by: sort, sort_order: order });
     this.check(result.error);
     return result.data;
   }

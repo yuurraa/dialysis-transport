@@ -1,4 +1,4 @@
-import { InfoButton, Overlay, PageHeading } from '../components/DashboardUI';
+import { InfoButton, Overlay, PageHeading, ListToolbar, ChoiceGroup, SortOverlay, ListError, sortSummary } from '../components/DashboardUI';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { ApiError, apiGet, apiRequest } from '../lib/api';
 
@@ -21,13 +21,17 @@ export function patientDraft(patient?: Patient | null): PatientInput {
   return { full_name: patient?.full_name ?? '', phone: patient?.phone ?? '', pickup_address: patient?.pickup_address ?? '', unit_no: patient?.unit_no ?? '', postal_code: patient?.postal_code ?? '', notes: patient?.notes ?? '', mobility: patient?.mobility ?? 'ambulant', assistance_required: patient?.assistance_required ?? false, status: patient?.status ?? 'active' };
 }
 const patientColumns = [{ key: 'id', label: 'Patient ID' }, { key: 'full_name', label: 'Name' }, { key: 'phone', label: 'Contact' }, { key: 'mobility', label: 'Mobility' }, { key: 'status', label: 'Status' }] as const;
+const patientSortOptions = [{ value: 'created_at', label: 'Created date', ascending: 'Oldest first', descending: 'Newest first' }, ...patientColumns.map(column => ({ value: column.key, label: column.label,
+  ...(column.key === 'status' ? { ascending: 'Active first', descending: 'Inactive first' } : column.key === 'phone' ? { ascending: '0–9', descending: '9–0' } : {}) }))];
 type PatientSort = typeof patientColumns[number]['key'] | 'created_at';
 export const mobilityLabels = { ambulant: 'Ambulant', 'walking-aid': 'Walking aid', wheelchair: 'Wheelchair' };
 
 /** UC-02: operational patient records; this form never creates or approves a login account. */
 export default function PatientsPage({ notify, onSessionExpired }: { notify: (message: string) => void; onSessionExpired: () => void }) {
-  const [filters, setFilters] = useState<{ page: number; search: string; sort: PatientSort; direction: 'asc' | 'desc' }>({ page: 1, search: '', sort: 'created_at', direction: 'desc' });
-  const { page, search, sort, direction } = filters;
+  const [filters, setFilters] = useState<{ page: number; search: string; sort: PatientSort; direction: 'asc' | 'desc'; status: string; mobility: string }>({ page: 1, search: '', sort: 'created_at', direction: 'desc', status: 'all', mobility: 'all' });
+  const { page, search, sort, direction, status, mobility } = filters;
+  const [filterDraft, setFilterDraft] = useState<{ status: string; mobility: string } | null>(null);
+  const [sorting, setSorting] = useState(false);
   const [searchText, setSearchText] = useState('');
   useEffect(() => {
     const timer = window.setTimeout(() => setFilters(current => current.search === searchText.trim() ? current : { ...current, page: 1, search: searchText.trim() }), 300);
@@ -68,7 +72,7 @@ export default function PatientsPage({ notify, onSessionExpired }: { notify: (me
     let active = true;
     setLoading(true);
     setError('');
-    const query = new URLSearchParams({ page: String(page), search, sort, direction });
+    const query = new URLSearchParams({ page: String(page), search, sort, direction, status, mobility });
     apiGet<PatientList>(`/profiles/patients?${query}`).then(result => {
       if (active) setList(result);
     }).catch(reason => {
@@ -77,7 +81,7 @@ export default function PatientsPage({ notify, onSessionExpired }: { notify: (me
       setError(reason instanceof ApiError && reason.status === 403 ? 'Coordinator access is required to view patients.' : 'Patients could not be loaded. Please try again.');
     }).finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [page, search, sort, direction, reload, onSessionExpired]);
+  }, [page, search, sort, direction, status, mobility, reload, onSessionExpired]);
 
   function sortPatients(column: typeof patientColumns[number]['key']) {
     setFilters(current => current.sort === column && current.direction === 'desc'
@@ -142,21 +146,27 @@ export default function PatientsPage({ notify, onSessionExpired }: { notify: (me
   const patientIcon = <span className="dashboard-data-status-icon" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><circle cx="12" cy="8" r="4" /><path d="M4 21v-2a8 8 0 0 1 16 0v2" /></svg></span>;
 
   return <section className="dashboard-trips patients-panel page-panel" aria-labelledby="patients-title" aria-busy={updating}>
-    <PageHeading id="patients-title" eyebrow="Patient Management" title="Patients List" actions={<label className="patient-search"><svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 5 5" /></svg><input type="search" aria-label="Search patients" placeholder="Patient name, phone or ID" maxLength={100} value={searchText} onChange={event => setSearchText(event.target.value)} /></label>} />
+    <PageHeading id="patients-title" eyebrow="Patient Management" title="Patient List" actions={<ListToolbar search={searchText} onSearch={setSearchText} label="Search patients" placeholder="Patient name, phone or ID"
+      filterCount={Number(status !== 'all') + Number(mobility !== 'all')} onFilter={() => setFilterDraft({ status, mobility })} onSort={() => setSorting(true)} sortLabel={sortSummary(patientSortOptions, sort, direction)} />} />
     {loading && !list ? <div className="account-loading patients-loading" role="status" aria-label="Loading patients"><span className="account-spinner" aria-hidden="true" /><span>Loading...</span></div>
-      : error ? <div className="dashboard-data-status patients-status">{patientIcon}<div><h3 role="alert">{error}</h3><p>Patient records are currently unavailable.</p></div><button type="button" onClick={() => setReload(value => value + 1)}>Try again</button></div>
+      : error ? <ListError title="Patients could not be loaded" message={error.includes('Coordinator') ? error : 'Please try again to load the patient records.'} onRetry={() => setReload(value => value + 1)} />
       : list && <>
-        {list.total === 0 ? <div className="dashboard-data-status patients-status" role="status">{patientIcon}<div><h3>{search ? 'No matching patients.' : 'No patients yet.'}</h3><p>{search ? 'Try another patient name, phone number or full patient ID.' : 'Patients appear here after completing account creation.'}</p></div></div> : <>
-          <label className="patient-mobile-sort">Sort records<select aria-label="Sort patient records" value={`${sort}:${direction}`} onChange={event => { const [column, order] = event.target.value.split(':'); setFilters(current => ({ ...current, page: 1, sort: column as PatientSort, direction: order as 'asc' | 'desc' })); }}><option value="created_at:desc">Newest records</option>{patientColumns.flatMap(column => (['asc', 'desc'] as const).map(order => <option key={`${column.key}:${order}`} value={`${column.key}:${order}`}>{column.label} · {order === 'asc' ? 'ascending' : 'descending'}</option>))}</select></label>
+        {list.total === 0 ? <div className="dashboard-data-status patients-status" role="status">{patientIcon}<div><h3>{search || status !== 'all' || mobility !== 'all' ? 'No matching patients.' : 'No patients yet.'}</h3><p>{search || status !== 'all' || mobility !== 'all' ? 'Try another search or change the filters.' : 'Patients appear here after completing account creation.'}</p></div></div> : <>
           <div className="patients-table-scroll" tabIndex={0} role="region" aria-label="Patient records"><table className="patients-table" role="table"><colgroup>{[5, 26, 20, 17, 14, 12, 6].map((width, index) => <col key={index} style={{ width: `${width}%` }} />)}</colgroup><thead role="rowgroup"><tr role="row"><th scope="col" role="columnheader" className="record-number-heading" aria-label="Row number">#</th>{patientColumns.map(column => <th key={column.key} role="columnheader" scope="col" aria-label={column.label} aria-sort={sort === column.key ? direction === 'asc' ? 'ascending' : 'descending' : 'none'}><button type="button" className="patient-sort-button" aria-label={sort === column.key && direction === 'desc' ? `Reset ${column.label} ordering` : `Sort by ${column.label} ${sort === column.key ? 'descending' : 'ascending'}`} onClick={() => sortPatients(column.key)}>{column.label}{sort === column.key && <span aria-hidden="true">{direction === 'asc' ? '▲' : '▼'}</span>}</button></th>)}<th scope="col" role="columnheader" aria-label="Details" /></tr></thead><tbody role="rowgroup">
             {list.patients.map((patient, index) => <tr key={patient.id} role="row"><td role="cell" className="record-number">{(list.page - 1) * list.pageSize + index + 1}</td><td role="cell" className="patient-record-id">{patient.id}</td><td role="cell" className="patient-record-name">{patient.full_name}</td><td role="cell" data-label="Contact">{patient.phone}</td><td role="cell" data-label="Mobility">{mobilityLabels[patient.mobility]}</td><td role="cell" data-label="Status">{patient.status === 'active' ? 'Active' : 'Inactive'}</td><td role="cell" className="patient-record-action"><InfoButton label={`View ${patient.full_name}`} disabled={updating} buttonRef={patient.id === editingId ? editButton : undefined} onClick={() => open(patient)} /></td></tr>)}
           </tbody></table></div>
         </>}
       </>}
-    <div className="patients-pagination"><span>{list ? <>{list.total} {list.total === 1 ? 'patient' : 'patients'} · Page {list.page}</> : loading ? 'Loading...' : 'Patient count unavailable'}</span><div className="patient-actions"><button type="button" aria-label="Previous" title="Previous page" disabled={updating || !!error || page === 1} onClick={() => setFilters(current => ({ ...current, page: current.page - 1 }))}>{'<'}</button><button type="button" aria-label="Next" title="Next page" disabled={updating || !!error || !list || page * list.pageSize >= list.total} onClick={() => setFilters(current => ({ ...current, page: current.page + 1 }))}>{'>'}</button></div></div>
-    {draft && selectedPatient && <Overlay title="Patient Details" description={<span className="profile-id">Patient ID: {selectedPatient.id}</span>} className="patient-dialog" busy={saving} onClose={close} onSubmit={editing ? save : undefined} error={saveError} onDismissError={() => setSaveError('')}
+    {!error && <div className="patients-pagination"><span>{list ? <>{list.total} {list.total === 1 ? 'patient' : 'patients'} · Page {list.page}</> : loading ? 'Loading...' : 'Patient count unavailable'}</span><div className="patient-actions"><button type="button" aria-label="Previous" title="Previous page" disabled={updating || !!error || page === 1} onClick={() => setFilters(current => ({ ...current, page: current.page - 1 }))}>{'<'}</button><button type="button" aria-label="Next" title="Next page" disabled={updating || !!error || !list || page * list.pageSize >= list.total} onClick={() => setFilters(current => ({ ...current, page: current.page + 1 }))}>{'>'}</button></div></div>}
+    {sorting && <SortOverlay sort={sort} order={direction} options={patientSortOptions} defaultSort="created_at" defaultOrder="desc" onClose={() => setSorting(false)} onApply={(sort, direction) => { setFilters(current => ({ ...current, page: 1, sort: sort as PatientSort, direction })); setSorting(false); }} />}
+    {filterDraft && <Overlay title="Patient filters" className="list-options-dialog" onClose={() => setFilterDraft(null)} onSubmit={event => { event.preventDefault(); setFilters(current => ({ ...current, ...filterDraft, page: 1 })); setFilterDraft(null); }}
+      footer={<><button className="patient-primary" type="submit">Apply Filters</button><button type="button" onClick={() => setFilterDraft({ status: 'all', mobility: 'all' })}>Reset</button><button type="button" onClick={() => setFilterDraft(null)}>Cancel</button></>}>
+      <ChoiceGroup label="Status" value={filterDraft.status} options={[{ value: 'all', label: 'All statuses' }, { value: 'active', label: 'Active' }, { value: 'inactive', label: 'Inactive' }]} onChange={status => setFilterDraft(current => current && ({ ...current, status }))} />
+      <ChoiceGroup label="Mobility" value={filterDraft.mobility} options={[{ value: 'all', label: 'All mobility types' }, ...Object.entries(mobilityLabels).map(([value, label]) => ({ value, label }))]} onChange={mobility => setFilterDraft(current => current && ({ ...current, mobility }))} />
+    </Overlay>}
+    {draft && selectedPatient && <Overlay title="Patient Details" description={<span className="profile-id">Patient ID: {selectedPatient.id}</span>} className={`patient-dialog${editing ? ' patient-editing' : ''}`} busy={saving} onClose={close} onSubmit={editing ? save : undefined} error={saveError} onDismissError={() => setSaveError('')}
       footer={editing ? <><button className="patient-primary" type="submit" disabled={saving || conflict}>{saving ? 'Saving…' : 'Save Patient'}</button><button type="button" disabled={saving} onClick={() => { setDraft(patientDraft(selectedPatient)); setSaveError(''); setEditing(false); }}>Cancel</button></>
-        : <><button ref={detailsEditButton} className="patient-primary" type="button" onClick={() => { setDraft(patientDraft(selectedPatient)); setSaveError(''); setEditing(true); }}>Edit Patient</button><button type="button" onClick={close}>Close</button></>}>
+        : <><button ref={detailsEditButton} className="patient-primary" type="button" onClick={() => { setDraft(patientDraft(selectedPatient)); setSaveError(''); setEditing(true); }}>Edit Patient</button><button type="button" aria-label="Close Patient Details" onClick={close}>Close</button></>}>
       {conflict && <button type="button" disabled={saving} onClick={reloadSelected}>Reload latest details</button>}
       <PatientFields draft={draft} onChange={setDraft} disabled={saving || !editing} showStatus personalDetailsReadOnly={editing} />
     </Overlay>}

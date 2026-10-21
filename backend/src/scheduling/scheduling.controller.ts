@@ -6,7 +6,10 @@ import { SchedulingService } from './scheduling.service';
 export class SchedulingController {
   constructor(@Inject(SchedulingService) private readonly service: SchedulingService) {}
   @Get()
-  treatments(@Headers('authorization') header?: string, @Query('page') page?: string, @Query('search') search?: string) { return this.service.treatments(header,page,search); }
+  treatments(@Headers('authorization') header?: string, @Query('page') page?: string, @Query('search') search?: string,
+    @Query('kind') kind?: string, @Query('centre') centre?: string, @Query('sort') sort?: string, @Query('order') order?: string) {
+    return this.service.treatments(header,page,search,kind,centre,sort,order);
+  }
 
   @Post()
   create(@Headers('authorization') header: string | undefined, @Body() body: unknown) { return this.service.saveTreatment(header, body); }

@@ -17,6 +17,7 @@ let missing = false;
 let writes = 0;
 let saved: unknown;
 let filters = '';
+let equalities: Array<[string, unknown]> = [];
 let orders: Array<[string, boolean]> = [];
 let bounds: number[] = [];
 const record = { id, version: 1, full_name: 'Test Patient', phone: '81234567', pickup_address: 'Test address', mobility: 'wheelchair', assistance_required: true, status: 'active' };
@@ -27,11 +28,11 @@ const gateway = { forUser: () => ({
     return { data: { id, role, status }, error: null };
   },
   from: () => {
-    filters = ''; orders = []; bounds = [];
+    filters = ''; orders = []; bounds = []; equalities = [];
     let writing = false;
     const result = () => ({ data: missing ? null : writing ? { ...record, ...(saved as object) } : [record], count: 1, error: failure ? { code: 'XX000', message: 'PRIVATE_DETAIL' } : null });
     const query = {
-      select: () => query, or: (value: string) => { filters = value; return query; }, order: (column: string, options?: { ascending: boolean }) => { orders.push([column, options?.ascending ?? true]); return query; }, range: (from: number, to: number) => { bounds = [from, to]; return Promise.resolve(result()); }, eq: () => query,
+      select: () => query, or: (value: string) => { filters = value; return query; }, order: (column: string, options?: { ascending: boolean }) => { orders.push([column, options?.ascending ?? true]); return query; }, range: (from: number, to: number) => { bounds = [from, to]; return Promise.resolve(result()); }, eq: (key: string, value: unknown) => { equalities.push([key, value]); return query; },
       insert: (body: unknown) => { writes++; writing = true; saved = body; return query; },
       update: (body: unknown) => { writes++; writing = true; saved = body; return query; },
       single: async () => result(), maybeSingle: async () => ({ ...result(), data: missing ? null : { ...record, ...(writing ? saved as object : {}), account_id: id } }),
@@ -153,4 +154,10 @@ test('patient edits require a version and stale database writes return conflict'
   const { version: omitted, ...withoutVersion } = details;
   assert.equal((await selfRequest('PATCH', withoutVersion)).status, 400);
   conflict = false; role = 'coordinator';
+});
+
+test('patient filters validate and constrain the query before pagination', async () => {
+  assert.equal((await request('?status=inactive&mobility=wheelchair')).status, 200);
+  assert.deepEqual(equalities, [['status', 'inactive'], ['mobility', 'wheelchair']]);
+  for (const query of ['status=unknown', 'mobility=unknown', 'status=active&status=inactive']) assert.equal((await request(`?${query}`)).status, 400);
 });

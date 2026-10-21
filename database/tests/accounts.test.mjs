@@ -704,6 +704,11 @@ test('schedule search paginates all matching records and retains replacement con
       from generate_series(date '2027-01-01',date '2027-01-01'+1004,interval '1 day') d`,[ids.patient,ids.centre]);
     const list=async (term='',page=1)=>(await local.query('select public.list_treatments($1,$2) as result',[term,page])).rows[0].result;
     assert.equal((await list()).total,1005);
+    const descending = (await local.query("select public.list_treatments('',1,'single','all','effective_from','desc') as result")).rows[0].result;
+    assert.equal(descending.total,1005);
+    assert.equal(descending.schedules[0].effective_from,'2029-10-01');
+    const recurringOnly = (await local.query("select public.list_treatments('',1,'recurring','all','effective_from','asc') as result")).rows[0].result;
+    assert.equal(recurringOnly.total,0);
     const last=await list('',41);
     assert.equal(last.schedules.length,5);
     const needle=last.schedules.at(-1).effective_from;
@@ -716,6 +721,14 @@ test('schedule search paginates all matching records and retains replacement con
     const filtered=await list(' recurring ');
     assert.equal(filtered.total,1);
     assert.equal(filtered.context.length,2);
+    const typed = async (kind, centre = 'all', sort = 'effective_from', order = 'asc') => (await local.query('select public.list_treatments($1,$2,$3,$4,$5,$6) as result', ['', 1, kind, centre, sort, order])).rows[0].result;
+    assert.equal((await typed('recurring', ids.centre)).total, 1);
+    assert.equal((await typed('recurring', ids.centre)).context.length, 2);
+    assert.equal((await typed('single')).total, 1005);
+    assert.equal((await typed('rescheduled')).total, 1);
+    assert.equal((await typed('all', '00000000-0000-4000-8000-000000000000')).total, 0);
+    for (const args of [['bad'], ['all', 'bad'], ['all', 'all', 'bad'], ['all', 'all', 'kind', 'bad']]) await assert.rejects(typed(...args), /Invalid/);
+
     const stale=series.version;
     await assert.rejects(local.query('select public.update_my_treatment($1,$2::jsonb,$3)',[series.id,JSON.stringify({start_time:'10:00',end_time:'11:00'}),stale]),/changed/i);
     await local.query("select set_config('request.jwt.claim.sub',$1,false)",[coordinator]);
@@ -724,6 +737,7 @@ test('schedule search paginates all matching records and retains replacement con
     await local.query("select set_config('request.jwt.claim.sub',$1,false)",[driver]);
     assert.equal((await list()).total,0);
     assert.equal((await list()).context.length,0);
+    assert.equal((await typed('all', 'all', 'patient_name', 'desc')).total, 0);
     await assert.rejects(list('',0),/Invalid/);
   } finally { await local.close(); }
 });
@@ -863,6 +877,16 @@ test('trip search precedes pagination and coordinator deletion preserves history
     const gen=async()=>(await own(coordinator,'select public.generate_treatment_trips($1,$2,$3,1) as result',[source.id,dates.first,dates.until]))[0].result;
     await gen();
     const list=async(who=coordinator,term='',direction='all')=>(await own(who,'select public.list_trips(1,$1,$2,$3,$4,$5) as result',[dates.first,dates.until,'all',term,direction]))[0].result;
+    const descending = (await own(coordinator, "select public.list_trips(1,$1,$2,'all','','all','treatment_start','desc') as result", [dates.first,dates.until]))[0].result;
+    assert.equal(descending.trips[0].session_date,dates.until);
+    assert.equal(descending.total,26);
+    assert.equal(descending.trips.length,25);
+    const lastPage = (await own(coordinator, "select public.list_trips(2,$1,$2,'all','','all','treatment_start','desc') as result", [dates.first,dates.until]))[0].result;
+    assert.equal(lastPage.trips.length, 1);
+    assert.equal(new Set([...descending.trips, ...lastPage.trips].map(trip => trip.id)).size, 26);
+    for (const args of [['notes', 'asc'], ['status', 'bad']]) await assert.rejects(own(coordinator, "select public.list_trips(1,$1,$2,'all','','all',$3,$4)", [dates.first, dates.until, ...args]), /Invalid/);
+    await assert.rejects(own(driver, "select public.list_trips(1,$1,$2,'all','','all','patient_name','desc')", [dates.first, dates.until]), /denied/);
+
     assert.equal((await list(coordinator,' RETURN ')).total,13);
     assert.equal((await list(coordinator,'09:00')).total,26);
     assert.equal((await list(coordinator,'Fixture street')).total,26);

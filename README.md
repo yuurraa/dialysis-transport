@@ -36,6 +36,30 @@ Sign-in uses Google through Supabase Auth; enable the Google provider and apply 
 | `npm run dev:backend` | Run backend only |
 | `npm run build` | Build frontend and backend |
 | `npm test` | Run database, API and browser tests |
+| `npm run test --workspace frontend` | Run the Playwright browser suite |
+| `npm run test --workspace frontend -- tests/schedules.spec.ts` | Run one browser feature suite |
+| `npm run check --workspace frontend` | Check TypeScript without running tests |
+
+## Testing scope
+
+The Playwright suite contains 45 browser tests grouped by feature in `frontend/tests/`:
+
+| Spec | Tests | Scope |
+| --- | ---: | --- |
+| `auth.spec.ts` | 8 | Google PKCE/callback, logout, rejected/expired sessions, inactive accounts and sign-out races |
+| `registration.spec.ts` | 4 | Patient signup, validation/Back, cancellation, retry and an already-registered Google identity |
+| `dashboard.spec.ts` | 8 | Protected routes, role navigation, mobile menu focus/dismissal and account details |
+| `patients.spec.ts` | 4 | Permitted coordinator edits, search/sorting/pagination, failures and version conflicts |
+| `account.spec.ts` | 3 | In-place patient editing, cancellation, save failures, inactive profiles and version conflicts |
+| `schedules.spec.ts` | 9 | Recurring/single sessions, rescheduling, deletion, search, load/save failures and stale versions |
+| `trips.spec.ts` | 6 | Role-specific journeys, pickup requirements, filters, generation and deletion recovery |
+| `lists.spec.ts` | 3 | Search/filter/sort wiring across the three lists and mobile toolbar usability |
+
+`support/fixtures.ts` holds shared synthetic session data, existing interaction helpers and explicit API/Auth mocks. Feature-specific responses stay in the specs. Browser tests exercise React and its requests against mocked services; they do not establish server authorisation or database integrity.
+
+Detailed input/date validation and role restrictions belong in `backend/test/`. Ownership/RLS, overlap rules, atomic rescheduling/deletion, concurrency and idempotent trip generation remain covered in `database/tests/`. Representative phone interactions remain in feature tests; exhaustive viewport/theme matrices, pixel-level styling checks and bulk screenshot capture are outside this suite's scope. Add browser coverage for new operational features when they are implemented, rather than testing placeholder screens.
+
+Tests are run manually by the user. Agents may update tests but must not execute them without an explicit request. The TypeScript check is static and does not run browser tests.
 
 ## Project structure
 

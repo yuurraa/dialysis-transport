@@ -1,5 +1,5 @@
 import { Dropdown } from '../components/Dropdown';
-import { InfoButton, Overlay, PageHeading } from '../components/DashboardUI';
+import { InfoButton, Overlay, PageHeading, ListToolbar, ChoiceGroup, SortOverlay, ListError, ScheduleActionIcon, sortSummary } from '../components/DashboardUI';
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { ApiError, apiGet, apiRequest } from '../lib/api';
 import { addDays, singaporeToday } from './TripsPage';
@@ -9,6 +9,7 @@ interface Details { kind: 'recurring' | 'single'; centre_id: string; days: numbe
 interface Schedule extends Omit<Details, 'kind'> { kind?: 'recurring' | 'single'; id: string; version: number; patient_id: string; patients: { full_name: string }; replaces_schedule_id?: string | null; replaces_date?: string | null }
 interface Data { centres: Centre[]; schedules: Schedule[]; context: Schedule[]; total: number; page: number; pageSize: number }
 const scheduleIcon = <span className="dashboard-data-status-icon" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="5" width="16" height="16" rx="3" /><path d="M8 3v4m8-4v4M4 11h16m-10 4 4 4m0-4-4 4" /></svg></span>;
+const scheduleSortOptions = [{ value: 'effective_from', label: 'Start date', ascending: 'Earliest first', descending: 'Latest first' }, { value: 'start_time', label: 'Treatment time', ascending: 'Earliest time first', descending: 'Latest time first' }, { value: 'patient_name', label: 'Patient name' }, { value: 'centre_name', label: 'Dialysis centre' }, { value: 'kind', label: 'Schedule type', ascending: 'Recurring → Rescheduled → Single Session', descending: 'Single Session → Rescheduled → Recurring' }];
 const weekdays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 const blank = (): Details => ({ kind: 'recurring', centre_id: '', days: [], start_time: '', end_time: '', effective_from: '', effective_to: '' });
 const dayFor = (date: string) => new Date(`${date}T00:00:00Z`).getUTCDay() || 7;
@@ -29,9 +30,11 @@ export default function TreatmentSchedules({ coordinator, notify, onSessionExpir
   const [generating, setGenerating] = useState(false);
   const [generationError, setGenerationError] = useState('');
   const [generationConflict, setGenerationConflict] = useState(false);
-  const [filters, setFilters] = useState({page: 1, search: ''});
+  const [filters, setFilters] = useState({ page: 1, search: '', kind: 'all', centre: 'all', sort: 'effective_from', order: 'asc' });
+  const [sorting, setSorting] = useState(false);
+  const [filterDraft, setFilterDraft] = useState<{ kind: string; centre: string } | null>(null);
   useEffect(() => {
-    const timer = window.setTimeout(() => setFilters(current => current.search === search.trim() ? current : {page:1,search:search.trim()}),300);
+    const timer = window.setTimeout(() => setFilters(current => current.search === search.trim() ? current : {...current,page:1,search:search.trim()}),300);
     return () => window.clearTimeout(timer);
   },[search]);
   const searchTerm = filters.search;
@@ -95,7 +98,7 @@ export default function TreatmentSchedules({ coordinator, notify, onSessionExpir
   useEffect(() => {
     let active = true;
     setLoading(true); setError('');
-    apiGet<Data>(`/schedules?${new URLSearchParams({page:String(filters.page),search:filters.search})}`).then(result => { if (active) setData(result); })
+    apiGet<Data>(`/schedules?${new URLSearchParams({...filters,page:String(filters.page)})}`).then(result => { if (active) setData(result); })
       .catch(reason => { if (active) { if (reason instanceof ApiError && reason.status === 401) onSessionExpired(); setError('Treatment schedules could not be loaded. Please try again.'); } })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
@@ -163,7 +166,7 @@ export default function TreatmentSchedules({ coordinator, notify, onSessionExpir
     if (!generatingSchedule || generating) return;
     setGenerating(true);
     try {
-      const result = await apiGet<Data>(`/schedules?${new URLSearchParams({ page: String(filters.page), search: filters.search })}`);
+      const result = await apiGet<Data>(`/schedules?${new URLSearchParams({ ...filters, page: String(filters.page) })}`);
       if (!alive.current) return;
       setData(result);
       const latest = [...result.schedules, ...(result.context ?? [])].find(schedule => schedule.id === generatingSchedule.id);
@@ -195,19 +198,34 @@ export default function TreatmentSchedules({ coordinator, notify, onSessionExpir
   }
   return <section className="dashboard-trips treatment-panel page-panel" aria-labelledby="treatment-title" aria-busy={loading}>
     <PageHeading id="treatment-title" title={coordinator ? "Treatment Schedule List" : "Treatment Schedules"} eyebrow={coordinator ? "Schedule Management" : "Treatment planning"}
-      actions={<><label className="patient-search"><svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 5 5" /></svg><input type="search" aria-label="Search treatment schedules" placeholder={coordinator ? "Patient or schedule details" : "Centre, day, date or type"} title={coordinator ? "Search by patient name, ID, centre, day, date or schedule type" : "Search by centre, day, date or schedule type"} maxLength={100} value={search} onChange={event => setSearch(event.target.value)} /></label>{!coordinator && <button ref={addButton} className="patient-primary" type="button" disabled={loading || !data?.centres.length} onClick={() => open()}>Add Schedule</button>}</>} />
+      actions={<><ListToolbar search={search} onSearch={setSearch} label="Search treatment schedules" placeholder={coordinator ? 'Patient or schedule details' : 'Centre, day, date or type'} filterCount={Number(filters.kind !== 'all') + Number(filters.centre !== 'all')} onFilter={() => setFilterDraft({ kind: filters.kind, centre: filters.centre })} onSort={() => setSorting(true)} sortLabel={sortSummary(scheduleSortOptions, filters.sort, filters.order)} />{!coordinator && <button ref={addButton} className="patient-primary schedule-icon-action" type="button" aria-label="Add Schedule" title="Add Schedule" disabled={loading || !data?.centres.length} onClick={() => open()}><ScheduleActionIcon action="add" /></button>}</>} />
     {loading ? <div className="account-loading" role="status"><span className="account-spinner" aria-hidden="true" /><span>Loading...</span></div> : <>
-      {error && !draft ? <div className="dashboard-data-status patients-status">{scheduleIcon}<div role="alert"><h3>{error}</h3><p>Schedule information is currently unavailable.</p></div><button type="button" onClick={() => setReload(value => value+1)}>Try again</button></div> : <>
+      {error && !draft ? <ListError title="Schedules could not be loaded" message="Please try again to load your treatment schedules." onRetry={() => setReload(value => value+1)} /> : <>
         {!data?.centres.length && <div className="dashboard-data-status patients-status" role="status">{scheduleIcon}<div><h3>No dialysis centres are available.</h3><p>{coordinator ? 'The dialysis centre directory has not been loaded yet.' : 'Contact your Transport Coordinator.'}</p></div></div>}
-        {(data?.total ?? data?.schedules.length) === 0 ? (data?.centres.length ?? 0) > 0 && <div className="dashboard-data-status patients-status" role="status">{scheduleIcon}<div><h3>{searchTerm ? 'No matching schedules.' : 'No treatment schedules yet.'}</h3><p>{searchTerm ? 'Try another search.' : coordinator ? 'Patient treatment schedules will appear here once submitted.' : 'Add your treatment schedule to share your dialysis requirements.'}</p></div></div> : searchTerm && visibleSchedules.length === 0 ? <div className="dashboard-data-status patients-status" role="status">{scheduleIcon}<div><h3>No matching schedules.</h3><p>{coordinator ? 'Try another patient name, ID, centre, day, date or schedule type.' : 'Try another centre, day, date or schedule type.'}</p></div></div> : <div className="treatment-records panel-scroll" tabIndex={0} role="region" aria-label="Treatment schedules">{visibleSchedules.map((schedule, index) => <article className="treatment-record" key={schedule.id}>
-          <div className="treatment-summary"><div className="treatment-identity"><p>{schedule.patients.full_name}</p>{coordinator && <p className="treatment-patient-id"><span className="treatment-identity-separator" aria-hidden="true">·</span>Patient ID: {schedule.patient_id}</p>}<p className="treatment-kind">{schedule.replaces_schedule_id ? 'Rescheduled Session' : schedule.kind === 'single' ? 'Single Session' : 'Recurring'}</p></div><div className="treatment-session"><h2><span>{schedule.kind === 'single' ? formatDayDate(schedule.effective_from) : `Every ${schedule.days.map(day => weekdays[day-1]).join(', ')}`}</span><span className="treatment-time">{schedule.start_time.slice(0,5)}–{schedule.end_time.slice(0,5)}</span></h2>{schedule.kind !== 'single' && <p>From {formatDate(schedule.effective_from)} until {formatDate(schedule.effective_to)}</p>}{schedule.replaces_date && <p>Replaces {formatDate(schedule.replaces_date)}</p>}{replacements.has(schedule.id) && <button className="reschedule-summary" type="button" onClick={() => setHistorySchedule(schedule)}>{replacements.get(schedule.id)!.length} rescheduled {replacements.get(schedule.id)!.length === 1 ? 'session' : 'sessions'}</button>}</div><div className="treatment-location"><span>Dialysis centre</span><p>{data?.centres.find(c => c.id === schedule.centre_id)?.name}</p></div></div>
-          <div className="patient-actions schedule-record-actions"><InfoButton label="View schedule details" onClick={() => setViewingSchedule(schedule)} />{coordinator ? <button className="schedule-generate" type="button" disabled={!schedule.version || !supportedDate(schedule.effective_from) || (schedule.kind === 'single' && schedule.effective_from < singaporeToday())} onClick={() => openGeneration(schedule)}>Generate Trips</button> : <button type="button" onClick={() => open(schedule)}>Edit Schedule</button>}</div>
+        {(data?.total ?? data?.schedules.length) === 0 ? (data?.centres.length ?? 0) > 0 && <div className="dashboard-data-status patients-status" role="status">{scheduleIcon}<div><h3>{searchTerm || filters.kind !== 'all' || filters.centre !== 'all' ? 'No matching schedules.' : 'No treatment schedules yet.'}</h3><p>{searchTerm || filters.kind !== 'all' || filters.centre !== 'all' ? 'Try another search or change the filters.' : coordinator ? 'Patient treatment schedules will appear here once submitted.' : 'Add your treatment schedule to share your dialysis requirements.'}</p></div></div> : searchTerm && visibleSchedules.length === 0 ? <div className="dashboard-data-status patients-status" role="status">{scheduleIcon}<div><h3>No matching schedules.</h3><p>{coordinator ? 'Try another patient name, ID, centre, day, date or schedule type.' : 'Try another centre, day, date or schedule type.'}</p></div></div> : <div className="treatment-records panel-scroll" tabIndex={0} role="region" aria-label="Treatment schedules">{visibleSchedules.map((schedule, index) => <article className="treatment-record" key={schedule.id}>
+          <div className="treatment-summary">
+            <div className="treatment-identity"><p>{schedule.patients.full_name}</p><p className={`treatment-kind treatment-kind-${schedule.replaces_schedule_id ? 'rescheduled' : schedule.kind ?? 'recurring'}`}>{schedule.replaces_schedule_id ? 'Rescheduled Session' : schedule.kind === 'single' ? 'Single Session' : 'Recurring'}</p></div>
+            <div className="treatment-session"><h2>{schedule.kind === 'single' ? formatDayDate(schedule.effective_from) : `Every ${schedule.days.map(day => weekdays[day-1]).join(', ')}`}</h2><p className="treatment-time">{schedule.start_time.slice(0,5)}–{schedule.end_time.slice(0,5)}</p>
+              {schedule.kind !== 'single' && <p className="treatment-date-range">{formatDate(schedule.effective_from)} – {formatDate(schedule.effective_to)}</p>}
+              {schedule.replaces_date && <p className="treatment-date-range">Replaces {formatDate(schedule.replaces_date)}</p>}
+              {replacements.has(schedule.id) && <button className="reschedule-summary" type="button" onClick={() => setHistorySchedule(schedule)}>{replacements.get(schedule.id)!.length} rescheduled {replacements.get(schedule.id)!.length === 1 ? 'session' : 'sessions'}</button>}
+            </div>
+            <div className="treatment-location"><span>Dialysis centre</span><p>{data?.centres.find(c => c.id === schedule.centre_id)?.name}</p></div>
+          </div>
+          <div className="schedule-record-info"><InfoButton label="View schedule details" onClick={() => setViewingSchedule(schedule)} /></div>
+          <div className="patient-actions schedule-record-actions">{coordinator ? <button className="patient-primary schedule-generate schedule-icon-action" type="button" aria-label="Generate Trips" title="Generate Trips" disabled={!schedule.version || !supportedDate(schedule.effective_from) || (schedule.kind === 'single' && schedule.effective_from < singaporeToday())} onClick={() => openGeneration(schedule)}><ScheduleActionIcon action="generate" /></button> : <button className="patient-primary schedule-icon-action" type="button" aria-label="Edit Schedule" title="Edit Schedule" onClick={() => open(schedule)}><ScheduleActionIcon action="edit" /></button>}</div>
           <span className="record-number" title="Row number">{((data?.page ?? filters.page) - 1) * (data?.pageSize ?? 25) + index + 1}</span>
         </article>)}</div>}
       </>}
     </>}
-    <div className="patients-pagination" aria-label="Schedule pages"><span>{data ? <>{data.total ?? visibleSchedules.length} {(data.total ?? visibleSchedules.length)===1 ? 'schedule' : 'schedules'} · Page {filters.page} of {Math.max(1,Math.ceil((data.total ?? visibleSchedules.length)/(data.pageSize ?? 25)))}</> : loading ? 'Loading...' : 'Schedule count unavailable'}</span><div className="patient-actions"><button type="button" aria-label="Previous" title="Previous page" disabled={loading || !!error || search.trim()!==filters.search || filters.page===1} onClick={() => setFilters(current => ({...current,page:current.page-1}))}>{'<'}</button><button type="button" aria-label="Next" title="Next page" disabled={loading || !!error || search.trim()!==filters.search || !data || filters.page*(data.pageSize ?? 25)>=(data.total ?? visibleSchedules.length)} onClick={() => setFilters(current => ({...current,page:current.page+1}))}>{'>'}</button></div></div>
-    {viewingSchedule && <Overlay title="Schedule details" description={viewingSchedule.patients.full_name} onClose={() => setViewingSchedule(null)} footer={<button type="button" onClick={() => setViewingSchedule(null)}>Close</button>}>
+    {(!error || !!draft) && <div className="patients-pagination" aria-label="Schedule pages"><span>{data ? <>{data.total ?? visibleSchedules.length} {(data.total ?? visibleSchedules.length)===1 ? 'schedule' : 'schedules'} · Page {filters.page} of {Math.max(1,Math.ceil((data.total ?? visibleSchedules.length)/(data.pageSize ?? 25)))}</> : loading ? 'Loading...' : 'Schedule count unavailable'}</span><div className="patient-actions"><button type="button" aria-label="Previous" title="Previous page" disabled={loading || !!error || search.trim()!==filters.search || filters.page===1} onClick={() => setFilters(current => ({...current,page:current.page-1}))}>{'<'}</button><button type="button" aria-label="Next" title="Next page" disabled={loading || !!error || search.trim()!==filters.search || !data || filters.page*(data.pageSize ?? 25)>=(data.total ?? visibleSchedules.length)} onClick={() => setFilters(current => ({...current,page:current.page+1}))}>{'>'}</button></div></div>}
+    {sorting && <SortOverlay sort={filters.sort} order={filters.order} options={scheduleSortOptions.filter(option => coordinator || option.value !== 'patient_name')} defaultSort="effective_from" defaultOrder="asc" onClose={() => setSorting(false)} onApply={(sort, order) => { setFilters(current => ({ ...current, page: 1, sort, order })); setSorting(false); }} />}
+    {filterDraft && <Overlay title="Schedule filters" className="list-options-dialog" onClose={() => setFilterDraft(null)} onSubmit={event => { event.preventDefault(); setFilters(current => ({ ...current, ...filterDraft, page: 1 })); setFilterDraft(null); }}
+      footer={<><button className="patient-primary" type="submit">Apply Filters</button><button type="button" onClick={() => setFilterDraft({ kind: 'all', centre: 'all' })}>Reset</button><button type="button" onClick={() => setFilterDraft(null)}>Cancel</button></>}>
+      <ChoiceGroup label="Schedule type" value={filterDraft.kind} options={[{ value: 'all', label: 'All types' }, { value: 'recurring', label: 'Recurring' }, { value: 'single', label: 'Single Session' }, { value: 'rescheduled', label: 'Rescheduled Session' }]} onChange={kind => setFilterDraft(current => current && ({ ...current, kind }))} />
+      <div className="patient-field"><label htmlFor="schedule-filter-centre">Dialysis centre</label><Dropdown id="schedule-filter-centre" label="Dialysis centre" value={filterDraft.centre} options={[{ value: 'all', label: 'All centres' }, ...(data?.centres ?? []).map(centre => ({ value: centre.id, label: centre.name }))]} onChange={centre => setFilterDraft(current => current && ({ ...current, centre }))} /></div>
+    </Overlay>}
+    {viewingSchedule && <Overlay title="Schedule details" description={viewingSchedule.patients.full_name} onClose={() => setViewingSchedule(null)}>
       <dl className="schedule-detail-fields">
         {coordinator && <div><dt>Patient ID</dt><dd>{viewingSchedule.patient_id}</dd></div>}
         <div><dt>Schedule</dt><dd>{viewingSchedule.kind === 'single' ? formatDayDate(viewingSchedule.effective_from) : `Every ${viewingSchedule.days.map(day => weekdays[day - 1]).join(', ')}`}</dd></div>
@@ -264,7 +282,7 @@ export default function TreatmentSchedules({ coordinator, notify, onSessionExpir
 
       </>}
     </Overlay>}
-    {historySchedule && <Overlay title="Rescheduled sessions" description={`Every ${historySchedule.days.map(day => weekdays[day-1]).join(', ')}`} onClose={() => setHistorySchedule(null)} footer={<button type="button" onClick={() => setHistorySchedule(null)}>Close</button>}>
+    {historySchedule && <Overlay title="Rescheduled sessions" description={`Every ${historySchedule.days.map(day => weekdays[day-1]).join(', ')}`} onClose={() => setHistorySchedule(null)}>
       <ul className="reschedule-history">{(replacements.get(historySchedule.id) ?? []).map(session => <li key={session.id}><dl><div><dt>Original session</dt><dd>{session.replaces_date && formatDayDate(session.replaces_date)}</dd></div><div><dt>Rescheduled to</dt><dd>{formatDayDate(session.effective_from)}<br />{session.start_time.slice(0,5)} - {session.end_time.slice(0,5)}</dd></div></dl><p>{data?.centres.find(centre => centre.id === session.centre_id)?.name}</p></li>)}</ul>
     </Overlay>}
   </section>;

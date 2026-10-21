@@ -18,8 +18,8 @@ export class ProfilesController {
 
   @Get('patients')
   listPatients(@Headers('authorization') header?: string, @Query('page') page?: string,
-    @Query('search') search?: string, @Query('sort') sort?: string, @Query('direction') direction?: string) {
-    return this.service.listPatients(header, page, search, sort, direction);
+    @Query('search') search?: string, @Query('sort') sort?: string, @Query('direction') direction?: string, @Query('status') status?: string, @Query('mobility') mobility?: string) {
+    return this.service.listPatients(header, page, search, sort, direction, status, mobility);
   }
 
   @Patch('patients/:id')

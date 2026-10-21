@@ -556,17 +556,26 @@ create trigger treatment_parent_version after insert or update on public.treatme
 
 -- Filter and paginate inside PostgreSQL before returning a single JSON result,
 -- avoiding PostgREST row caps. All reads retain the caller's RLS permissions.
-create or replace function private.list_treatments(search_text text default '', page_no integer default 1) returns jsonb
+drop function if exists public.list_treatments(text,integer);
+drop function if exists private.list_treatments(text,integer);
+create or replace function private.list_treatments(search_text text default '', page_no integer default 1, kind_filter text default 'all', centre_filter text default 'all', sort_by text default 'effective_from', sort_order text default 'asc') returns jsonb
 language plpgsql stable security invoker set search_path = '' as $$
 declare result jsonb;
 begin
   if page_no is null or page_no<1 or page_no>1000000 or search_text is null or length(search_text)>100
-    or search_text ~ '[[:cntrl:]]' then raise exception 'Invalid schedule search.' using errcode='22023'; end if;
+    or search_text ~ '[[:cntrl:]]' or kind_filter is null or kind_filter not in ('all','recurring','single','rescheduled')
+    or centre_filter is null or (centre_filter<>'all' and centre_filter !~* '^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$')
+    or sort_by is null or sort_by not in ('effective_from','start_time','patient_name','centre_name','kind')
+    or sort_order is null or sort_order not in ('asc','desc') then raise exception 'Invalid schedule search.' using errcode='22023'; end if;
   with visible as materialized (
     select s.*,jsonb_build_object('full_name',p.full_name) as patients,c.name as centre_name
     from public.treatment_schedules s join public.patients p on p.id=s.patient_id join public.dialysis_centres c on c.id=s.centre_id
   ), matched as materialized (
-    select * from visible s where btrim(search_text)='' or exists (
+    select * from visible s where (kind_filter='all' or (kind_filter='recurring' and s.kind='recurring')
+      or (kind_filter='single' and s.kind='single' and s.replaces_schedule_id is null)
+      or (kind_filter='rescheduled' and s.replaces_schedule_id is not null))
+      and (centre_filter='all' or s.centre_id::text=centre_filter)
+      and (btrim(search_text)='' or exists (
       select 1 from unnest(array[
         case when private.is_coordinator() then s.patients->>'full_name' else '' end,
         case when private.is_coordinator() then s.patient_id::text else '' end,
@@ -574,22 +583,27 @@ begin
         s.effective_from::text,s.effective_to::text,to_char(s.effective_from,'FMDD Mon YYYY'),to_char(s.effective_to,'FMDD Mon YYYY'),
         case when s.kind='single' then 'Single Session' else 'Recurring' end,
         case when s.replaces_schedule_id is not null then 'Rescheduled Session' else '' end
-      ]) field where strpos(lower(field),lower(btrim(search_text)))>0)
+      ]) field where strpos(lower(field),lower(btrim(search_text)))>0))
+  ), ordered as (
+    select matched.*, row_number() over (order by
+      case when sort_order='asc' then case sort_by when 'effective_from' then effective_from::text when 'start_time' then start_time::text when 'patient_name' then lower(patients->>'full_name') when 'centre_name' then lower(centre_name) when 'kind' then case when replaces_schedule_id is not null then 'rescheduled' else kind end end end asc,
+      case when sort_order='desc' then case sort_by when 'effective_from' then effective_from::text when 'start_time' then start_time::text when 'patient_name' then lower(patients->>'full_name') when 'centre_name' then lower(centre_name) when 'kind' then case when replaces_schedule_id is not null then 'rescheduled' else kind end end end desc,
+      effective_from,start_time,id) as list_order from matched
   ), page as materialized (
-    select * from matched order by effective_from,id limit 25 offset ((page_no::bigint-1)*25)
+    select * from ordered order by list_order limit 25 offset ((page_no::bigint-1)*25)
   ), parents as (select id from page union select replaces_schedule_id from page where replaces_schedule_id is not null)
   select jsonb_build_object(
     'centres',(select coalesce(jsonb_agg(to_jsonb(c) order by name,id),'[]'::jsonb) from public.dialysis_centres c),
-    'schedules',(select coalesce(jsonb_agg(to_jsonb(p)-'centre_name' order by effective_from,id),'[]'::jsonb) from page p),
+    'schedules',(select coalesce(jsonb_agg(to_jsonb(p)-'centre_name'-'list_order' order by list_order),'[]'::jsonb) from page p),
     'context',(select coalesce(jsonb_agg(to_jsonb(s)-'centre_name' order by effective_from,id),'[]'::jsonb) from visible s where s.id in (select id from parents) or s.replaces_schedule_id in (select id from parents)),
     'total',(select count(*) from matched),'page',page_no,'pageSize',25) into result;
   return result;
 end;
 $$;
-create or replace function public.list_treatments(search_text text default '', page_no integer default 1) returns jsonb
-language sql stable security invoker set search_path = '' as $$ select private.list_treatments(search_text,page_no); $$;
-revoke all on function private.list_treatments(text,integer), public.list_treatments(text,integer) from public,anon;
-grant execute on function private.list_treatments(text,integer), public.list_treatments(text,integer) to authenticated;
+create or replace function public.list_treatments(search_text text default '', page_no integer default 1, kind_filter text default 'all', centre_filter text default 'all', sort_by text default 'effective_from', sort_order text default 'asc') returns jsonb
+language sql stable security invoker set search_path = '' as $$ select private.list_treatments(search_text,page_no,kind_filter,centre_filter,sort_by,sort_order); $$;
+revoke all on function private.list_treatments(text,integer,text,text,text,text), public.list_treatments(text,integer,text,text,text,text) from public,anon;
+grant execute on function private.list_treatments(text,integer,text,text,text,text), public.list_treatments(text,integer,text,text,text,text) to authenticated;
 
 -- Operational journeys are created explicitly by a Coordinator. Treatment source
 -- UUIDs are retained as history even after a requirement is removed.
@@ -799,7 +813,9 @@ grant execute on function private.delete_trip(uuid,integer),public.delete_trip(u
 
 drop function if exists public.list_trips(integer,date,date,text);
 drop function if exists private.list_trips(integer,date,date,text);
-create or replace function private.list_trips(page_no integer,from_date date,until_date date,status_filter text default 'all',search_text text default '',direction_filter text default 'all') returns jsonb
+drop function if exists public.list_trips(integer,date,date,text,text,text);
+drop function if exists private.list_trips(integer,date,date,text,text,text);
+create or replace function private.list_trips(page_no integer,from_date date,until_date date,status_filter text default 'all',search_text text default '',direction_filter text default 'all',sort_by text default 'treatment_start',sort_order text default 'asc') returns jsonb
 language plpgsql stable security invoker set search_path = '' as $$
 declare result jsonb;
 begin
@@ -808,6 +824,8 @@ begin
     or from_date<date '0001-01-01' or until_date>date '9999-12-31' or until_date<from_date or until_date-from_date>89
     or status_filter is null or status_filter not in ('all','unfilled','at-risk','on-track','resolved')
     or direction_filter is null or direction_filter not in ('all','outbound','return')
+    or sort_by is null or sort_by not in ('treatment_start','patient_name','direction','status')
+    or sort_order is null or sort_order not in ('asc','desc')
     or search_text is null or length(search_text)>100 or search_text ~ '[[:cntrl:]]' then raise exception 'Invalid trip filters.' using errcode='22023'; end if;
   with windowed as materialized (select * from public.trips t where deleted_at is null and session_date between from_date and until_date
     and (direction_filter='all' or direction=direction_filter)
@@ -822,8 +840,14 @@ begin
       to_char(arrival_by at time zone 'Asia/Singapore','YYYY-MM-DD'),to_char(pickup_not_before at time zone 'Asia/Singapore','YYYY-MM-DD')
     ]) field where strpos(lower(field),lower(btrim(search_text)))>0))),
     filtered as materialized (select * from windowed where status_filter='all' or status=status_filter),
-    page as (select * from filtered order by session_date,treatment_start,case direction when 'outbound' then 0 else 1 end,id limit 25 offset ((page_no::bigint-1)*25))
-  select jsonb_build_object('trips',(select coalesce(jsonb_agg(to_jsonb(p) order by session_date,treatment_start,case direction when 'outbound' then 0 else 1 end,id),'[]'::jsonb) from page p),
+    ordered as (select filtered.*,row_number() over (order by
+      case when sort_by='treatment_start' and sort_order='asc' then treatment_start end asc,
+      case when sort_by='treatment_start' and sort_order='desc' then treatment_start end desc,
+      case when sort_order='asc' then case sort_by when 'patient_name' then lower(patient_name) when 'direction' then direction when 'status' then status end end asc,
+      case when sort_order='desc' then case sort_by when 'patient_name' then lower(patient_name) when 'direction' then direction when 'status' then status end end desc,
+      session_date,treatment_start,case direction when 'outbound' then 0 else 1 end,id) as list_order from filtered),
+    page as (select * from ordered order by list_order limit 25 offset ((page_no::bigint-1)*25))
+  select jsonb_build_object('trips',(select coalesce(jsonb_agg(to_jsonb(p)-'list_order' order by list_order),'[]'::jsonb) from page p),
     'total',(select count(*) from filtered),'page',page_no,'pageSize',25,
     'counts',jsonb_build_object('unfilled',(select count(*) from windowed where status='unfilled'),'at-risk',0,'on-track',0,'resolved',0),
     'next_trip',(select to_jsonb(t) from public.trips t where deleted_at is null and (
@@ -833,10 +857,10 @@ begin
   return result;
 end;
 $$;
-create or replace function public.list_trips(page_no integer,from_date date,until_date date,status_filter text default 'all',search_text text default '',direction_filter text default 'all') returns jsonb
-language sql stable security invoker set search_path = '' as $$ select private.list_trips(page_no,from_date,until_date,status_filter,search_text,direction_filter); $$;
-revoke all on function private.list_trips(integer,date,date,text,text,text),public.list_trips(integer,date,date,text,text,text) from public,anon;
-grant execute on function private.list_trips(integer,date,date,text,text,text),public.list_trips(integer,date,date,text,text,text) to authenticated;
+create or replace function public.list_trips(page_no integer,from_date date,until_date date,status_filter text default 'all',search_text text default '',direction_filter text default 'all',sort_by text default 'treatment_start',sort_order text default 'asc') returns jsonb
+language sql stable security invoker set search_path = '' as $$ select private.list_trips(page_no,from_date,until_date,status_filter,search_text,direction_filter,sort_by,sort_order); $$;
+revoke all on function private.list_trips(integer,date,date,text,text,text,text,text),public.list_trips(integer,date,date,text,text,text,text,text) from public,anon;
+grant execute on function private.list_trips(integer,date,date,text,text,text,text,text),public.list_trips(integer,date,date,text,text,text,text,text) to authenticated;
 
 notify pgrst, 'reload schema';
 commit;

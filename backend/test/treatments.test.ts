@@ -112,7 +112,7 @@ test('schedule reads validate filters and paginate search in the database before
     {verifyIdentity:async()=>({account:{role:'coordinator',status:'active'}})} as unknown as AuthService,
     {forUser:()=>({rpc:async(...args:unknown[])=>{calls.push(args);return {data:{schedules:[],total:26,page:2,pageSize:25},error:null};}})} as unknown as SupabaseService);
   assert.equal((await service.treatments('Bearer fixture','2','  Monday  ')).page,2);
-  assert.deepEqual(calls,[['list_treatments',{search_text:'Monday',page_no:2}]]);
+  assert.deepEqual(calls,[['list_treatments',{search_text:'Monday',page_no:2,kind_filter:'all',centre_filter:'all',sort_by:'effective_from',sort_order:'asc'}]]);
   for(const [page,search] of [['0',''],['1.5',''],['1000001',''],['1','x'.repeat(101)],['1','\n']]) await assert.rejects(service.treatments('Bearer fixture',page,search),/Invalid/);
 });
 
@@ -148,7 +148,7 @@ test('trip searches validate real dates, bounded windows and filters and default
     {forUser:()=>({rpc:async(...args:unknown[])=>{calls.push(args);return {data:{trips:[],total:0},error:null};}})} as unknown as SupabaseService);
   assert.deepEqual(await service.listTrips('Bearer fixture'),{trips:[],total:0});
   await service.listTrips('Bearer fixture','2','2028-02-29','2028-05-28','at-risk');
-  assert.deepEqual(calls,[['list_trips',{page_no:1,from_date:'2026-10-21',until_date:'2026-11-20',status_filter:'all',search_text:'',direction_filter:'all'}],['list_trips',{page_no:2,from_date:'2028-02-29',until_date:'2028-05-28',status_filter:'at-risk',search_text:'',direction_filter:'all'}]]);
+  assert.deepEqual(calls,[['list_trips',{page_no:1,from_date:'2026-10-21',until_date:'2026-11-20',status_filter:'all',search_text:'',direction_filter:'all',sort_by:'treatment_start',sort_order:'asc'}],['list_trips',{page_no:2,from_date:'2028-02-29',until_date:'2028-05-28',status_filter:'at-risk',search_text:'',direction_filter:'all',sort_by:'treatment_start',sort_order:'asc'}]]);
   for(const [page,from,until,status] of [
     ['0','2026-10-20','2026-10-20','all'],['1.5','2026-10-20','2026-10-20','all'],['1000001','2026-10-20','2026-10-20','all'],
     ['1','2026-02-30','2026-03-01','all'],['1','0000-01-01','0000-01-02','all'],['1','2026-10-21','2026-10-20','all'],
@@ -191,7 +191,7 @@ test('trip HTTP routes authenticate and map list filters and generation bodies i
     const response=await fetch(`${origin}/api/trips/generate`,{method:'POST',headers,body:JSON.stringify({schedule_id:details.centre_id,from_date:'2090-01-01',until_date:'2090-01-01',version:3})});
     assert.equal(response.status,201);assert.deepEqual(await response.json(),{created:2,total:2});
     assert.equal((await fetch(`${origin}/api/trips?from=2090-01-01&from=2090-01-02`,{headers})).status,400);
-    assert.deepEqual(calls,[['list_trips',{page_no:2,from_date:'2090-01-01',until_date:'2090-01-01',status_filter:'unfilled',search_text:'',direction_filter:'all'}],['generate_treatment_trips',{target:details.centre_id,from_date:'2090-01-01',until_date:'2090-01-01',expected_version:3}]]);
+    assert.deepEqual(calls,[['list_trips',{page_no:2,from_date:'2090-01-01',until_date:'2090-01-01',status_filter:'unfilled',search_text:'',direction_filter:'all',sort_by:'treatment_start',sort_order:'asc'}],['generate_treatment_trips',{target:details.centre_id,from_date:'2090-01-01',until_date:'2090-01-01',expected_version:3}]]);
   } finally {await app.close();}
 });
 
@@ -201,7 +201,7 @@ test('trip search and direction are validated and sent to the database before pa
     {verifyIdentity:async()=>({account:{role:'patient',status:'active'}})} as unknown as AuthService,
     {forUser:()=>({rpc:async(...args:unknown[])=>{calls.push(args);return {data:{trips:[],total:0},error:null};}})} as unknown as SupabaseService);
   await service.listTrips('Bearer fixture','2','2090-01-01','2090-01-02','all','  Fixture  ','return');
-  assert.deepEqual(calls,[['list_trips',{page_no:2,from_date:'2090-01-01',until_date:'2090-01-02',status_filter:'all',search_text:'Fixture',direction_filter:'return'}]]);
+  assert.deepEqual(calls,[['list_trips',{page_no:2,from_date:'2090-01-01',until_date:'2090-01-02',status_filter:'all',search_text:'Fixture',direction_filter:'return',sort_by:'treatment_start',sort_order:'asc'}]]);
   for(const [search,direction] of [['x'.repeat(101),'all'],['bad\nsearch','all'],['bad\u007fsearch','all'],['','other']]) {
     await assert.rejects(service.listTrips('Bearer fixture','1','2090-01-01','2090-01-02','all',search,direction),error=>(error as {status:number}).status===400);
   }
@@ -234,7 +234,7 @@ test('trip deletion HTTP route maps database failures and search filters without
   try {
     const origin=await app.getUrl();const headers={Authorization:'Bearer fixture','Content-Type':'application/json'};
     assert.equal((await fetch(`${origin}/api/trips?from=2090-01-01&until=2090-01-02&search=%20Fixture%20&direction=outbound`,{headers})).status,200);
-    assert.deepEqual(calls.shift(),['list_trips',{page_no:1,from_date:'2090-01-01',until_date:'2090-01-02',status_filter:'all',search_text:'Fixture',direction_filter:'outbound'}]);
+    assert.deepEqual(calls.shift(),['list_trips',{page_no:1,from_date:'2090-01-01',until_date:'2090-01-02',status_filter:'all',search_text:'Fixture',direction_filter:'outbound',sort_by:'treatment_start',sort_order:'asc'}]);
     for(const query of ['search=a&search=b','direction=outbound&direction=return']) assert.equal((await fetch(`${origin}/api/trips?${query}`,{headers})).status,400);
     const remove=()=>fetch(`${origin}/api/trips/${details.centre_id}`,{method:'DELETE',headers,body:JSON.stringify({version:2})});
     const success=await remove();assert.equal(success.status,200);assert.deepEqual(await success.json(),{id:details.centre_id});
@@ -242,4 +242,19 @@ test('trip deletion HTTP route maps database failures and search filters without
     for(const [errorCode,status] of [['42501',403],['40001',409],['22023',400],['23514',400],['22P02',400],['P0002',404],['unknown',503]] as const) {code=errorCode;assert.equal((await remove()).status,status);}
     role='patient';assert.equal((await remove()).status,403);
   } finally {await app.close();}
+});
+
+test('list services forward validated sort and filter choices', async () => {
+  const calls: unknown[] = [];
+  const auth = { verifyIdentity: async () => ({ account: { role: 'coordinator', status: 'active' } }) } as unknown as AuthService;
+  const database = { forUser: () => ({ rpc: async (...args: unknown[]) => { calls.push(args); return { data: {}, error: null }; } }) } as unknown as SupabaseService;
+  const schedules = new SchedulingService(auth, database);
+  const trips = new TripsService(auth, database);
+  await schedules.treatments('Bearer fixture', '2', '', 'recurring', 'all', 'start_time', 'desc');
+  assert.deepEqual(calls.pop(), ['list_treatments', { search_text: '', page_no: 2, kind_filter: 'recurring', centre_filter: 'all', sort_by: 'start_time', sort_order: 'desc' }]);
+  await trips.listTrips('Bearer fixture', '2', '2026-10-21', '2026-11-20', 'all', '', 'return', 'patient_name', 'desc');
+  assert.deepEqual(calls.pop(), ['list_trips', { page_no: 2, from_date: '2026-10-21', until_date: '2026-11-20', status_filter: 'all', search_text: '', direction_filter: 'return', sort_by: 'patient_name', sort_order: 'desc' }]);
+  await assert.rejects(schedules.treatments('Bearer fixture', '1', '', 'unknown'), /Invalid/);
+  await assert.rejects(schedules.treatments('Bearer fixture', '1', '', 'all', 'invalid'), /Invalid/);
+  await assert.rejects(trips.listTrips('Bearer fixture', '1', '2026-10-21', '2026-10-21', 'all', '', 'all', 'notes'), /Invalid/);
 });

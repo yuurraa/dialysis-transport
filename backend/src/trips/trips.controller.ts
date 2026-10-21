@@ -6,8 +6,8 @@ import { TripsService } from './trips.service';
 export class TripsController {
   constructor(@Inject(TripsService) private readonly service: TripsService) {}
   @Get()
-  list(@Headers('authorization') header?: string, @Query('page') page?: string, @Query('from') from?: string, @Query('until') until?: string, @Query('status') status?: string, @Query('search') search?: string, @Query('direction') direction?: string) {
-    return this.service.listTrips(header, page, from, until, status, search, direction);
+  list(@Headers('authorization') header?: string, @Query('page') page?: string, @Query('from') from?: string, @Query('until') until?: string, @Query('status') status?: string, @Query('search') search?: string, @Query('direction') direction?: string, @Query('sort') sort?: string, @Query('order') order?: string) {
+    return this.service.listTrips(header, page, from, until, status, search, direction, sort, order);
   }
 
   @Post('generate')

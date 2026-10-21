@@ -271,10 +271,6 @@ button:hover:not(:disabled) { filter: brightness(1.12); box-shadow: inset 0 0 0 
 .dashboard-data-status-icon { display: grid; place-items: center; flex-shrink: 0; color: var(--ui-accent); }
 .dashboard-data-status h3 { margin: 0 0 4px; font-size: .875rem; font-weight: 600; line-height: 1.5; }
 .dashboard-data-status p { margin: 0; color: var(--ui-muted); font-size: .875rem; line-height: 1.6; }
-.dashboard-account-fields { display: grid; gap: 20px; }
-.dashboard-account-fields > div { display: grid; grid-template-columns: 140px minmax(0, 1fr); gap: 16px; padding-top: 20px; border-top: 1px solid var(--ui-border); }
-.dashboard-account-fields dt { color: var(--ui-muted); font-size: .875rem; }
-.dashboard-account-fields dd { margin: 0; overflow-wrap: anywhere; }
 .dashboard-footer { margin: 0 var(--page-gutter); }
 @media (min-width: 761px) {
   .dashboard-page { height: 100dvh; min-height: 0; }
@@ -314,7 +310,6 @@ button:hover:not(:disabled) { filter: brightness(1.12); box-shadow: inset 0 0 0 
   .dashboard-metrics { grid-template-columns: repeat(auto-fit, minmax(min(100%, 8rem), 1fr)); gap: 12px; }
   .dashboard-metric { padding: 10px 16px; gap: 4px; }
   .dashboard-trips { padding: 20px; border-radius: 20px; }
-  .dashboard-account-fields > div { grid-template-columns: minmax(0, 1fr); gap: 6px; }
 }
 @media (prefers-reduced-motion: reduce) { .dashboard-page a { transition: none; } }
 
@@ -546,7 +541,6 @@ button:hover:not(:disabled) { filter: brightness(1.12); box-shadow: inset 0 0 0 
 .overlay-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-shrink: 0; padding: 24px; border-bottom: 1px solid var(--ui-border); }
 .overlay-header > div { min-width: 0; }
 .overlay-header h2 { margin: 0; font-size: 1.375rem; font-weight: 600; line-height: 1.3; letter-spacing: -.025em; }
-.dashboard-dialog .overlay-close { display: grid; place-items: center; width: 44px; flex-shrink: 0; padding: 10px; background: transparent; }
 .overlay-content { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; flex: 1; min-height: 0; overflow: hidden; }
 .overlay-body { grid-column: 1; grid-row: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding: 24px; }
 .overlay-footer.patient-actions { grid-column: 1; grid-row: 2; flex-shrink: 0; margin: 0; padding: 16px 24px; border-top: 1px solid var(--ui-border); background: var(--ui-surface); }
@@ -574,7 +568,7 @@ button:hover:not(:disabled) { filter: brightness(1.12); box-shadow: inset 0 0 0 
 /* Modal errors stay in the native dialog top layer, above its scrolling body. */
 .overlay-toast-region { grid-column: 1; grid-row: 1; align-self: end; z-index: 6; min-width: 0; margin: 12px 16px; display: flex; justify-content: center; pointer-events: none; }
 .error-toast { animation: none; max-width: 100%; border-color: var(--ui-danger); background: var(--ui-danger-surface); }
-.dashboard-dialog .error-toast button { flex: 0 0 44px; width: 44px; height: 44px; min-height: 44px; padding: 10px; border: 0; background: transparent; color: var(--ui-danger); }
+.dashboard-dialog .error-toast button { flex: 0 0 auto; width: auto; min-height: 44px; padding: 10px; border: 0; background: transparent; color: var(--ui-danger); }
 .occurrence-dates { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 @media (max-width: 760px) { .occurrence-dates { grid-template-columns: minmax(0, 1fr); } }
 
@@ -678,7 +672,7 @@ input::placeholder, textarea::placeholder { color: var(--ui-muted); opacity: 1; 
 .patient-form-fields input:not([type=checkbox]), .patient-form-fields textarea, .patient-form-fields select { border-radius: 8px; }
 .patient-form-fields label { font-size: .9375rem; }
 .patients-table th { background: var(--ui-raised); }
-.patients-table td { font-size: .9375rem; padding-block: 16px; }
+.patients-table td { font-size: .9375rem; padding-block: 10px; }
 .treatment-record { padding: 20px 0; margin: 0; border: 0; border-top: 1px solid var(--ui-border); border-radius: 0; background: transparent; gap: 24px; }
 .treatment-record:last-child { border-bottom: 1px solid var(--ui-border); }
 .treatment-record > div:first-child { flex: 1; }
@@ -823,7 +817,6 @@ input::placeholder, textarea::placeholder { color: var(--ui-muted); opacity: 1; 
 .patients-pagination { border-top: 0; margin-top: 12px; padding-top: 12px; }
 .patients-table th { background: transparent; border-top: 1px solid var(--ui-border); }
 .patients-table .patient-record-name { font-size: 1rem; font-weight: 600; }
-.patient-mobile-sort { display: none; }
 .treatment-record { gap: 20px; padding-block: 16px; }
 .treatment-record h2 { font-size: 1.125rem; }
 .treatment-record .treatment-patient-id { color: var(--ui-muted); }
@@ -868,11 +861,9 @@ input::placeholder, textarea::placeholder { color: var(--ui-muted); opacity: 1; 
   .trip-stop:first-child::after { content: ''; position: absolute; left: 3px; top: 16px; bottom: -32px; border-left: 1px solid var(--ui-border); }
   .treatment-record { padding-block: 16px; flex-direction: column; align-items: stretch; }
   .treatment-summary { grid-template-columns: minmax(0, 1fr); }
-  .patient-mobile-sort { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 20px; font-size: .875rem; color: var(--ui-muted); }
-  .patient-mobile-sort select { min-width: 0; max-width: 100%; min-height: 44px; padding: 8px; border: 1px solid var(--ui-control-border); border-radius: 5px; background: var(--ui-field); color: var(--ui-text); font: inherit; }
   .patients-table { display: block; min-width: 0; width: 100%; }
   .patients-table colgroup, .patients-table thead button { display: none; }
-  /* Preserve headers and the ID column in the accessibility tree; visible sorting uses the selector. */
+  /* Preserve headers and the ID column in the accessibility tree; visible sorting uses the Sort overlay. */
   .patients-table thead, .patients-table .patient-record-id { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; padding: 0; border: 0; }
   .patients-table tbody { display: block; }
   .patients-table tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; padding: 20px 0; border-top: 1px solid var(--ui-border); }
@@ -911,3 +902,129 @@ input::placeholder, textarea::placeholder { color: var(--ui-muted); opacity: 1; 
 .schedule-detail-fields dt { color: var(--ui-muted); font-size: .8125rem; margin-bottom: 4px; }
 .schedule-detail-fields dd { margin: 0; }
 .schedule-record-actions { align-items: center; flex-wrap: nowrap; }
+
+/* Shared list controls and semantic action colours. */
+.page-heading-actions:has(.list-toolbar) { flex: 0 1 32rem; min-width: 0; width: 100%; }
+.treatment-panel .page-heading-actions:has(.patient-primary) { flex-basis: 42rem; }
+.list-toolbar { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; width: 100%; }
+.list-toolbar .patient-search { flex: 1 1 0; width: 0; }
+.list-toolbar .patient-search input { width: 100%; min-height: 44px; }
+:is(.page-panel, .patients-panel, .treatment-panel) .list-tool-button { flex: 0 0 44px; width: 44px; padding: 0; position: relative; }
+.list-tool-button .trip-filter-badge { position: absolute; top: -5px; right: -5px; }
+.list-options-dialog { width: min(520px, calc(100% - 32px)); }
+.list-options-dialog .overlay-body { display: flex; flex-direction: column; gap: 24px; }
+.list-choice-group { min-width: 0; margin: 0; padding: 0; border: 0; }
+.list-choice-group legend { padding: 0; margin-bottom: 12px; font-weight: 600; }
+.list-choices { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.list-choice { display: flex; align-items: center; gap: 10px; min-height: 48px; padding: 12px; border: 1px solid var(--ui-control-border); border-radius: 0; color: var(--ui-text); background: var(--ui-field); cursor: pointer; font-size: .9375rem; }
+.list-choice:has(:checked) { border-color: var(--ui-accent); box-shadow: inset 0 0 0 1px var(--ui-accent); }
+.list-choice:has(:focus-visible) { outline: 3px solid var(--ui-focus); outline-offset: 2px; }
+.list-choice input { width: 18px; height: 18px; min-height: 18px; flex: 0 0 18px; margin: 0; }
+.list-choice-hint { margin: 0; color: var(--ui-muted); font-size: .875rem; line-height: 1.6; }
+.detail-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 12px; margin-block: 0 20px; }
+.trip-journey-details + .detail-actions { margin-block: 24px 0; padding-top: 20px; border-top: 1px solid var(--ui-border); }
+:is(.page-panel, .dashboard-dialog) button.patient-primary { background: var(--ui-accent); color: var(--ui-accent-text); border-color: var(--ui-accent); }
+:is(.page-panel, .dashboard-dialog) button.patient-primary:hover:not(:disabled) { background: var(--ui-accent-hover); color: var(--ui-accent-text); border-color: var(--ui-accent-hover); }
+:is(.page-panel, .dashboard-dialog) button.button-danger { color: var(--ui-danger); background: var(--ui-danger-surface); border-color: var(--ui-danger); }
+:is(.page-panel, .dashboard-dialog) button.button-danger:hover:not(:disabled) { color: var(--ui-danger); background: var(--ui-danger-surface); box-shadow: inset 0 0 0 1px var(--ui-danger); }
+
+/* Keep direction and status together, including when the date wraps. */
+.trip-record-title, .trip-detail-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.trip-record-title > span:first-child { flex-basis: 100%; }
+.trip-direction-status { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.trip-record-title .trip-status-badge, .trip-detail-heading .trip-status-badge { font-size: .75rem; padding: 2px 7px; line-height: 1.5; }
+.trip-record > .trip-route { padding-right: 48px; }
+.trip-record > .trip-stop-actions { position: absolute; right: 0; top: 50%; transform: translateY(-50%); }
+.trip-stop { grid-template-columns: minmax(0, 1fr); }
+
+/* Flat schedule rows retain the original separators with consistent content and actions. */
+.treatment-record { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; padding: 20px 64px 20px 40px; border: 0; border-top: 1px solid var(--ui-border); border-radius: 0; background: transparent; }
+.treatment-record:last-child { border-bottom: 1px solid var(--ui-border); }
+.treatment-record > .record-number { top: 24px; left: 0; width: 32px; }
+.treatment-summary { grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr) minmax(0, 1.3fr); gap: 20px; align-items: start; }
+.treatment-summary .treatment-identity { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; grid-column: auto; }
+.treatment-summary .treatment-identity > p:first-child { margin: 0; font-size: 1rem; line-height: 1.5; }
+.treatment-record h2 { font-size: 1rem; line-height: 1.5; margin: 0 0 4px; font-weight: 600; letter-spacing: 0; }
+.treatment-record p.treatment-time { margin: 0 0 6px; font-size: 1rem; line-height: 1.5; font-weight: 600; color: var(--ui-text); }
+.treatment-record p.treatment-date-range { margin: 0; font-size: .8125rem; line-height: 1.6; color: var(--ui-muted); }
+.treatment-location > span { display: block; margin-bottom: 4px; font-size: .8125rem; color: var(--ui-muted); }
+.treatment-location p { margin: 0; font-size: .9375rem; line-height: 1.6; }
+.treatment-record p.treatment-kind { border: 1px solid currentColor; border-radius: 5px; padding: 3px 8px; font-size: .75rem; font-weight: 600; line-height: 1.5; }
+.treatment-record p.treatment-kind-recurring { background: var(--ui-info-surface); color: var(--ui-info); }
+.treatment-record p.treatment-kind-single { background: var(--ui-success-surface); color: var(--ui-success); }
+.treatment-record p.treatment-kind-rescheduled { background: var(--ui-warning-surface); color: var(--ui-warning); }
+.schedule-record-info { position: absolute; right: 0; top: 50%; transform: translateY(-50%); }
+.schedule-record-actions { align-self: center; justify-content: flex-end; }
+@media (min-width: 761px) and (max-width: 1200px) {
+  .treatment-record { grid-template-columns: minmax(0, 1fr); }
+  .schedule-record-actions { border-top: 1px solid var(--ui-border); padding-top: 12px; }
+}
+@media (max-width: 760px) {
+  .dashboard-header { position: sticky; top: 0; z-index: 30; background: var(--ui-canvas); }
+  /* Remove short containing boxes so the toolbar sticks for the entire list. */
+  .page-heading:has(.list-toolbar), .page-heading-actions:has(.list-toolbar) { display: contents; }
+  .page-heading:has(.list-toolbar) > div:first-child { margin-bottom: 12px; }
+  .list-toolbar { position: sticky; top: var(--list-header-height, 65px); z-index: 20; flex: none; margin-bottom: 16px; padding-block: 10px; background: var(--ui-canvas); border-bottom: 1px solid var(--ui-border); }
+  .page-heading-actions > .patient-primary { align-self: flex-start; margin-bottom: 16px; }
+  .trip-record-heading { padding-right: 48px; }
+  .trip-record > .trip-stop-actions { top: 12px; transform: none; }
+  .trip-record > .trip-route { padding-right: 0; }
+  .trip-next-summary > .list-info-control { grid-row: 1; align-self: start; }
+  .treatment-record { grid-template-columns: minmax(0, 1fr); padding: 16px 0 16px 40px; gap: 16px; }
+  .treatment-record > .record-number { top: 20px; left: 0; width: 32px; }
+  .treatment-summary { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .treatment-summary .treatment-identity { padding-right: 38px; gap: 6px; }
+  .schedule-record-info { right: 0; top: 12px; }
+  .schedule-record-actions { padding-top: 12px; border-top: 1px solid var(--ui-border); }
+  .schedule-record-actions > button { width: auto; }
+  .list-options-dialog { width: 100%; }
+}
+@media (max-width: 360px) { .list-choices { grid-template-columns: minmax(0, 1fr); } }
+
+.patient-dialog .overlay-footer > button { min-width: 140px; }
+
+/* Compact icon actions and consistent, flat recovery states. */
+.treatment-panel button.schedule-icon-action { width: 44px; height: 44px; padding: 0; flex: 0 0 44px; }
+.treatment-panel .page-heading-actions:has(.schedule-icon-action) { flex-basis: 36rem; }
+.dashboard-drawer-close { min-height: 44px; padding: 8px 12px; color: var(--ui-text); border: 1px solid var(--ui-control-border); border-radius: var(--ui-control-radius); background: var(--ui-raised); }
+.list-error-state { display: flex; flex-direction: column; align-items: flex-start; gap: 16px; padding: 32px 0; margin-top: 20px; border-block: 1px solid var(--ui-border); }
+.list-error-icon { color: var(--ui-warning); display: inline-flex; }
+.list-error-state h3 { margin: 0 0 8px; font-size: 1.125rem; font-weight: 600; }
+.list-error-state p { margin: 0; max-width: 40rem; color: var(--ui-muted); line-height: 1.6; }
+@media (max-width: 760px) {
+  .patients-table tr { position: relative; grid-template-columns: 44px minmax(0, 1fr) 2ch; gap: 8px 12px; padding-block: 16px; }
+  .patients-table .patient-record-action { grid-column: 1; grid-row: 1; align-self: start; }
+  .patients-table .patient-record-name { grid-column: 2; grid-row: 1; }
+  .patients-table .record-number { grid-column: 3; grid-row: 1; align-self: start; padding-top: 12px; }
+  .trip-record, .treatment-record { padding-left: 56px; }
+  .trip-record-heading { padding-right: 24px; }
+  .trip-record > .trip-stop-actions, .schedule-record-info { left: 0; right: auto; top: 12px; transform: none; }
+  .trip-record > .record-number, .treatment-record > .record-number { left: auto; right: 0; top: 24px; width: auto; }
+  .treatment-summary .treatment-identity { padding-right: 24px; }
+  .trip-next-summary:has(> .list-info-control) { grid-template-columns: 44px minmax(0, 1fr); }
+  .trip-next-summary:has(> .list-info-control) > h2 { grid-column: 2; grid-row: 1; }
+  .trip-next-summary:has(> .list-info-control) .trip-next-reading { grid-column: 2; grid-row: 2; }
+  .trip-next-summary > .list-info-control { grid-column: 1; grid-row: 1; align-self: start; justify-self: start; }
+  .list-error-state { padding-block: 24px; }
+}
+
+/* Profile editing stays in place; highlighted controls distinguish editable values. */
+.patient-profile-form { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.patient-profile-form .patient-readonly-fields { margin-bottom: 0; }
+.patient-profile-actions { flex-shrink: 0; }
+.patient-profile-actions .patient-actions > button { min-width: 140px; }
+.patient-editing .patient-form-fields :is(input, select, textarea):not(:disabled) {
+  background: color-mix(in srgb, var(--ui-accent) 10%, var(--ui-field));
+  border-color: var(--ui-accent);
+}
+.profile-save-error { display: flex; align-items: center; gap: 12px; margin-top: 20px; padding: 12px; border-left: 3px solid var(--ui-danger); background: var(--ui-danger-surface); color: var(--ui-danger); }
+.profile-save-error p { flex: 1; margin: 0; }
+@media (max-width: 760px) {
+  .patient-profile-form { flex: 0 0 auto; }
+  .profile-save-error { flex-wrap: wrap; }
+}
+
+/* Keep the shared 44px sorting controls within a shorter desktop table heading. */
+@media (min-width: 761px) {
+  .patients-table th { padding-block: 4px; }
+}
