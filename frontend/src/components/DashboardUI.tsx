@@ -1,4 +1,12 @@
-import { useId, useLayoutEffect, useRef, type FormEventHandler, type ReactNode } from 'react';
+import { useId, useLayoutEffect, useRef, type FormEventHandler, type ReactNode, type Ref } from 'react';
+
+export function InfoButton({ label, onClick, disabled, buttonRef }: {
+  label: string; onClick: () => void; disabled?: boolean; buttonRef?: Ref<HTMLButtonElement>;
+}) {
+  return <button className="list-info-control" type="button" aria-label={label} title={label} onClick={onClick} disabled={disabled} ref={buttonRef}>
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 11v6" /><circle cx="12" cy="7" r=".8" fill="currentColor" stroke="none" /></svg>
+  </button>;
+}
 
 /** Shared heading for dashboard pages and sections; actions wrap below on small screens. */
 export function PageHeading({ id, title, description, eyebrow, actions, level = 1 }: {

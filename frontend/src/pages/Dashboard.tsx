@@ -1,4 +1,5 @@
 import { PageHeading } from '../components/DashboardUI';
+import ThemeControl from '../components/ThemeControl';
 import TreatmentSchedules from './TreatmentSchedules';
 import { useCallback, useEffect, useRef, useState, type MouseEvent } from 'react';
 import PatientProfile from './PatientProfile';
@@ -117,6 +118,7 @@ export default function Dashboard({ account, avatarUrl, path, onNavigate, onSign
         <a className="dashboard-brand" href="/dashboard/trips" onClick={event => follow(event, '/dashboard/trips')} aria-label="Dialysis Transport dashboard">
           <span className="dashboard-brand-symbol" aria-hidden="true">DT</span><span>Dialysis Transport</span>
         </a>
+        <div className="dashboard-top-navigation">{navigation}</div>
         <div className="dashboard-mobile-heading">
           <button className="dashboard-menu-toggle" ref={menuButton} type="button" aria-label="Open navigation" aria-haspopup="dialog" aria-expanded={menuOpen} aria-controls="dashboard-drawer" onClick={() => { setMenuOpen(true); setDropdown(null); }}>
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" /></svg>
@@ -125,6 +127,7 @@ export default function Dashboard({ account, avatarUrl, path, onNavigate, onSign
         </div>
         <div className="dashboard-account-actions" ref={headerActions}>
           <time className="dashboard-header-clock" dateTime={now.toISOString()} aria-label={`${date}, ${time} Singapore time`}><span className="dashboard-date-full">{date}</span><span className="dashboard-date-compact" aria-hidden="true">{compactDate}</span><span className="dashboard-clock">{time}</span></time>
+          <ThemeControl />
           <button className="dashboard-icon-button" ref={notificationsButton} type="button" aria-label="Notifications" aria-expanded={dropdown === 'notifications'} aria-controls="dashboard-notifications" onClick={() => toggleDropdown('notifications')}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4" /></svg>
           </button>
@@ -152,17 +155,11 @@ export default function Dashboard({ account, avatarUrl, path, onNavigate, onSign
     </header>
 
     <div className="dashboard-workspace">
-      <aside className="dashboard-sidebar">
-        <p className="dashboard-eyebrow">Menu</p>
-        {navigation}
-      </aside>
     <main className="dashboard-main" id="dashboard-main" tabIndex={-1}>
       {schedulesPage ? <TreatmentSchedules coordinator={account.role === 'coordinator'} notify={notify} onSessionExpired={onSessionExpired} /> : patientsPage ? <PatientsPage notify={notify} onSessionExpired={onSessionExpired} /> : accountPage ? <>{!patient && <section className="dashboard-trips" aria-labelledby={account.role === 'coordinator' ? 'account-details-title' : 'role-profile-title'}><PageHeading id={account.role === 'coordinator' ? 'account-details-title' : 'role-profile-title'} title="Account Details" description={<span className="profile-id">{roleNames[account.role]} ID: {account.id}</span>} />{account.role === 'coordinator' && <dl className="dashboard-account-fields"><div><dt>Username</dt><dd>{account.display_name}</dd></div><div><dt>Email</dt><dd>{account.email}</dd></div><div><dt>Role</dt><dd>{roleNames[account.role]}</dd></div><div><dt>Status</dt><dd>Active</dd></div></dl>}</section>}{patient && <div className="patient-account-profile"><PatientProfile notify={notify} onSessionExpired={onSessionExpired} onProfileResolved={profileResolved} /></div>}</> : ['coordinator', 'patient'].includes(account.role) ? <TripsPage coordinator={account.role === 'coordinator'} onSessionExpired={onSessionExpired} /> : <div className="patient-home">
         <div className="patient-overview-top">
-          <section className="dashboard-trips patient-next-pickup" aria-labelledby="patient-pickup-title">
-            <PageHeading id="patient-pickup-title" title="Next pickup" eyebrow="Your next journey" level={2} actions={<span className="dashboard-access">Unavailable</span>} />
-            <div className="patient-pickup-time"><span className="patient-journey-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg></span><div><strong aria-label="Pickup time unavailable">-</strong><p>Pickup time</p></div></div>
-            <dl className="patient-trip-details">{['Dialysis centre', 'Driver', 'Vehicle', 'Return pickup'].map(label => <div key={label}><dt>{label}</dt><dd aria-label={`${label} unavailable`}>-</dd></div>)}</dl>
+          <section className="dashboard-trips patient-next-pickup trip-next-summary" aria-labelledby="patient-pickup-title">
+            <h2 id="patient-pickup-title">Next pickup</h2>
             <p className="patient-overview-note">Your pickup details are currently unavailable.</p>
           </section>
 
@@ -199,6 +196,5 @@ export default function Dashboard({ account, avatarUrl, path, onNavigate, onSign
       <p className="dashboard-eyebrow">Menu</p>
       {navigation}
     </dialog>
-    <footer className="dashboard-footer"><span>{`${roleNames[account.role]} Dashboard`}</span><span>2006-SCS1-X4</span></footer>
   </div>;
 }

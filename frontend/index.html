@@ -4,15 +4,22 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Dialysis Transport</title>
-    <link rel="preload" as="image" href="/images/transport-night.jpg" />
+    <meta name="theme-color" content="#F6F4EE" />
+    <script>
+      (() => {
+        let theme = 'light';
+        try {
+          const stored = localStorage.getItem('dialysis-colour-theme');
+          if (stored === 'dark') theme = 'dark';
+        } catch {}
+        document.documentElement.dataset.theme = theme;
+        document.querySelector('meta[name="theme-color"]').setAttribute('content', theme === 'dark' ? '#1C1A18' : '#F6F4EE');
+      })();
+    </script>
     <style>
-      html { background: #10252b; color-scheme: dark; }
+      html { background: #F6F4EE; color: #292721; color-scheme: light; }
+      html[data-theme=dark] { background: #1C1A18; color: #F4F0E7; color-scheme: dark; }
       body { margin: 0; min-height: 100svh; isolation: isolate; }
-      body::before {
-        content: ''; position: fixed; z-index: -1; inset: -64px; pointer-events: none;
-        background: linear-gradient(180deg, rgb(8 23 29 / 78%), rgb(8 23 29 / 58%) 55%, rgb(8 23 29 / 85%)), url('/images/transport-night.jpg') center 48% / cover;
-        filter: blur(32px); opacity: .35;
-      }
     </style>
   </head>
   <body>

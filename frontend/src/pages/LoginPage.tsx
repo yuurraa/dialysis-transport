@@ -238,7 +238,7 @@ export default function LoginPage() {
         ) : (
           <>
             <p className="entry-eyebrow">Your journey starts here</p>
-            <h2 className="entry-title">Welcome aboard.</h2>
+            <h2 className="entry-title">Welcome back.</h2>
             <div className="signin-control" tabIndex={!supabase || !backendReady ? 0 : undefined} aria-describedby={!supabase || !backendReady ? 'signin-unavailable' : undefined}>
             <button type="button" onClick={signIn} disabled={!supabase || !backendReady || Boolean(busy)} className="google-signin" aria-describedby={!supabase || !backendReady ? 'signin-unavailable' : undefined}>
               <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none">

@@ -59,6 +59,39 @@ async function openAccountDropdown(page: Page) {
   if (await button.getAttribute('aria-expanded') === 'false') await button.click();
 }
 
+async function expectHeaderContext(page: Page) {
+  if ((page.viewportSize()?.width ?? 1280) <= 760) {
+    await expect(page.locator('.dashboard-header-clock')).toBeHidden();
+    await expect(page.locator('.dashboard-mobile-title')).toBeVisible();
+  } else await expect(page.locator('.dashboard-header-clock')).toBeVisible();
+}
+
+async function setColourTheme(page: Page, mode: string) {
+  if (await page.locator('html').getAttribute('data-theme') !== mode) await page.getByRole('button', { name: 'Colour theme', exact: true }).click();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', mode);
+}
+
+async function expectReadableInterface(page: Page) {
+  const failures = await page.evaluate(() => {
+    const luminance = (rgb: number[]) => rgb.slice(0, 3).map(v => { const n = v / 255; return n <= .04045 ? n / 12.92 : ((n + .055) / 1.055) ** 2.4; }).reduce((sum, v, i) => sum + v * [.2126, .7152, .0722][i], 0);
+    const parse = (value: string) => value.match(/[\d.]+/g)!.map(Number);
+    return Array.from(document.querySelectorAll<HTMLElement>('.dashboard-main h1, .dashboard-main h2, .dashboard-main p, .dashboard-main button:not(:disabled), .dashboard-main label, .dashboard-header-clock, .entry-card h2, .entry-card p, .entry-card label, .entry-card button:not(:disabled), .overlay-body label, .overlay-body input, .overlay-footer button:not(:disabled)')).filter(el => el.getClientRects().length && getComputedStyle(el).visibility !== 'hidden').flatMap(el => {
+      const style = getComputedStyle(el);
+      let parent: HTMLElement | null = el;
+      let bg = [0, 0, 0, 0];
+      while (parent) {
+        bg = parse(getComputedStyle(parent).backgroundColor);
+        if (bg.length === 3 || bg[3] === 1) break;
+        parent = parent.parentElement;
+      }
+      const fg = luminance(parse(style.color)), background = luminance(bg);
+      const ratio = (Math.max(fg, background) + .05) / (Math.min(fg, background) + .05);
+      return ratio < 4.5 ? [`${el.tagName}.${el.className}: ${style.color} on ${bg.join(',')} = ${ratio.toFixed(2)}`] : [];
+    });
+  });
+  expect(failures).toEqual([]);
+}
+
 test.beforeEach(async ({ page }) => {
   await page.route('**/api/trips?*', route => route.fulfill({ status: 503, json: {} }));
   await page.route('**/api/profiles/patient', route => route.fulfill({ json: { patient: { id: session.user.id, full_name: 'Test Patient', phone: '+65 81234567', pickup_address: 'Test street', unit_no: '', postal_code: '560123', notes: '', mobility: 'ambulant', assistance_required: false, status: 'active' } } }));
@@ -68,6 +101,495 @@ test.beforeEach(async ({ page }) => {
   await page.route('https://auth.example.test/**', route => route.fulfill(route.request().method() === 'OPTIONS' ? { status: 204, headers: cors } : {
     status: 400, headers: cors, json: { code: 'unexpected_request', message: 'Fixture endpoint not configured.' },
   }));
+});
+
+test('timetable mobile patients expose identity, contact, actions and sorting without sideways scrolling', async ({ page }) => {
+  await seedSession(page);
+  await page.route('**/api/auth/me', route => route.fulfill({ json: { account: { ...activeAccount, role: 'coordinator' } } }));
+  await page.route('**/api/profiles/patients?*', route => route.fulfill({ json: { patients: [{ id: session.user.id, version: 1, full_name: 'Alex Fixture', phone: '+65 81234567', mobility: 'wheelchair', status: 'active' }], total: 1, page: 1, pageSize: 25 } }));
+  await page.setViewportSize({ width: 320, height: 568 });
+  await page.goto('/dashboard/patients');
+  const list = page.getByRole('region', { name: 'Patient records' });
+  await expect(list.getByRole('button', { name: 'View Alex Fixture' })).toBeVisible();
+  await expect(list.getByRole('columnheader', { name: 'Name', exact: true })).toHaveCount(1);
+  expect(await list.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
+  await expect(page.getByLabel('Sort patient records')).toBeVisible();
+  const request = page.waitForRequest(r => r.url().includes('/profiles/patients?') && r.url().includes('sort=full_name') && r.url().includes('direction=asc'));
+  await page.getByLabel('Sort patient records').selectOption('full_name:asc');
+  await request;
+  await list.getByRole('button', { name: 'View Alex Fixture' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Patient Details', exact: true });
+  await expect(dialog).toContainText(session.user.id);
+  const box = (await dialog.boundingBox())!;
+  expect(box.x).toBe(0); expect(box.y).toBe(0); expect(box.width).toBe(320);
+  await expect(dialog.getByRole('button', { name: 'Edit Patient', exact: true })).toBeInViewport();
+});
+
+test('timetable unavailable pickup keeps its heading readable on a small phone', async ({ page }) => {
+  await seedSession(page);
+  await page.route('**/api/auth/me', route => route.fulfill({ json: { account: { ...activeAccount, role: 'driver' } } }));
+  await page.setViewportSize({ width: 320, height: 568 });
+  await page.goto('/dashboard/trips');
+  const heading = page.getByRole('heading', { name: 'Next pickup', exact: true });
+  await expect(heading).toBeVisible();
+  expect((await heading.boundingBox())!.height).toBeLessThan(48);
+  expect((await page.locator('.trip-next-summary').boundingBox())!.height).toBeLessThan(180);
+});
+
+test('timetable mobile rides use page scrolling and preserve the page title', async ({ page }) => {
+  await seedSession(page);
+  await page.route('**/api/auth/me', route => route.fulfill({ json: { account: { ...activeAccount, role: 'patient' } } }));
+  const trips = Array.from({ length: 6 }, (_, i) => ({ ...fixtureTrip, id: `trip-${i}` }));
+  await page.route('**/api/trips?*', route => route.fulfill({ json: { trips, total: trips.length, page: 1, pageSize: 25, counts: { unfilled: 6 }, next_trip: fixtureTrip } }));
+  await page.setViewportSize({ width: 320, height: 568 });
+  await page.goto('/dashboard/trips');
+  await expect(page.locator('.trip-record')).toHaveCount(6);
+  await expect(page.locator('.dashboard-mobile-title')).toBeVisible();
+  await expect(page.locator('.dashboard-header-clock')).toBeHidden();
+  const list = page.getByRole('region', { name: 'Trip list' });
+  expect(await list.evaluate(el => el.scrollHeight <= el.clientHeight + 1)).toBe(true);
+  expect(await page.evaluate(() => document.documentElement.scrollHeight > innerHeight)).toBe(true);
+  await page.locator('.trip-record').last().getByRole('button', { name: 'View details' }).click();
+  await expect(page.getByRole('dialog', { name: 'Trip details', exact: true })).toBeVisible();
+});
+
+for (const kind of ['trips', 'schedules', 'patients']) test(`${kind} rows have left-side numbering across pages and filtered results`, async ({ page }) => {
+  await seedSession(page);
+  await page.route('**/api/auth/me', route => route.fulfill({ json: { account: { ...activeAccount, role: 'coordinator' } } }));
+  const endpoint = kind === 'patients' ? 'profiles/patients' : kind;
+  await page.route(`**/api/${endpoint}?*`, route => {
+    const query = new URL(route.request().url()).searchParams;
+    const currentPage = Number(query.get('page') ?? 1);
+    const count = currentPage === 1 ? 2 : 1;
+    const rows = Array.from({ length: count }, (_, i) => ({
+      ...fixtureTrip, id: `${kind}-${currentPage}-${i}`, full_name: 'Fixture Patient', phone: '81234567', mobility: 'ambulant', status: 'active',
+      patients: { full_name: 'Fixture Patient' }, kind: 'recurring', centre_id: 'centre', days: [1], start_time: '09:00', end_time: '13:00', effective_from: '2026-10-21', effective_to: '2026-12-31',
+    }));
+    return route.fulfill({ json: { [kind]: rows, total: 3, page: currentPage, pageSize: 2, next_trip: null, counts: {}, context: [], centres: [{ id: 'centre', name: 'Fixture Centre' }] } });
+  });
+  for (const width of [1440, 320]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto(`/dashboard/${kind}`);
+    const numbers = page.locator('.record-number');
+    await expect(numbers).toHaveText(['1', '2']);
+    const number = (await numbers.first().boundingBox())!;
+    const row = (await numbers.first().locator('..').boundingBox())!;
+    expect(number.x + number.width).toBeLessThan(row.x + row.width * .2);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.getByRole('button', { name: 'Next', exact: true }).click();
+    await expect(numbers).toHaveText(['3']);
+    await page.getByRole('searchbox').fill('Fixture');
+    await expect(numbers).toHaveText(['1', '2']);
+  }
+});
+
+for (const role of ['patient', 'coordinator']) test(`${role} schedule info opens read-only details without making rows clickable`, async ({ page }) => {
+  await seedSession(page);
+  await page.route('**/api/auth/me', route => route.fulfill({ json: { account: { ...activeAccount, role } } }));
+  await page.route('**/api/schedules?*', route => route.fulfill({ json: { centres: [{ id: 'centre', name: 'Fixture Centre', address: 'Fixture Street', postal_code: '560123' }], schedules: [{ id: 'schedule', version: 1, patient_id: session.user.id, patients: { full_name: 'Fixture Patient' }, kind: 'recurring', centre_id: 'centre', days: [1, 3], start_time: '09:00', end_time: '13:00', effective_from: '2026-10-21', effective_to: '2026-12-31' }], total: 1, page: 1, pageSize: 25 } }));
+  for (const width of [1440, 320]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto('/dashboard/schedules');
+    const row = page.locator('.treatment-record');
+    await row.getByText('Fixture Patient', { exact: true }).click();
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+    const info = row.getByRole('button', { name: 'View schedule details', exact: true });
+    await info.focus(); await info.press('Enter');
+    const details = page.getByRole('dialog', { name: 'Schedule details', exact: true });
+    await expect(details).toContainText('Fixture Patient');
+    await expect(details).toContainText('Monday, Wednesday');
+    await expect(details).toContainText('09:00');
+    await expect(details).toContainText('Fixture Centre');
+    await expect(details.getByRole('textbox')).toHaveCount(0);
+    await details.getByRole('button', { name: 'Close', exact: true }).click();
+    await expect(info).toBeFocused();
+    await expect(row.getByRole('button', { name: role === 'coordinator' ? 'Generate Trips' : 'Edit Schedule', exact: true })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  }
+});
+
+test('trip allocation badges remain distinct in both themes without pending pickup text', async ({ page }, testInfo) => {
+  await seedSession(page);
+  await page.route('**/api/auth/me', route => route.fulfill({ json: { account: { ...activeAccount, role: 'coordinator' } } }));
+  const statuses = ['unfilled', 'at-risk', 'on-track', 'resolved'];
+  const trips = statuses.map(status => ({ ...fixtureTrip, id: status, status }));
+  await page.route('**/api/trips?*', route => route.fulfill({ json: { trips, total: 4, page: 1, pageSize: 25, counts: {}, next_trip: null } }));
+  await page.goto('/dashboard/trips');
+  for (const theme of ['light', 'dark']) {
+    await setColourTheme(page, theme);
+    const badges = page.locator('.trip-record .trip-status-badge');
+    await expect(badges).toHaveText(['Unfilled', 'At-Risk', 'On-Track', 'Resolved']);
+    const colours = await badges.evaluateAll(elements => elements.map(el => ({ background: getComputedStyle(el).backgroundColor, colour: getComputedStyle(el).color })));
+    expect(new Set(colours.map(item => item.background)).size).toBe(4);
+    expect(colours.every(item => item.background !== 'rgba(0, 0, 0, 0)' && item.background !== item.colour)).toBe(true);
+    await expect(page.getByRole('region', { name: 'Trip list', exact: true })).not.toContainText('Pickup pending');
+    await page.screenshot({ path: testInfo.outputPath(`trip-badges-${theme}.png`) });
+  }
+  await page.locator('.trip-record').first().getByRole('button', { name: 'View details', exact: true }).click();
+  const details = page.getByRole('dialog', { name: 'Trip details', exact: true });
+  await expect(details.locator('.trip-status-badge')).toHaveText('Unfilled');
+  await expect(details).not.toContainText('Pickup pending');
+});
+
+test('trip stops group timing and compact actions with the relevant address', async ({ page }, testInfo) => {
+  await seedSession(page);
+  let role = 'coordinator';
+  let pickup: string | null = null;
+  await page.route('**/api/auth/me', route => route.fulfill({ json: { account: { ...activeAccount, role } } }));
+  const outbound = { ...fixtureTrip, destination: 'Fixture Dialysis Centre, Block 19 Example Street, Singapore 560123' };
+  const returning = { ...outbound, id: 'return-trip', direction: 'return', origin: outbound.destination, destination: outbound.origin, arrival_by: null, pickup_not_before: '2026-10-21T13:15:00+08:00' };
+  await page.route('**/api/trips?*', route => route.fulfill({ json: { trips: [outbound, returning], total: 2, page: 1, pageSize: 25, counts: { unfilled: 2 }, next_trip: { ...outbound, pickup_at: pickup } } }));
+  for (role of ['coordinator', 'patient']) {
+    for (const width of [1440, 768, 375, 320]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto('/dashboard/trips');
+      const first = page.locator('.trip-record').first();
+      const last = page.locator('.trip-record').last();
+      const destination = first.locator('.trip-stop').filter({ hasText: outbound.destination });
+      await expect(first).not.toContainText('Arrival by');
+      await expect(last).not.toContainText('Earliest return pickup');
+      await expect(first).not.toContainText(outbound.patient_id);
+      if (role === 'coordinator') await expect(first.locator('.trip-record-heading')).toContainText(outbound.patient_name);
+      const info = destination.getByRole('button', { name: 'View details', exact: true });
+      await expect(info).toBeVisible();
+      expect(await info.innerText()).toBe('');
+      const infoBox = (await info.boundingBox())!;
+      expect(infoBox.width).toBeGreaterThanOrEqual(44);
+      expect(infoBox.height).toBeGreaterThanOrEqual(44);
+      await expect(first.getByRole('button', { name: 'Delete Trip', exact: true })).toHaveCount(0);
+      if (width === 1440) {
+        expect((await first.boundingBox())!.height).toBeLessThan(150);
+        expect((await first.locator('.trip-record-heading').boundingBox())!.width).toBeLessThanOrEqual(250);
+      }
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      if (role === 'patient') {
+        await expect(page.locator('.trip-next-summary')).toContainText('Pickup time to be confirmed');
+        await expect(page.locator('.trip-next-summary')).not.toContainText('Pickup pending');
+      }
+      await info.click();
+      const details = page.getByRole('dialog', { name: 'Trip details', exact: true });
+      await expect(details).toContainText(outbound.patient_id);
+      await expect(details).toContainText('Arrival by');
+      await expect(details).toContainText('08:45');
+      await details.getByRole('button', { name: 'Close', exact: true }).click();
+      await expect(info).toBeFocused();
+      if ([1440, 375].includes(width)) await page.screenshot({ path: testInfo.outputPath(`trip-layout-${role}-${width}.png`), fullPage: true });
+    }
+  }
+  pickup = '2026-10-21T08:00:00+08:00';
+  await page.reload();
+  await expect(page.locator('.trip-next-summary')).toContainText('Pickup at 08:00');
+  await expect(page.locator('.trip-next-summary')).not.toContainText('to be confirmed');
+  await page.evaluate(() => { document.documentElement.style.fontSize = '32px'; });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.locator('.trip-record').first().getByRole('button', { name: 'View details', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: 'Trip details', exact: true })).toBeVisible();
+});
+
+test('patient info buttons open details while rows remain noninteractive', async ({ page }) => {
+  await seedSession(page);
+  await page.route('**/api/auth/me', route => route.fulfill({ json: { account: { ...activeAccount, role: 'coordinator' } } }));
+  await page.route('**/api/profiles/patients?*', route => route.fulfill({ json: { patients: [{ id: session.user.id, version: 1, full_name: 'Alex Fixture', phone: '+65 81234567', mobility: 'wheelchair', status: 'active' }], total: 1, page: 1, pageSize: 25 } }));
+  for (const width of [1440, 375]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto('/dashboard/patients');
+    const row = page.locator('.patients-table tbody tr');
+    const view = row.getByRole('button', { name: 'View Alex Fixture' });
+    const background = await row.evaluate(el => getComputedStyle(el).backgroundColor);
+    await row.hover();
+    expect(await row.evaluate(el => getComputedStyle(el).backgroundColor)).toBe(background);
+    await row.getByText('Alex Fixture', { exact: true }).click();
+    await expect(page.getByRole('dialog', { name: 'Patient Details', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('columnheader', { name: 'Actions', exact: true })).toHaveCount(0);
+    expect(await view.innerText()).toBe('');
+    await view.click();
+    const details = page.getByRole('dialog', { name: 'Patient Details', exact: true });
+    await expect(details).toBeVisible();
+    await details.getByRole('button', { name: 'Close', exact: true }).click();
+    await expect(view).toBeFocused();
+    await view.press('Enter');
+    await expect(details).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(view).toBeFocused();
+    await row.locator('.patient-record-name').evaluate(el => {
+      const range = document.createRange(); range.selectNodeContents(el);
+      const selection = window.getSelection()!; selection.removeAllRanges(); selection.addRange(range);
+      el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await expect(details).toHaveCount(0);
+    await page.evaluate(() => window.getSelection()?.removeAllRanges());
+  }
+  let release!: () => void;
+  const pendingResponse = new Promise<void>(resolve => { release = resolve; });
+  await page.route('**/api/profiles/patients?*', async route => { await pendingResponse; await route.fallback(); });
+  const request = page.waitForRequest(r => r.url().includes('/profiles/patients?') && r.url().includes('search=Alex'));
+  await page.getByRole('searchbox', { name: 'Search patients' }).fill('Alex');
+  await request;
+  const view = page.getByRole('button', { name: 'View Alex Fixture' });
+  try {
+    await expect(view).toBeDisabled();
+    await page.locator('.patient-record-name').click();
+    await expect(page.getByRole('dialog', { name: 'Patient Details', exact: true })).toHaveCount(0);
+  } finally { release(); }
+  await expect(view).toBeEnabled();
+});
+
+test('compact trip records group pickup with identity and distinguish deletion from details', async ({ page }, testInfo) => {
+  await seedSession(page);
+  await page.route('**/api/auth/me', route => route.fulfill({ json: { account: { ...activeAccount, role: 'coordinator' } } }));
+  const trip = { ...fixtureTrip, destination: 'Fixture Dialysis Centre, Block 19 Example Street, Singapore 560123' };
+  await page.route('**/api/trips?*', route => route.fulfill({ json: { trips: [trip], total: 1, page: 1, pageSize: 25, counts: { unfilled: 1 }, next_trip: trip } }));
+  for (const width of [1440, 375]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto('/dashboard/trips');
+    const record = page.locator('.trip-record').first();
+    await expect(record).toBeVisible();
+    await expect(record.locator('.trip-record-heading')).not.toContainText('Pickup pending');
+    await expect(record.locator('.trip-status-badge')).toHaveText('Unfilled');
+    await expect(record.locator('.trip-route')).not.toContainText('Pickup pending');
+    expect((await page.locator('.dashboard-header').boundingBox())!.height).toBeLessThanOrEqual(width > 760 ? 65 : 57);
+    if (width > 760) expect((await record.boundingBox())!.height).toBeLessThan(180);
+    await record.getByRole('button', { name: 'View details' }).click();
+    const details = page.getByRole('dialog', { name: 'Trip details', exact: true });
+    await expect(details).toContainText('Treatment');
+    const buttonStyle = (element: Element) => {
+      const css = getComputedStyle(element);
+      return [css.borderRadius, css.borderTopWidth, css.borderTopStyle, css.paddingTop, css.paddingRight, css.fontSize, css.fontWeight, css.lineHeight];
+    };
+    const close = details.getByRole('button', { name: 'Close', exact: true });
+    const remove = details.getByRole('button', { name: 'Delete Trip', exact: true });
+    const standard = await close.evaluate(buttonStyle);
+    expect(await remove.evaluate(buttonStyle)).toEqual(standard);
+    const closeBox = (await close.boundingBox())!;
+    const removeBox = (await remove.boundingBox())!;
+    expect(closeBox.x - removeBox.x - removeBox.width).toBeGreaterThanOrEqual(0);
+    expect(closeBox.x - removeBox.x - removeBox.width).toBeLessThanOrEqual(13);
+    expect(Math.abs(removeBox.y - closeBox.y)).toBeLessThan(1);
+    await page.screenshot({ path: testInfo.outputPath(`trip-details-${width}.png`) });
+    await details.getByRole('button', { name: 'Delete Trip', exact: true }).click();
+    const confirmation = page.getByRole('dialog', { name: 'Delete Trip', exact: true });
+    await expect(confirmation).toContainText(trip.patient_name);
+    await expect(confirmation).toContainText(trip.destination);
+    await expect(confirmation).toContainText('one journey only');
+    expect(await confirmation.getByRole('button', { name: 'Delete Trip', exact: true }).evaluate(buttonStyle)).toEqual(standard);
+    expect(await confirmation.getByRole('button', { name: 'Cancel', exact: true }).evaluate(buttonStyle)).toEqual(standard);
+
+    await expect(confirmation.locator('.trip-journey-details')).toHaveCount(0);
+    expect((await confirmation.boundingBox())!.height).toBeLessThan(600);
+    await page.screenshot({ path: testInfo.outputPath(`delete-confirmation-${width}.png`) });
+    if (width === 375) {
+      for (const [height, fontSize] of [[568, 16], [900, 32]]) {
+        await page.setViewportSize({ width: 320, height });
+        await page.evaluate(size => { document.documentElement.style.fontSize = `${size}px`; }, fontSize);
+        await expect(confirmation.getByRole('button', { name: 'Delete Trip', exact: true })).toBeInViewport();
+        await expect(confirmation.getByRole('button', { name: 'Cancel', exact: true })).toBeInViewport();
+        expect(await confirmation.locator('.overlay-body').evaluate(el => el.clientHeight > 44 && el.scrollWidth <= el.clientWidth)).toBe(true);
+      }
+      await page.evaluate(() => { document.documentElement.style.fontSize = '16px'; });
+      await page.setViewportSize({ width, height: 900 });
+    }
+    await confirmation.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await expect(details).toBeVisible();
+    await details.getByRole('button', { name: 'Close', exact: true }).click();
+    await page.screenshot({ path: testInfo.outputPath(`compact-trips-${width}.png`) });
+    await page.route('**/api/schedules?*', route => route.fulfill({ json: { centres: [{ id: 'centre', name: 'Fixture Centre' }], schedules: [{ id: 'schedule', version: 1, patient_id: trip.patient_id, patients: { full_name: trip.patient_name }, kind: 'recurring', centre_id: 'centre', days: [1], start_time: '09:00', end_time: '13:00', effective_from: '2026-10-21', effective_to: '2026-12-31' }], total: 1, page: 1, pageSize: 25 } }));
+    await page.goto('/dashboard/schedules');
+    const generate = page.getByRole('button', { name: 'Generate Trips', exact: true });
+    await expect(generate).toBeVisible();
+    expect(await generate.evaluate(buttonStyle)).toEqual(standard);
+    await page.route('**/api/profiles/patients?*', route => route.fulfill({ json: { patients: [{ id: trip.patient_id, full_name: trip.patient_name, version: 1, mobility: 'ambulant', status: 'active', phone: '81234567' }], total: 1, page: 1, pageSize: 25 } }));
+    await page.goto('/dashboard/patients');
+    const view = page.getByRole('button', { name: `View ${trip.patient_name}`, exact: true });
+    await expect(view).toBeVisible();
+    expect((await view.boundingBox())!.width).toBe(44);
+    expect(await view.innerText()).toBe('');
+  }
+});
+
+test('colour theme toggles directly, persists and ignores the system scheme', async ({ page }) => {
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await page.goto('/');
+  const theme = page.getByRole('button', { name: 'Colour theme', exact: true });
+  await expect(theme).toHaveAttribute('aria-pressed', 'false');
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+  await expect(page.getByRole('combobox', { name: 'Colour theme' })).toHaveCount(0);
+  await theme.click();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  await page.reload();
+  await expect(theme).toHaveAttribute('aria-pressed', 'true');
+  await page.emulateMedia({ colorScheme: 'light' });
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  await theme.focus(); await page.keyboard.press('Space');
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+});
+
+test('colour theme remains usable when preference storage is unavailable', async ({ page }) => {
+  await page.addInitScript(() => {
+    Storage.prototype.getItem = () => { throw new Error('Storage disabled'); };
+    Storage.prototype.setItem = () => { throw new Error('Storage disabled'); };
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Colour theme', exact: true }).click();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  await expect(page.getByRole('button', { name: 'Continue with Google' })).toBeEnabled();
+});
+
+test('theme ignores invalid stored values, syncs other tabs and respects reduced motion', async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('dialysis-colour-theme', 'system'));
+  await page.emulateMedia({ colorScheme: 'dark', reducedMotion: 'reduce' });
+  await page.goto('/');
+  const theme = page.getByRole('button', { name: 'Colour theme', exact: true });
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+  await page.evaluate(() => window.dispatchEvent(new StorageEvent('storage', { key: 'dialysis-colour-theme', newValue: 'dark' })));
+  await expect(theme).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  await expect(page.getByRole('button', { name: 'Continue with Google' })).toHaveCSS('transition-duration', '0s');
+});
+
+test('refined header gives the workspace full width and keeps mobile drawer navigation', async ({ page }) => {
+  await seedSession(page);
+  await page.route('**/api/schedules?*', route => route.fulfill({ json: { centres: [], schedules: [], total: 0, page: 1, pageSize: 25 } }));
+  await page.route('**/api/auth/me', route => route.fulfill({ json: { account: { ...activeAccount, role: 'coordinator' } } }));
+  await page.goto('/dashboard/trips');
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const header = page.locator('.dashboard-header');
+  await expect(header.getByRole('navigation', { name: 'Dashboard' })).toBeVisible();
+  await expect(header.getByRole('link', { name: 'Schedules', exact: true })).toBeVisible();
+  await expect(page.locator('.dashboard-sidebar, .dashboard-footer')).toHaveCount(0);
+  const clock = await page.locator('.dashboard-header-clock').boundingBox();
+  const theme = await header.getByRole('button', { name: 'Colour theme' }).boundingBox();
+  expect(clock!.x + clock!.width).toBeLessThanOrEqual(theme!.x);
+  const main = await page.locator('.dashboard-main').boundingBox();
+  const frame = await page.locator('.dashboard-workspace').boundingBox();
+  expect(main!.x).toBeCloseTo(frame!.x, 0);
+  for (const width of [320, 375, 768]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.getByRole('button', { name: 'Open navigation' }).click();
+    const drawer = page.getByRole('dialog', { name: 'Menu navigation' });
+    await drawer.getByRole('link', { name: 'Schedules', exact: true }).click();
+    await expect(page).toHaveURL(/schedules$/);
+    await expect(drawer).toBeHidden();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  }
+});
+
+test('next pickup shows only essentials and keeps route and timing details in its dialog', async ({ page }) => {
+  await seedSession(page);
+  await page.route('**/api/auth/me', route => route.fulfill({ json: { account: { ...activeAccount, role: 'patient' } } }));
+  const trip = { ...fixtureTrip, destination: 'Fixture Centre, a very long full street address, Singapore 560123' };
+  await page.route('**/api/trips?*', route => route.fulfill({ json: { trips: [trip], total: 1, page: 1, pageSize: 25, counts: { unfilled: 1 }, next_trip: trip } }));
+  await page.goto('/dashboard/trips');
+  const summary = page.locator('.trip-next-summary');
+  for (const width of [1280, 375, 320]) {
+    await page.setViewportSize({ width, height: 900 });
+    await expect(summary).toContainText('Pickup time to be confirmed');
+    await expect(summary).toContainText('Outbound');
+    await expect(summary).not.toContainText('Arrival by');
+    await expect(summary).not.toContainText(trip.destination);
+    expect((await summary.boundingBox())!.height).toBeLessThan(width === 1280 ? 100 : 170);
+  }
+  await summary.getByRole('button', { name: 'View details', exact: true }).click();
+  const details = page.getByRole('dialog', { name: 'Trip details', exact: true });
+  await expect(details).toContainText(trip.destination);
+  await expect(details).toContainText('Arrival by');
+  await expect(details).toContainText('08:45');
+});
+
+test('short schedule lists end naturally while long lists stay bounded', async ({ page }) => {
+  await seedSession(page);
+  await page.route('**/api/auth/me', route => route.fulfill({ json: { account: { ...activeAccount, role: 'coordinator' } } }));
+  const centre = { id: 'centre', name: 'Fixture Centre', address: 'Fixture street', postal_code: '560123' };
+  let count = 2;
+  await page.route('**/api/schedules?*', route => route.fulfill({ json: { centres: [centre], schedules: Array.from({ length: count }, (_, i) => ({ id: `schedule-${i}`, patient_id: 'fixture', patients: { full_name: 'Fixture Patient' }, version: 1, kind: 'recurring', centre_id: 'centre', days: [1], start_time: '09:00', end_time: '13:00', effective_from: '2026-10-21', effective_to: '2026-12-31' })), total: count, page: 1, pageSize: 25 } }));
+  await page.setViewportSize({ width: 1280, height: 1000 });
+  await page.goto('/dashboard/schedules');
+  await expect(page.locator('.treatment-record')).toHaveCount(2);
+  expect((await page.locator('.treatment-panel').boundingBox())!.height).toBeLessThan(650);
+  count = 25;
+  await page.reload();
+  await expect(page.locator('.treatment-record')).toHaveCount(25);
+  const list = page.getByRole('region', { name: 'Treatment schedules', exact: true });
+  expect(await list.evaluate(el => el.scrollHeight > el.clientHeight)).toBe(true);
+  await expect(page.getByRole('button', { name: 'Next', exact: true })).toBeInViewport();
+});
+
+for (const role of ['coordinator', 'patient', 'driver', 'caregiver']) test(`redesign responsive and theme review for ${role}`, async ({ page }, testInfo) => {
+  test.setTimeout(90000);
+  await seedSession(page);
+  await page.route('**/api/auth/me', route => route.fulfill({ json: { account: { ...activeAccount, role, profile_complete: true } } }));
+  const centre = { id: 'centre', name: 'Fixture Dialysis Centre', address: '456 Treatment Road', postal_code: '560456' };
+  await page.route('**/api/schedules?*', route => route.fulfill({ json: { centres: [centre], schedules: [
+    { id: 'series', version: 1, patient_id: session.user.id, patients: { full_name: 'Alex Fixture' }, kind: 'recurring', centre_id: centre.id, days: [1, 3, 5], start_time: '09:00', end_time: '13:00', effective_from: '2026-10-21', effective_to: '2026-12-31' },
+    { id: 'single', version: 1, patient_id: session.user.id, patients: { full_name: 'Jamie Fixture' }, kind: 'single', centre_id: centre.id, days: [4], start_time: '14:00', end_time: '18:00', effective_from: '2026-10-22', effective_to: '2026-10-22' },
+  ], total: 2, page: 1, pageSize: 25 } }));
+  await page.route('**/api/trips?*', route => route.fulfill({ json: { trips: [fixtureTrip, { ...fixtureTrip, id: 'return', direction: 'return', origin: fixtureTrip.destination, destination: fixtureTrip.origin, review_required: true, arrival_by: null, pickup_not_before: '2026-10-21T13:15:00+08:00' }], total: 2, page: 1, pageSize: 25, counts: { unfilled: 2 }, next_trip: fixtureTrip } }));
+  await page.route('**/api/profiles/patients?*', route => route.fulfill({ json: { patients: [{ id: session.user.id, full_name: 'Alex Fixture', phone: '+65 81234567', mobility: 'ambulant', status: 'active' }], total: 1, page: 1, pageSize: 25 } }));
+  const paths = ['trips', ...(['patient', 'coordinator'].includes(role) ? ['schedules'] : []), ...(role === 'coordinator' ? ['patients'] : []), 'account'];
+  for (const mode of ['light', 'dark']) for (const path of paths) {
+    await page.goto(`/dashboard/${path}`);
+    await expect(page.locator('.dashboard-main')).toBeVisible();
+    await expect(page.locator('.dashboard-footer, .dashboard-sidebar')).toHaveCount(0);
+    await setColourTheme(page, mode);
+    await expect(page.locator('html')).toHaveAttribute('data-theme', mode);
+    if (path === 'schedules') await expect(page.locator('.treatment-record')).toHaveCount(2);
+    if (path === 'trips' && ['patient', 'coordinator'].includes(role)) await expect(page.locator('.trip-record')).toHaveCount(2);
+    await expectReadableInterface(page);
+    for (const width of [320, 375, 768, 1280]) {
+      await page.setViewportSize({ width, height: 900 });
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      for (const name of ['Colour theme', 'Notifications', 'Account']) await expect(page.getByRole('button', { name, exact: true })).toBeInViewport();
+      await page.screenshot({ animations: 'disabled', path: testInfo.outputPath(`${role}-${path}-${mode}-${width}.png`), fullPage: true });
+    }
+    if (role === 'patient' && path === 'schedules') {
+      await page.getByRole('button', { name: 'Add Schedule', exact: true }).click();
+      const dialog = page.getByRole('dialog', { name: 'Add Schedule', exact: true });
+      await expect(dialog).toBeVisible();
+      await expectReadableInterface(page);
+      await page.setViewportSize({ width: 320, height: 700 });
+      await expect(dialog.getByRole('button', { name: 'Save Schedule', exact: true })).toBeInViewport();
+      await page.screenshot({ animations: 'disabled', path: testInfo.outputPath(`schedule-form-${mode}-320.png`) });
+      await page.keyboard.press('Escape');
+      await expect(dialog).toBeHidden();
+    }
+  }
+});
+
+test('redesign public page and rendered semantic colours remain legible in both themes', async ({ page }, testInfo) => {
+  test.setTimeout(45000);
+  for (const mode of ['light', 'dark']) {
+    await page.goto('/');
+    await setColourTheme(page, mode);
+    const ratios = await page.evaluate(() => {
+      const probe = document.createElement('span'); document.body.append(probe);
+      const resolve = (token: string) => { probe.style.color = `var(${token})`; return getComputedStyle(probe).color.match(/[\d.]+/g)!.slice(0, 3).map(Number); };
+      const luminance = (rgb: number[]) => rgb.map(v => { const n = v / 255; return n <= .04045 ? n / 12.92 : ((n + .055) / 1.055) ** 2.4; }).reduce((sum, v, i) => sum + v * [.2126, .7152, .0722][i], 0);
+      const pairs = [['--ui-text', '--ui-canvas'], ['--ui-muted', '--ui-surface'], ['--ui-muted', '--ui-raised'], ['--ui-accent-text', '--ui-accent'], ['--ui-accent-text', '--ui-accent-hover'], ['--ui-danger', '--ui-danger-surface'], ['--ui-warning', '--ui-warning-surface']];
+      const results = pairs.map(([a, b]) => { const x = luminance(resolve(a)), y = luminance(resolve(b)); return { pair: `${a}/${b}`, ratio: (Math.max(x, y) + .05) / (Math.min(x, y) + .05) }; });
+      probe.remove(); return results;
+    });
+    for (const { pair, ratio } of ratios) expect(ratio, `${mode} ${pair}`).toBeGreaterThanOrEqual(4.5);
+    await expectReadableInterface(page);
+    for (const width of [320, 375, 768, 1280]) {
+      await page.setViewportSize({ width, height: 900 });
+      await expect(page.getByRole('button', { name: 'Continue with Google' })).toBeVisible();
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      await page.screenshot({ animations: 'disabled', path: testInfo.outputPath(`public-${mode}-${width}.png`), fullPage: true });
+    }
+  }
+  await seedSession(page);
+  await page.goto('/');
+  await page.getByLabel('Username').fill('fixturepatient');
+  await chooseOption(page.getByLabel('Role'), 'patient');
+  await page.getByRole('button', { name: 'Next', exact: true }).click();
+  for (const mode of ['light', 'dark']) {
+    await setColourTheme(page, mode);
+    await expectReadableInterface(page);
+    for (const width of [320, 1280]) {
+      await page.setViewportSize({ width, height: 900 });
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      await page.screenshot({ animations: 'disabled', path: testInfo.outputPath(`signup-${mode}-${width}.png`), fullPage: true });
+    }
+  }
 });
 
 test('offers Google sign-in without collecting an application password', async ({ page }) => {
@@ -180,20 +702,23 @@ test('clears the local identity but reports when server sign-out cannot be confi
 
 const activeAccount = { id: '55555555-5555-4555-8555-555555555555', email: 'patient@example.test', display_name: 'testpatient', role: 'patient', status: 'active', profile_complete: true };
 
-test('all account types show the clock in the top bar without a welcome section', async ({ page }) => {
+test('all account types show desktop time or mobile page context without a welcome section', async ({ page }) => {
   await seedSession(page);
   for (const role of ['patient', 'driver', 'caregiver', 'coordinator']) {
     await page.route('**/api/auth/me', route => route.fulfill({ json: { account: { ...activeAccount, role, full_name: 'Alex Tan' } } }));
     await page.goto('/dashboard/trips');
-    await expect(page.locator('.dashboard-header-clock')).toBeVisible();
+    await expectHeaderContext(page);
     await expect(page.getByRole('heading', { name: /Welcome back/ })).toHaveCount(0);
     await expect(page.locator('.dashboard-welcome')).toHaveCount(0);
     for (const width of [320, 390, 768, 1440]) {
       await page.setViewportSize({ width, height: 900 });
-      const clock = await page.locator('.dashboard-header-clock').boundingBox();
-      const notifications = await page.getByRole('button', { name: 'Notifications', exact: true }).boundingBox();
-      expect(clock!.x + clock!.width).toBeLessThanOrEqual(notifications!.x);
-      expect(Math.abs(clock!.y + clock!.height / 2 - notifications!.y - notifications!.height / 2)).toBeLessThan(2);
+      await expectHeaderContext(page);
+      if (width > 760) {
+        const clock = await page.locator('.dashboard-header-clock').boundingBox();
+        const notifications = await page.getByRole('button', { name: 'Notifications', exact: true }).boundingBox();
+        expect(clock!.x + clock!.width).toBeLessThanOrEqual(notifications!.x);
+        expect(Math.abs(clock!.y + clock!.height / 2 - notifications!.y - notifications!.height / 2)).toBeLessThan(2);
+      }
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     }
   }
@@ -218,12 +743,12 @@ test('patient signup collects profile before account creation and survives reloa
   await page.getByLabel('Username').fill('testpatient');
   await chooseOption(page.getByLabel('Role'), 'patient');
   await submitSignup(page);
-  await expect(page.locator('.dashboard-header-clock')).toBeVisible();
+  await expectHeaderContext(page);
   await openAccountDropdown(page);
   await expect(page.getByRole('button', { name: 'Sign out', exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Awaiting approval' })).toHaveCount(0);
   await page.reload();
-  await expect(page.locator('.dashboard-header-clock')).toBeVisible();
+  await expectHeaderContext(page);
   await expect(page.getByRole('button', { name: 'Sign Up', exact: true })).toHaveCount(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });
@@ -264,7 +789,7 @@ test('unavailable account service shows a labelled spinner and recovers automati
   await expect(page.locator('body')).not.toContainText('PRIVATE_DATABASE_DETAIL');
   await page.route('**/api/auth/me', route => route.fulfill({ json: { account: activeAccount } }));
   await page.clock.fastForward(5100);
-  await expect(page.locator('.dashboard-header-clock')).toBeVisible();
+  await expectHeaderContext(page);
   await expect(page.getByRole('button', { name: 'Try again', exact: true })).toHaveCount(0);
 });
 
@@ -280,7 +805,7 @@ test('registration errors keep entered details and allow retry without refresh c
   await expect(page.getByRole('button', { name: /Refresh account|Sign out/ })).toHaveCount(0);
   await page.route('**/api/auth/register', route => route.fulfill({ status: 201, json: activeAccount }));
   await submitSignup(page);
-  await expect(page.locator('.dashboard-header-clock')).toBeVisible();
+  await expectHeaderContext(page);
 });
 
 test('a sign-out event during account lookup cannot reveal a stale role view', async ({ page }) => {
@@ -582,7 +1107,7 @@ test('signup actions use primary-first order, equal vertical spacing and hover f
   await expect(page.locator('.signup-actions button')).toHaveText(['Next', 'Cancel']);
   const gaps = await page.evaluate(() => {
     const username = document.querySelector('input[autocomplete=username]')!;
-    const role = document.querySelector('select')!;
+    const role = document.querySelector('.signup-form select')!;
     return [document.querySelector('.signup-actions')!.getBoundingClientRect().top - role.getBoundingClientRect().bottom,
       role.closest('label')!.getBoundingClientRect().top - username.getBoundingClientRect().bottom];
   });
@@ -590,9 +1115,9 @@ test('signup actions use primary-first order, equal vertical spacing and hover f
   for (const name of ['Next', 'Cancel', 'Change Google account']) {
     const button = page.getByRole('button', { name, exact: true });
     await page.mouse.move(0, 0);
-    await expect(button).toHaveCSS('box-shadow', 'none');
+    const background = await button.evaluate(element => getComputedStyle(element).backgroundColor);
     await button.hover();
-    await expect(button).not.toHaveCSS('box-shadow', 'none');
+    await expect(button).not.toHaveCSS('background-color', background);
   }
 });
 
@@ -667,7 +1192,7 @@ test('account retry attempts do not reset the slow-loading reminder', async ({ p
   await expect(page.locator('.auth-toast')).toContainText('This is taking us longer than expected.');
   await page.route('**/api/auth/me', route => route.fulfill({ json: { account: activeAccount } }));
   await page.clock.fastForward(5200);
-  await expect(page.locator('.dashboard-header-clock')).toBeVisible();
+  await expectHeaderContext(page);
   await expect(page.locator('.auth-toast')).toHaveAttribute('data-closing', 'true');
 });
 
@@ -741,7 +1266,7 @@ test('a hung account request times out and recovers on a fresh request', async (
   // The timed-out request remains hung; only a new request can use this recovered response.
   await page.route('**/api/auth/me', route => route.fulfill({ json: { account: activeAccount } }));
   await page.clock.fastForward(5100);
-  await expect(page.locator('.dashboard-header-clock')).toBeVisible();
+  await expectHeaderContext(page);
   expect(await page.evaluate(() => JSON.parse(localStorage.getItem('sb-auth-auth-token')!).access_token)).toBe(session.access_token);
 });
 
@@ -764,7 +1289,7 @@ test('a timed-out registration response recovers an account already created by t
   await page.locator('.signup-form').dispatchEvent('submit');
   await requested;
   await page.clock.fastForward(15000);
-  await expect(page.locator('.dashboard-header-clock')).toBeVisible();
+  await expectHeaderContext(page);
   expect(registrations).toBe(1);
 });
 
@@ -776,7 +1301,7 @@ test('active coordinators land on a separate dashboard with honest unavailable m
   await expect(page).toHaveURL('http://127.0.0.1:5199/dashboard/trips');
   await expect(page.getByRole('heading', { name: 'Trip List' })).toBeVisible();
   await expect(page.locator('.landing-page')).toHaveCount(0);
-  await expect(page.getByRole('heading', { name: 'Every patient.' })).toHaveCount(0);
+  await expect(page.locator('.landing-intro')).toHaveCount(0);
   await expect(page.locator('.trip-status-filters')).toHaveCount(0);
   await expect(page.getByText('Trip information is not available.')).toBeVisible();
   for (const [value, label] of [['unfilled', 'Unfilled'], ['at-risk', 'At-Risk'], ['on-track', 'On-Track'], ['resolved', 'Resolved'], ['all', 'Trip List']]) {
@@ -841,11 +1366,11 @@ test('dashboard sign-out returns to the landing page and stays protected after B
 });
 
 
-test('coordinator overview fills desktop space with an aligned gap above the footer', async ({ page }) => {
+test('coordinator workspace keeps short content natural and fits the desktop viewport', async ({ page }) => {
   await seedSession(page);
   await page.route('**/api/auth/me', route => route.fulfill({ json: { account: { ...activeAccount, role: 'coordinator' } } }));
   await page.goto('/dashboard');
-  await expect(page.locator('.dashboard-header-clock')).toBeVisible();
+  await expectHeaderContext(page);
   for (const [width, height] of [[1280, 720], [1366, 768], [1440, 900], [1728, 972], [1920, 1080]]) {
     await page.setViewportSize({ width, height });
     expect(await page.evaluate(() => {
@@ -855,37 +1380,35 @@ test('coordinator overview fills desktop space with an aligned gap above the foo
         && main.scrollHeight <= main.clientHeight;
     })).toBe(true);
     const trips = await page.locator('.dashboard-trips').boundingBox();
-    const footer = await page.locator('.dashboard-footer').boundingBox();
+    await expect(page.locator('.dashboard-footer')).toHaveCount(0);
     await expect(page.locator('.dashboard-metrics')).toHaveCount(0);
     await expect(page.locator('.trip-status-filters')).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Filters', exact: true })).toBeVisible();
-    const sidebar = await page.locator('.dashboard-sidebar').boundingBox();
-    expect(footer!.y - (trips!.y + trips!.height)).toBeCloseTo(24, 0);
-    expect(sidebar!.y + sidebar!.height).toBeCloseTo(trips!.y + trips!.height, 0);
-    expect(trips!.y + trips!.height).toBeLessThanOrEqual(footer!.y);
-    expect(footer!.y + footer!.height).toBeLessThanOrEqual(height);
+    await expect(page.locator('.dashboard-sidebar')).toHaveCount(0);
+    expect(trips!.y + trips!.height).toBeLessThanOrEqual(height);
   }
 });
 
 
-test('landing and dashboard bars share desktop dimensions with a seamless dashboard header', async ({ page }) => {
+test('landing and dashboard bars share desktop alignment with an anchored dashboard header', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto('/');
   await expect(page.getByRole('button', { name: 'Continue with Google' })).toBeVisible();
-  const landingHeader = await page.locator('.landing-brand').boundingBox();
-  const landingFooter = await page.locator('.landing-footer').boundingBox();
+  const landingHeader = await page.locator('.landing-header').boundingBox();
+  await expect(page.locator('.landing-footer')).toBeVisible();
   await seedSession(page);
   await page.route('**/api/auth/me', route => route.fulfill({ json: { account: { ...activeAccount, role: 'coordinator' } } }));
   await page.goto('/dashboard');
-  await expect(page.locator('.dashboard-header-clock')).toBeVisible();
+  await expectHeaderContext(page);
   const dashboardHeader = await page.locator('.dashboard-header-inner').boundingBox();
-  const dashboardFooter = await page.locator('.dashboard-footer').boundingBox();
-  for (const dimension of ['x', 'width', 'height'] as const) {
+  await expect(page.locator('.dashboard-footer')).toHaveCount(0);
+  for (const dimension of ['x', 'width'] as const) {
     expect(dashboardHeader![dimension]).toBeCloseTo(landingHeader![dimension], 1);
-    expect(dashboardFooter![dimension]).toBeCloseTo(landingFooter![dimension], 1);
+    await expect(page.locator('.dashboard-top-navigation')).toBeVisible();
   }
   expect(await page.locator('.dashboard-header').evaluate(element => getComputedStyle(element).backgroundColor)).toBe('rgba(0, 0, 0, 0)');
   expect(await page.locator('.dashboard-header-inner').evaluate(element => getComputedStyle(element).borderBottomWidth)).toBe('0px');
+  await expect(page.locator('.dashboard-header')).toHaveCSS('border-bottom-width', '1px');
 });
 
 
@@ -893,7 +1416,7 @@ test('coordinator navigation and status filters work with the keyboard', async (
   await seedSession(page);
   await page.route('**/api/auth/me', route => route.fulfill({ json: { account: { ...activeAccount, role: 'coordinator' } } }));
   await page.goto('/dashboard');
-  await expect(page.locator('.dashboard-header-clock')).toBeVisible();
+  await expectHeaderContext(page);
   await page.keyboard.press('Tab');
   await expect(page.getByRole('link', { name: 'Skip to content' })).toBeFocused();
   await page.keyboard.press('Enter');
@@ -974,7 +1497,7 @@ test('a mobile drawer closes and unlocks scrolling when resized to desktop', asy
   await expect(page.getByRole('dialog', { name: 'Menu navigation' })).toBeVisible();
   await page.setViewportSize({ width: 1440, height: 900 });
   await expect(page.getByRole('dialog', { name: 'Menu navigation' })).toBeHidden();
-  await expect(page.locator('.dashboard-sidebar')).toBeVisible();
+  await expect(page.locator('.dashboard-top-navigation')).toBeVisible();
   expect(await page.evaluate(() => document.body.style.overflow)).toBe('');
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(page.getByRole('button', { name: 'Open navigation' })).toHaveAttribute('aria-expanded', 'false');
@@ -1011,13 +1534,12 @@ test('coordinator clock ticks in Singapore time and updates the date at midnight
   await expect(page.locator('.dashboard-welcome')).toHaveCount(0);
   for (const width of [390, 430]) {
     await page.setViewportSize({ width, height: 844 });
-    await expect(page.locator('.dashboard-header-clock .dashboard-date-compact')).toBeVisible();
-    await expect(page.locator('.dashboard-header-clock .dashboard-clock')).toBeVisible();
-    // Date filters add content on phones; the workspace scrolls within the fixed footer.
+    await expectHeaderContext(page);
+    // Date filters add content on phones; the workspace remains bounded without a dashboard footer.
     await page.locator('.dashboard-main').evaluate(element => { element.scrollTop = element.scrollHeight; });
     const trips = await page.locator('.dashboard-trips').boundingBox();
-    const footer = await page.locator('.dashboard-footer').boundingBox();
-    expect(Math.abs(footer!.y - trips!.y - trips!.height - 24)).toBeLessThan(2);
+    await expect(page.locator('.dashboard-footer')).toHaveCount(0);
+    expect(trips!.y + trips!.height).toBeLessThanOrEqual(844);
     expect(await page.evaluate(() => document.documentElement.scrollHeight <= innerHeight)).toBe(true);
   }
 });
@@ -1046,7 +1568,7 @@ test('account controls stay in the header on desktop and mobile, outside Menu', 
       await page.getByRole('button', { name: 'Open navigation' }).click();
       await page.getByRole('dialog', { name: 'Menu navigation' }).getByRole('link', { name: 'Trips', exact: true }).click();
     } else await page.getByRole('link', { name: 'Dialysis Transport dashboard', exact: true }).click();
-    await expect(page.locator('.dashboard-header-clock')).toBeVisible();
+    await expectHeaderContext(page);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   }
 });
@@ -1193,7 +1715,9 @@ test('a rejected restored session leaves the neutral loader for the public sign-
 });
 
 
-test('the initial HTML provides the blurred backdrop before JavaScript and app styles load', async ({ page }) => {
+for (const mode of ['light', 'dark'] as const) test(`initial HTML provides the ${mode} canvas before JavaScript and app styles load`, async ({ page }) => {
+  await page.addInitScript(theme => localStorage.setItem('dialysis-colour-theme', theme), mode);
+  const canvas = mode === 'light' ? 'rgb(246, 244, 238)' : 'rgb(28, 26, 24)';
   let release: () => void = () => {};
   const waiting = new Promise<void>(resolve => { release = resolve; });
   let started: () => void = () => {};
@@ -1202,12 +1726,11 @@ test('the initial HTML provides the blurred backdrop before JavaScript and app s
   await page.goto('/', { waitUntil: 'commit' });
   await requested;
   await expect(page.locator('#root')).toBeEmpty();
-  expect(await page.evaluate(() => getComputedStyle(document.body, '::before').backgroundImage)).toContain('/images/transport-night.jpg');
-  expect(await page.evaluate(() => getComputedStyle(document.body, '::before').filter)).toBe('blur(32px)');
-  expect(await page.evaluate(() => getComputedStyle(document.documentElement).backgroundColor)).toBe('rgb(16, 37, 43)');
+  expect(await page.evaluate(() => getComputedStyle(document.body, '::before').backgroundImage)).toBe('none');
+  expect(await page.evaluate(() => getComputedStyle(document.documentElement).backgroundColor)).toBe(canvas);
   release();
   await expect(page.getByRole('button', { name: 'Continue with Google' })).toBeVisible();
-  expect(await page.evaluate(() => getComputedStyle(document.documentElement).backgroundColor)).toBe('rgb(16, 37, 43)');
+  expect(await page.evaluate(() => getComputedStyle(document.documentElement).backgroundColor)).toBe(canvas);
 });
 
 test('coordinator reads patient details but persists only Status and Notes', async ({ page }) => {
@@ -1275,8 +1798,8 @@ test('patients errors preserve form input and mobile controls fit enlarged text'
   for (const width of [390, 1440]) {
     await page.setViewportSize({ width, height: 900 });
     const panel = await page.locator('.patients-panel').boundingBox();
-    const footer = await page.locator('.dashboard-footer').boundingBox();
-    expect(Math.abs(footer!.y - panel!.y - panel!.height - 24)).toBeLessThan(2);
+    await expect(page.locator('.dashboard-footer')).toHaveCount(0);
+    expect(panel!.y + panel!.height).toBeLessThanOrEqual(900);
     await expect(page.getByRole('button', { name: 'Try again', exact: true })).toBeInViewport();
   }
   await page.setViewportSize({ width: 390, height: 844 });
@@ -1302,7 +1825,7 @@ test('patients errors preserve form input and mobile controls fit enlarged text'
   }
 });
 
-test('patient list pagination and mobile drawer navigation preserve bounded table scrolling', async ({ page }) => {
+test('patient list pagination and mobile drawer navigation preserve responsive records', async ({ page }) => {
   await seedSession(page);
   await page.route('**/api/auth/me', route => route.fulfill({ json: { account: { ...activeAccount, role: 'coordinator' } } }));
   await page.route('**/api/profiles/patients**', route => {
@@ -1344,7 +1867,8 @@ test('patient list pagination and mobile drawer navigation preserve bounded tabl
       const bounds = await region.boundingBox();
       expect(bounds!.x).toBeGreaterThanOrEqual(0);
       expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width);
-      await expect(region).toHaveCSS('overflow-x', 'auto');
+      await expect(region).toHaveCSS('overflow-x', width <= 760 ? 'visible' : 'auto');
+      if (width <= 760) expect(await region.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
     }
   }
 });
@@ -1438,7 +1962,7 @@ test('patient dashboard completes and edits its own profile with shared styling 
   await expect(page.getByLabel('Street', { exact: true })).toBeDisabled();
   await expect(page.getByLabel('Street', { exact: true })).toHaveValue('Saved address');
   await page.getByRole('link', { name: 'Trips', exact: true }).click();
-  await expect(page.locator('.dashboard-header-clock')).toBeVisible();
+  await expectHeaderContext(page);
   await page.goto('/dashboard/patients');
   await expect(page).toHaveURL(/\/dashboard\/trips$/);
   await expect(page.getByRole('link', { name: 'Patients', exact: true })).toHaveCount(0);
@@ -1618,7 +2142,7 @@ for (const [role, label] of [['coordinator', 'Transport Coordinator'], ['patient
     await expect(page.getByRole('heading', { name: 'My Account', exact: true })).toHaveCount(0);
     await expect(page.getByRole('heading', { name: 'Account Details', exact: true })).toBeVisible();
     await expect(page.locator('.profile-id')).toHaveText(`${label} ID: ${role === 'patient' ? session.user.id : activeAccount.id}`);
-    await expect(page.getByRole('heading', { name: 'Account Details', exact: true })).toHaveCSS('font-size', '24px');
+    expect(await page.getByRole('heading', { name: 'Account Details', exact: true }).evaluate(el => parseFloat(getComputedStyle(el).fontSize))).toBeGreaterThanOrEqual(24);
     if (role === 'coordinator') {
       await expect(page.getByRole('heading', { name: 'Account Details', exact: true })).toBeVisible();
       await expect(page.getByRole('definition').filter({ hasText: activeAccount.email })).toBeVisible();
@@ -1657,14 +2181,20 @@ test('My Account displays the persistent patient record ID independently of the 
 });
 
 
-test('profile Edit and Save hover keep dark text on the themed accent', async ({ page }) => {
+test('profile Edit and Save hover preserve the paired theme foreground', async ({ page }) => {
   await seedSession(page);
   await page.route('**/api/auth/me', route => route.fulfill({ json: { account: activeAccount } }));
   await page.goto('/dashboard/account');
   for (const label of ['Edit profile', 'Save profile']) {
     const button = page.getByRole('button', { name: label, exact: true });
     await button.hover();
-    await expect(button).toHaveCSS('color', 'rgb(16, 37, 43)');
+    // Resolve the custom colour through the browser rather than comparing a hex string to rgb().
+    const foreground = await button.evaluate(element => {
+      const probe = document.createElement('span');
+      probe.style.color = 'var(--ui-accent-text)'; element.append(probe);
+      const colour = getComputedStyle(probe).color; probe.remove(); return colour;
+    });
+    await expect(button).toHaveCSS('color', foreground);
     await expect(button).toHaveCSS('filter', 'none');
     if (label === 'Edit profile') await button.click();
   }
@@ -1922,8 +2452,8 @@ test('patient schedule heading stays in place when the Add Schedule action loads
     await expect(page.locator('.treatment-panel .account-loading')).toBeVisible();
     const heading=page.getByRole('heading',{name:'Treatment Schedules',exact:true});
     const subheader=page.getByText('Treatment planning',{exact:true});
-    await expect(subheader).toHaveCSS('text-transform','uppercase');
-    await expect(subheader).toHaveCSS('font-weight','600');
+    await expect(subheader).toHaveCSS('text-transform','none');
+    await expect(subheader).toHaveCSS('font-weight','400');
     const before=await heading.boundingBox();
     await expect(page.getByRole('button',{name:'Add Schedule',exact:true})).toBeVisible();
     await expect(page.getByRole('button',{name:'Add Schedule',exact:true})).toBeDisabled();
@@ -2004,7 +2534,8 @@ test('schedule form overlays the list, keeps address space stable and restores f
     await expect(dialog).toBeHidden();
     await expect(add).toBeFocused();
     await add.click();
-    await page.mouse.click(2,2);
+    if (width > 760) await page.mouse.click(2,2);
+    else await dialog.getByRole('button', { name: /^Close / }).click();
     await expect(dialog).toBeHidden();
     await expect(add).toBeFocused();
   }
@@ -2046,7 +2577,8 @@ test('coordinator patient details overlay preserves the list and returns focus a
     expect(await page.evaluate(()=>document.body.style.overflow)).toBe('');
     await view.click();
     await expect(dialog.getByLabel('Notes',{exact:true})).toHaveValue('');
-    await page.mouse.click(2,2);
+    if (width > 760) await page.mouse.click(2,2);
+    else await dialog.getByRole('button', { name: /^Close / }).click();
     await expect(dialog).toBeHidden();
     await expect(view).toBeFocused();
     await view.click();
@@ -2172,8 +2704,8 @@ for (const width of [390, 1440]) test(`shared schedule layout contains long list
   await page.goto('/dashboard/schedules');
   const records = page.getByRole('region', { name: 'Treatment schedules', exact: true });
   await expect(records).toBeVisible();
-  expect(await records.evaluate(e => e.scrollHeight > e.clientHeight)).toBe(true);
-  expect(await page.evaluate(() => document.documentElement.scrollHeight <= innerHeight + 1)).toBe(true);
+  expect(await records.evaluate(e => e.scrollHeight > e.clientHeight)).toBe(width > 760);
+  expect(await page.evaluate(() => document.documentElement.scrollHeight <= innerHeight + 1)).toBe(width > 760);
   const heading = page.getByRole('heading', { name: 'Treatment Schedules', exact: true });
   const before = await heading.boundingBox();
   await records.evaluate(e => e.scrollTop = e.scrollHeight);
@@ -2186,11 +2718,13 @@ for (const width of [390, 1440]) test(`shared schedule layout contains long list
   await chooseOption(dialog.getByLabel('Apply changes to'), 'occurrence');
   await expect(dialog.getByLabel('Session to change', { exact: true })).toBeVisible();
   await chooseOption(dialog.getByLabel('Apply changes to'), 'series');
-  await expect(dialog.locator('.overlay-footer > button')).toHaveText(['Save Schedule', 'Cancel', 'Delete Schedule']);
+  await expect(dialog.locator('.overlay-footer > button')).toHaveText(['Save Schedule', 'Delete Schedule', 'Cancel']);
   const save = dialog.getByRole('button', { name: 'Save Schedule', exact: true });
   const saveBox = await save.boundingBox();
   const cancelBox = await dialog.getByRole('button', { name: 'Cancel', exact: true }).boundingBox();
-  expect(Math.abs(saveBox!.width - cancelBox!.width)).toBeLessThanOrEqual(1);
+  expect(Math.abs(saveBox!.height - cancelBox!.height)).toBeLessThanOrEqual(1);
+  const padding = (element: Element) => getComputedStyle(element).padding;
+  expect(await save.evaluate(padding)).toBe(await dialog.getByRole('button', { name: 'Cancel', exact: true }).evaluate(padding));
   expect(saveBox!.y + saveBox!.height).toBeLessThanOrEqual(844);
   await dialog.locator('.overlay-body').evaluate(e => e.scrollTop = e.scrollHeight);
   expect(await save.boundingBox()).toEqual(saveBox);
@@ -2316,7 +2850,7 @@ test('many rescheduled dates use a compact count and a scrolling history overlay
   await expect(summary).toBeFocused();
 });
 
-for (const role of ['patient', 'coordinator']) test(`${role} schedule cards use compact identity rows and coordinator patient search`, async ({ page }) => {
+for (const role of ['patient', 'coordinator']) test(`${role} schedule cards use compact identity rows and coordinator patient search`, async ({ page }, testInfo) => {
   await seedSession(page);
   await page.route('**/api/auth/me', route => route.fulfill({ json: { account: { ...activeAccount, role, profile_complete: true } } }));
   const centre = { id: '77777777-7777-4777-8777-777777777777', name: 'Test Centre', address: 'Test street', postal_code: '560123' };
@@ -2343,8 +2877,18 @@ for (const role of ['patient', 'coordinator']) test(`${role} schedule cards use 
       const name = await row.getByText('Alex Fixture', { exact: true }).boundingBox();
       const tag = await row.getByText('Recurring', { exact: true }).boundingBox();
       expect(Math.abs(name!.y + name!.height / 2 - tag!.y - tag!.height / 2)).toBeLessThan(2);
+      await expect(first.locator('.treatment-location')).toContainText(centre.name);
+      const session = (await first.locator('.treatment-session').boundingBox())!;
+      const location = (await first.locator('.treatment-location').boundingBox())!;
+      expect(location.x).toBeGreaterThanOrEqual(session.x + session.width);
+    }
+    if (role === 'coordinator') {
+      const generate = first.getByRole('button', { name: 'Generate Trips', exact: true });
+      expect(await generate.evaluate(el => getComputedStyle(el).textDecorationLine)).toBe('none');
+      expect((await generate.boundingBox())!.height).toBeGreaterThanOrEqual(44);
     }
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    if (width !== 320) await page.screenshot({ path: testInfo.outputPath(`schedule-layout-${role}-${width}.png`), fullPage: true });
   }
   if (role === 'coordinator') {
     await expect(page.getByText('Schedule Management', { exact: true })).toBeVisible();
@@ -2471,7 +3015,7 @@ test('a legacy unsupported schedule date cannot crash the schedule list',async({
 });
 
 const fixtureTrip = { id: 'trip-1', version: 1, patient_id: session.user.id, patient_name: 'Test Patient', source_schedule_id: '88888888-8888-4888-8888-888888888888', session_date: '2026-10-21', direction: 'outbound', origin: 'Fixture home', destination: 'Fixture Centre', treatment_start: '2026-10-21T09:00:00+08:00', treatment_end: '2026-10-21T13:00:00+08:00', arrival_by: '2026-10-21T08:45:00+08:00', pickup_not_before: null, pickup_at: null, review_required: false, status: 'unfilled', created_at: '2026-10-21T00:00:00Z' };
-for (const role of ['patient', 'coordinator']) test(`real ${role} trips show pending pickup and bounded lists`, async ({ page }) => {
+for (const role of ['patient', 'coordinator']) test(`real ${role} trips show pending pickup and naturally scrolling mobile lists`, async ({ page }) => {
   await seedSession(page);
   await page.setViewportSize({ width: 390, height: 844 });
   await page.route('**/api/auth/me', route => route.fulfill({ json: { account: { ...activeAccount, role } } }));
@@ -2480,17 +3024,28 @@ for (const role of ['patient', 'coordinator']) test(`real ${role} trips show pen
   const list = page.getByRole('region', { name: 'Trip list', exact: true });
   await expect(list).toBeVisible();
   await expect(list.locator('article')).toHaveCount(25);
-  await expect(list.locator('article').first()).toContainText('Pickup pending');
-  await expect(list.locator('article').first()).toContainText('Arrival by');
-  await expect(list.locator('article').nth(1)).toContainText('Earliest return pickup');
-  await expect(list.locator('article').nth(1)).toContainText('13:15');
+  await expect(list.locator('article').first()).not.toContainText('Pickup pending');
+  await expect(list.locator('article').first().locator('.trip-status-badge')).toHaveText('Unfilled');
+  await expect(list.locator('article').first()).not.toContainText('Arrival by');
+  await expect(list.locator('article').nth(1)).not.toContainText('Earliest return pickup');
+  await expect(list.locator('article').nth(1)).not.toContainText('13:15');
   await expect(list.locator('article').nth(1)).toContainText('Needs review');
   await expect(list.locator('article').nth(1)).not.toContainText('Arrival by');
   await expect(page.getByRole('button', { name: 'Next', exact: true })).toBeEnabled();
-  expect(await list.evaluate(element => element.scrollHeight > element.clientHeight && getComputedStyle(element).overflowY === 'auto')).toBe(true);
+  expect(await list.evaluate(element => element.scrollHeight <= element.clientHeight + 1)).toBe(true);
+  expect(await page.evaluate(() => document.documentElement.scrollHeight > innerHeight)).toBe(true);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-  if (role === 'coordinator') await expect(page.locator('.trip-status-count')).toHaveText(['26', '0', '0', '0']);
-  else { await expect(page.locator('.patient-next-pickup')).toContainText('Pickup pending'); await expect(page.locator('.dashboard-metrics')).toHaveCount(0); }
+  await list.locator('article').nth(1).getByRole('button', { name: 'View details', exact: true }).click();
+  const returnDetails = page.getByRole('dialog', { name: 'Trip details', exact: true });
+  await expect(returnDetails).toContainText('Earliest return pickup');
+  await expect(returnDetails).toContainText('13:15');
+  await returnDetails.getByRole('button', { name: 'Close', exact: true }).click();
+  if (role === 'coordinator') {
+    await page.getByRole('button', { name: 'Filters', exact: true }).click();
+    await page.getByRole('dialog', { name: 'Trip filters', exact: true }).getByLabel('Status', { exact: true }).click();
+    await expect(page.getByRole('listbox', { name: 'Status', exact: true }).getByRole('option')).toHaveText(['All trips', 'Unfilled (26)', 'At-Risk (0)', 'On-Track (0)', 'Resolved (0)']);
+  }
+  else { await expect(page.locator('.patient-next-pickup')).toContainText('Pickup time to be confirmed'); await expect(page.locator('.dashboard-metrics')).toHaveCount(0); }
 });
 
 test('coordinator generates unfilled trips and preserves dates after a stale schedule conflict', async ({ page }) => {
@@ -2584,8 +3139,8 @@ test('compact trip tools search on the server and apply filters only after confi
   const details = page.getByRole('dialog', { name: 'Trip details', exact: true });
   await expect(details).toContainText('Fixture home');
   await expect(details).toContainText('Fixture Centre');
-  await expect(details.locator('.overlay-footer button').first()).toHaveText('Close');
-  await expect(details.getByRole('button', { name: 'Delete Trip', exact: true })).toHaveClass(/overlay-delete/);
+  await expect(details.locator('.overlay-footer button').last()).toHaveText('Close');
+  await expect(details.getByRole('button', { name: 'Delete Trip', exact: true })).toHaveClass(/button-danger/);
 });
 
 test('trip deletion preserves context on errors and reloads stale versions before retry', async ({ page }) => {
@@ -2648,7 +3203,8 @@ for (const role of ['patient', 'coordinator']) for (const width of [390, 1440]) 
   await page.goto('/dashboard/trips');
   const list = page.getByRole('region', { name: 'Trip list', exact: true });
   await expect(list).toBeVisible();
-  expect(await list.evaluate(element => element.scrollHeight > element.clientHeight && getComputedStyle(element).overflowY === 'auto')).toBe(true);
+  expect(await list.evaluate(element => element.scrollHeight > element.clientHeight && getComputedStyle(element).overflowY === 'auto')).toBe(width > 760);
+  if (width <= 760) expect(await page.evaluate(() => document.documentElement.scrollHeight > innerHeight)).toBe(true);
   const record = list.locator('article').first();
   expect(await record.evaluate(element => parseFloat(getComputedStyle(element).borderTopWidth))).toBeGreaterThan(0);
   await expect(page.getByRole('button', { name: 'Previous', exact: true })).toBeVisible();
@@ -2659,7 +3215,8 @@ for (const role of ['patient', 'coordinator']) for (const width of [390, 1440]) 
     return { footer: footer.bottom, panel: frame.bottom, viewport: innerHeight, controls: [...panel.querySelectorAll('.patients-pagination button')].map(button => { const rect = button.getBoundingClientRect(); return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom }; }) };
   });
   expect(bounds.footer).toBeLessThanOrEqual(bounds.panel);
-  expect(bounds.footer).toBeLessThanOrEqual(bounds.viewport);
+  if (width > 760) expect(bounds.footer).toBeLessThanOrEqual(bounds.viewport);
+  else { await page.getByRole('button', { name: 'Next', exact: true }).scrollIntoViewIfNeeded(); await expect(page.getByRole('button', { name: 'Next', exact: true })).toBeInViewport(); await page.evaluate(() => window.scrollTo(0, 0)); }
   for (const control of bounds.controls) { expect(control.left).toBeGreaterThanOrEqual(0); expect(control.right).toBeLessThanOrEqual(width); expect(control.bottom).toBeLessThanOrEqual(bounds.panel); }
   if (role === 'patient') { expect((await page.locator('.patient-next-pickup').boundingBox())!.height).toBeLessThan(200); await expect(page.locator('.trip-next-reading').getByText('Needs review', { exact: true })).toBeVisible(); await expect(page.getByRole('button', { name: 'Delete Trip', exact: true })).toHaveCount(0); }
   await page.screenshot({ path: `C:/Users/joshu/AppData/Local/Temp/dialysis-trips-ui-${role}-${width}.png` });
