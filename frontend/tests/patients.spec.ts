@@ -8,7 +8,7 @@ test('coordinator reads patient details but persists only Status and Notes', asy
   let patient = { id: session.user.id, full_name: 'Test Patient', phone: '+65 81234567', pickup_address: 'Test pickup address', postal_code: '560123', unit_no: '#05-12', notes: '', mobility: 'wheelchair', assistance_required: true, status: 'active' };
   let writes = 0;
   await page.route('**/api/profiles/patients**', async route => {
-    if (route.request().method() === 'GET') return route.fulfill({ json: { patients: [patient], total: 1, page: 1, pageSize: 25 } });
+    if (route.request().method() === 'GET') return route.fulfill({ json: { patients: [patient], total: 1, page: 1, pageSize: 10 } });
     expect(route.request().method()).toBe('PATCH');
     expect(route.request().postDataJSON()).toEqual({ status: 'inactive', notes: 'Coordinator note.' });
     writes++; patient = { ...patient, ...route.request().postDataJSON() };
@@ -59,7 +59,7 @@ test('patient list retries failed loads and preserves edits after a failed save'
   await page.route('**/api/auth/me', route => route.fulfill({ json: { account: { ...activeAccount, role: 'coordinator' } } }));
   let available = false;
   await page.route('**/api/profiles/patients**', route => route.fulfill(available && route.request().method() === 'GET'
-    ? { json: { patients: [{ id: session.user.id, full_name: 'Test Patient', phone: '+65 81234567', pickup_address: 'Test address', postal_code: '560123', unit_no: '', notes: '', mobility: 'ambulant', assistance_required: false, status: 'active' }], total: 1, page: 1, pageSize: 25 } }
+    ? { json: { patients: [{ id: session.user.id, full_name: 'Test Patient', phone: '+65 81234567', pickup_address: 'Test address', postal_code: '560123', unit_no: '', notes: '', mobility: 'ambulant', assistance_required: false, status: 'active' }], total: 1, page: 1, pageSize: 10 } }
     : { status: 503, json: { message: 'Unavailable' } }));
   await page.goto('/dashboard/patients');
   await expect(page.getByRole('alert')).toContainText('Patients could not be loaded');
@@ -91,7 +91,7 @@ test('patient search and sorting reset pagination and handle empty results', asy
     const filtered = patients.filter(patient => patient.full_name.toLowerCase().includes(search.toLowerCase()) || patient.id === search || patient.phone.includes(search));
     if (column && column !== 'created_at') filtered.sort((a, b) => String(a[column]).localeCompare(String(b[column])) * direction);
     const number = Number(params.get('page') ?? 1);
-    return route.fulfill({ json: { patients: filtered.slice((number - 1) * 25, number * 25), total: filtered.length, page: number, pageSize: 25 } });
+    return route.fulfill({ json: { patients: filtered.slice((number - 1) * 10, number * 10), total: filtered.length, page: number, pageSize: 10 } });
   });
   await page.goto('/dashboard/patients');
   await page.getByRole('button', { name: 'Next', exact: true }).click();
@@ -137,7 +137,7 @@ test("coordinator patient edits preserve the draft after a version conflict", as
   let patient = { id: '11111111-1111-4111-8111-111111111111', version: 3, full_name: 'Fixture Patient', phone: '+65 81234567', pickup_address: 'Fixture street', unit_no: '', postal_code: '560123', notes: 'Original notes', mobility: 'ambulant', assistance_required: false, status: 'active' };
   await page.route('**/api/profiles/patient**', route => {
     if (route.request().method() === 'GET')
-      return route.fulfill({ json: { patients: [patient], total: 1, page: 1, pageSize: 25 } });
+      return route.fulfill({ json: { patients: [patient], total: 1, page: 1, pageSize: 10 } });
     expect(route.request().postDataJSON().version).toBe(3);
     patient = { ...patient, version: 4, notes: 'Latest server notes' };
     return route.fulfill({ status: 409, json: { message: 'Changed' } });

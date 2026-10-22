@@ -563,7 +563,7 @@ language plpgsql stable security invoker set search_path = '' as $$
 declare result jsonb;
 begin
   if page_no is null or page_no<1 or page_no>1000000 or search_text is null or length(search_text)>100
-    or search_text ~ '[[:cntrl:]]' or kind_filter is null or kind_filter not in ('all','recurring','single','rescheduled')
+    or search_text ~ '[[:cntrl:]]' or kind_filter is null or kind_filter !~ '^(all|(recurring|single|rescheduled)(,(recurring|single|rescheduled)){0,2})$'
     or centre_filter is null or (centre_filter<>'all' and centre_filter !~* '^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$')
     or sort_by is null or sort_by not in ('effective_from','start_time','patient_name','centre_name','kind')
     or sort_order is null or sort_order not in ('asc','desc') then raise exception 'Invalid schedule search.' using errcode='22023'; end if;
@@ -571,9 +571,9 @@ begin
     select s.*,jsonb_build_object('full_name',p.full_name) as patients,c.name as centre_name
     from public.treatment_schedules s join public.patients p on p.id=s.patient_id join public.dialysis_centres c on c.id=s.centre_id
   ), matched as materialized (
-    select * from visible s where (kind_filter='all' or (kind_filter='recurring' and s.kind='recurring')
-      or (kind_filter='single' and s.kind='single' and s.replaces_schedule_id is null)
-      or (kind_filter='rescheduled' and s.replaces_schedule_id is not null))
+    select * from visible s where (kind_filter='all' or ('recurring'=any(string_to_array(kind_filter,',')) and s.kind='recurring')
+      or ('single'=any(string_to_array(kind_filter,',')) and s.kind='single' and s.replaces_schedule_id is null)
+      or ('rescheduled'=any(string_to_array(kind_filter,',')) and s.replaces_schedule_id is not null))
       and (centre_filter='all' or s.centre_id::text=centre_filter)
       and (btrim(search_text)='' or exists (
       select 1 from unnest(array[
@@ -590,13 +590,13 @@ begin
       case when sort_order='desc' then case sort_by when 'effective_from' then effective_from::text when 'start_time' then start_time::text when 'patient_name' then lower(patients->>'full_name') when 'centre_name' then lower(centre_name) when 'kind' then case when replaces_schedule_id is not null then 'rescheduled' else kind end end end desc,
       effective_from,start_time,id) as list_order from matched
   ), page as materialized (
-    select * from ordered order by list_order limit 25 offset ((page_no::bigint-1)*25)
+    select * from ordered order by list_order limit 10 offset ((page_no::bigint-1)*10)
   ), parents as (select id from page union select replaces_schedule_id from page where replaces_schedule_id is not null)
   select jsonb_build_object(
     'centres',(select coalesce(jsonb_agg(to_jsonb(c) order by name,id),'[]'::jsonb) from public.dialysis_centres c),
     'schedules',(select coalesce(jsonb_agg(to_jsonb(p)-'centre_name'-'list_order' order by list_order),'[]'::jsonb) from page p),
     'context',(select coalesce(jsonb_agg(to_jsonb(s)-'centre_name' order by effective_from,id),'[]'::jsonb) from visible s where s.id in (select id from parents) or s.replaces_schedule_id in (select id from parents)),
-    'total',(select count(*) from matched),'page',page_no,'pageSize',25) into result;
+    'total',(select count(*) from matched),'page',page_no,'pageSize',10) into result;
   return result;
 end;
 $$;
@@ -822,13 +822,13 @@ begin
   if not private.is_coordinator() and private.patient_account_id() is null then raise exception 'Trip access denied.' using errcode='42501'; end if;
   if page_no is null or page_no<1 or page_no>1000000 or from_date is null or until_date is null or not isfinite(from_date) or not isfinite(until_date)
     or from_date<date '0001-01-01' or until_date>date '9999-12-31' or until_date<from_date or until_date-from_date>89
-    or status_filter is null or status_filter not in ('all','unfilled','at-risk','on-track','resolved')
-    or direction_filter is null or direction_filter not in ('all','outbound','return')
+    or status_filter is null or status_filter !~ '^(all|(unfilled|at-risk|on-track|resolved)(,(unfilled|at-risk|on-track|resolved)){0,3})$'
+    or direction_filter is null or direction_filter !~ '^(all|(outbound|return)(,(outbound|return)){0,1})$'
     or sort_by is null or sort_by not in ('treatment_start','patient_name','direction','status')
     or sort_order is null or sort_order not in ('asc','desc')
     or search_text is null or length(search_text)>100 or search_text ~ '[[:cntrl:]]' then raise exception 'Invalid trip filters.' using errcode='22023'; end if;
   with windowed as materialized (select * from public.trips t where deleted_at is null and session_date between from_date and until_date
-    and (direction_filter='all' or direction=direction_filter)
+    and (direction_filter='all' or direction=any(string_to_array(direction_filter,',')))
     and (btrim(search_text)='' or exists(select 1 from unnest(array[
       case when private.is_coordinator() then patient_name else '' end,
       case when private.is_coordinator() then patient_id::text else '' end,
@@ -839,16 +839,16 @@ begin
       to_char(arrival_by at time zone 'Asia/Singapore','HH24:MI'),to_char(pickup_not_before at time zone 'Asia/Singapore','HH24:MI'),
       to_char(arrival_by at time zone 'Asia/Singapore','YYYY-MM-DD'),to_char(pickup_not_before at time zone 'Asia/Singapore','YYYY-MM-DD')
     ]) field where strpos(lower(field),lower(btrim(search_text)))>0))),
-    filtered as materialized (select * from windowed where status_filter='all' or status=status_filter),
+    filtered as materialized (select * from windowed where status_filter='all' or status=any(string_to_array(status_filter,','))),
     ordered as (select filtered.*,row_number() over (order by
       case when sort_by='treatment_start' and sort_order='asc' then treatment_start end asc,
       case when sort_by='treatment_start' and sort_order='desc' then treatment_start end desc,
       case when sort_order='asc' then case sort_by when 'patient_name' then lower(patient_name) when 'direction' then direction when 'status' then status end end asc,
       case when sort_order='desc' then case sort_by when 'patient_name' then lower(patient_name) when 'direction' then direction when 'status' then status end end desc,
       session_date,treatment_start,case direction when 'outbound' then 0 else 1 end,id) as list_order from filtered),
-    page as (select * from ordered order by list_order limit 25 offset ((page_no::bigint-1)*25))
+    page as (select * from ordered order by list_order limit 10 offset ((page_no::bigint-1)*10))
   select jsonb_build_object('trips',(select coalesce(jsonb_agg(to_jsonb(p)-'list_order' order by list_order),'[]'::jsonb) from page p),
-    'total',(select count(*) from filtered),'page',page_no,'pageSize',25,
+    'total',(select count(*) from filtered),'page',page_no,'pageSize',10,
     'counts',jsonb_build_object('unfilled',(select count(*) from windowed where status='unfilled'),'at-risk',0,'on-track',0,'resolved',0),
     'next_trip',(select to_jsonb(t) from public.trips t where deleted_at is null and (
       (direction='outbound' and treatment_start>now()) or

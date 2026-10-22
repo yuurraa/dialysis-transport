@@ -41,9 +41,9 @@ export class ProfilesService {
     if (typeof requestedPage !== 'string' || !/^\d+$/.test(requestedPage) || !Number.isSafeInteger(page) || page < 1 || page > 1000000) throw new BadRequestException('Invalid page.');
     if (typeof search !== 'string' || search.length > 100 || /[\u0000-\u001f\u007f]/.test(search)
       || !['created_at', 'id', 'full_name', 'phone', 'mobility', 'status'].includes(sort)
-      || !['asc', 'desc'].includes(direction) || !['all', 'active', 'inactive'].includes(status)
-      || !['all', 'ambulant', 'walking-aid', 'wheelchair'].includes(mobility)) throw new BadRequestException('Invalid search or sort.');
-    const pageSize = 25;
+      || !['asc', 'desc'].includes(direction) || (typeof status !== 'string' || (status !== 'all' && (status.split(',').length > 2 || status.split(',').some(value => !['active', 'inactive'].includes(value)))))
+      || (typeof mobility !== 'string' || (mobility !== 'all' && (mobility.split(',').length > 3 || mobility.split(',').some(value => !['ambulant', 'walking-aid', 'wheelchair'].includes(value)))))) throw new BadRequestException('Invalid search or sort.');
+    const pageSize = 10;
     let query = client.from('patients').select('id,full_name,phone,pickup_address,mobility,assistance_required,status,created_at,unit_no,postal_code,notes,version', { count: 'exact' });
     const term = search.trim();
     if (term) {
@@ -53,8 +53,8 @@ export class ProfilesService {
       if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(term)) filters.push(`id.eq.${term}`);
       query = query.or(filters.join(','));
     }
-    if (status !== 'all') query = query.eq('status', status);
-    if (mobility !== 'all') query = query.eq('mobility', mobility);
+    if (status !== 'all') query = status.includes(',') ? query.in('status', status.split(',')) : query.eq('status', status);
+    if (mobility !== 'all') query = mobility.includes(',') ? query.in('mobility', mobility.split(',')) : query.eq('mobility', mobility);
     query = query.order(sort, { ascending: direction === 'asc' });
     if (sort !== 'id') query = query.order('id', { ascending: true });
     const result = await query.range((page - 1) * pageSize, page * pageSize - 1);

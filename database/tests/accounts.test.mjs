@@ -704,12 +704,14 @@ test('schedule search paginates all matching records and retains replacement con
       from generate_series(date '2027-01-01',date '2027-01-01'+1004,interval '1 day') d`,[ids.patient,ids.centre]);
     const list=async (term='',page=1)=>(await local.query('select public.list_treatments($1,$2) as result',[term,page])).rows[0].result;
     assert.equal((await list()).total,1005);
+    assert.equal((await list()).pageSize,10);
+    assert.equal((await list()).schedules.length,10);
     const descending = (await local.query("select public.list_treatments('',1,'single','all','effective_from','desc') as result")).rows[0].result;
     assert.equal(descending.total,1005);
     assert.equal(descending.schedules[0].effective_from,'2029-10-01');
     const recurringOnly = (await local.query("select public.list_treatments('',1,'recurring','all','effective_from','asc') as result")).rows[0].result;
     assert.equal(recurringOnly.total,0);
-    const last=await list('',41);
+    const last=await list('',101);
     assert.equal(last.schedules.length,5);
     const needle=last.schedules.at(-1).effective_from;
     assert.equal((await list(needle)).schedules.length,1);
@@ -726,6 +728,9 @@ test('schedule search paginates all matching records and retains replacement con
     assert.equal((await typed('recurring', ids.centre)).context.length, 2);
     assert.equal((await typed('single')).total, 1005);
     assert.equal((await typed('rescheduled')).total, 1);
+    assert.equal((await typed('recurring,rescheduled')).total, 2);
+    assert.equal((await typed('single,rescheduled')).total, 1006);
+    for (const kind of ['', 'all,single', 'recurring,unknown', 'single,']) await assert.rejects(typed(kind), /Invalid/);
     assert.equal((await typed('all', '00000000-0000-4000-8000-000000000000')).total, 0);
     for (const args of [['bad'], ['all', 'bad'], ['all', 'all', 'bad'], ['all', 'all', 'kind', 'bad']]) await assert.rejects(typed(...args), /Invalid/);
 
@@ -834,11 +839,24 @@ test('trip listing paginates before returning rows and independent sessions reta
     const gen=async(id,version)=>(await own(coordinator,'select public.generate_treatment_trips($1,$2,$3,$4) as result',[id,dates.first,dates.until,version]))[0].result;
     assert.equal((await gen(series.id,1)).created,26);
     const list=async(page=1,status='all')=>(await own(patient,'select public.list_trips($1,$2,$3,$4) as result',[page,dates.first,dates.until,status]))[0].result;
-    assert.equal((await list()).trips.length,25);
-    assert.equal((await list(2)).trips.length,1);
+    assert.equal((await list()).trips.length,10);
+    assert.equal((await list()).pageSize,10);
+    assert.equal((await list(2)).trips.length,10);
     assert.equal((await list(2)).total,26);
+    assert.equal((await list(3)).trips.length,6);
+    assert.equal((await list(4)).trips.length,0);
     assert.equal((await list(1,'on-track')).total,0);
     assert.equal((await list(1,'on-track')).counts.unfilled,26);
+    const combined = await list(1,'unfilled,at-risk');
+    assert.equal(combined.total,26);
+    assert.equal(combined.trips.length,10);
+    assert.equal((await list(2,'unfilled,at-risk')).trips.length,10);
+    assert.equal((await list(1,'at-risk,on-track')).total,0);
+    assert.equal((await list(1,'unfilled,at-risk,on-track,resolved')).total,26);
+    assert.deepEqual(combined.next_trip,(await list(1,'at-risk,on-track')).next_trip);
+    for (const invalid of ['', 'all,unfilled', 'unfilled,unknown', 'unfilled,', ',at-risk', 'unfilled\n', 'unfilled,at-risk,on-track,resolved,unfilled']) {
+      await assert.rejects(list(1,invalid), /Invalid trip filters/);
+    }
     await assert.rejects(own(coordinator,'select public.generate_treatment_trips($1,$2::date-1,$2::date+90,1)',[series.id,dates.first]),/90 days/i);
     const [single]=await own(patient,`insert into public.treatment_schedules(patient_id,centre_id,kind,days,start_time,end_time,effective_from,effective_to)
       values($1,$2,'single',array[$3::integer],'14:00','15:00',$4,$4) returning *`,[ids.patient,ids.centre,dates.day,dates.first]);
@@ -880,10 +898,12 @@ test('trip search precedes pagination and coordinator deletion preserves history
     const descending = (await own(coordinator, "select public.list_trips(1,$1,$2,'all','','all','treatment_start','desc') as result", [dates.first,dates.until]))[0].result;
     assert.equal(descending.trips[0].session_date,dates.until);
     assert.equal(descending.total,26);
-    assert.equal(descending.trips.length,25);
-    const lastPage = (await own(coordinator, "select public.list_trips(2,$1,$2,'all','','all','treatment_start','desc') as result", [dates.first,dates.until]))[0].result;
-    assert.equal(lastPage.trips.length, 1);
-    assert.equal(new Set([...descending.trips, ...lastPage.trips].map(trip => trip.id)).size, 26);
+    assert.equal(descending.trips.length,10);
+    const middlePage = (await own(coordinator, "select public.list_trips(2,$1,$2,'all','','all','treatment_start','desc') as result", [dates.first,dates.until]))[0].result;
+    const lastPage = (await own(coordinator, "select public.list_trips(3,$1,$2,'all','','all','treatment_start','desc') as result", [dates.first,dates.until]))[0].result;
+    assert.equal(middlePage.trips.length, 10);
+    assert.equal(lastPage.trips.length, 6);
+    assert.equal(new Set([...descending.trips, ...middlePage.trips, ...lastPage.trips].map(trip => trip.id)).size, 26);
     for (const args of [['notes', 'asc'], ['status', 'bad']]) await assert.rejects(own(coordinator, "select public.list_trips(1,$1,$2,'all','','all',$3,$4)", [dates.first, dates.until, ...args]), /Invalid/);
     await assert.rejects(own(driver, "select public.list_trips(1,$1,$2,'all','','all','patient_name','desc')", [dates.first, dates.until]), /denied/);
 
@@ -894,6 +914,8 @@ test('trip search precedes pagination and coordinator deletion preserves history
     assert.equal((await list(coordinator,ids.patient)).total,26);
     assert.equal((await list(patient,ids.patient)).total,0);
     assert.equal((await list(coordinator,'','outbound')).total,13);
+    assert.equal((await list(coordinator,'','outbound,return')).total,26);
+    for (const direction of ['', 'outbound,unknown', 'all,return', 'outbound,']) await assert.rejects(list(coordinator,'',direction), /Invalid/);
     assert.equal((await list(coordinator,'%')).total,0);
     const trip=(await list()).trips[0];
     const remove=(who,version)=>own(who,'select public.delete_trip($1,$2) as id',[trip.id,version]);

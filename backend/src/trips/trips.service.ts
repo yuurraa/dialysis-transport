@@ -50,10 +50,11 @@ export class TripsService {
     const start = this.date(from);
     until ??= new Date(start + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
     this.window(from, until);
+    const statuses = typeof status === 'string' ? status.split(',') : [];
     if (typeof page !== 'string' || !/^\d+$/.test(page) || !Number.isSafeInteger(Number(page)) || Number(page) < 1 || Number(page) > 1000000
-      || typeof status !== 'string' || !['all', 'unfilled', 'at-risk', 'on-track', 'resolved'].includes(status)
+      || typeof status !== 'string' || statuses.length > 4 || (status !== 'all' && statuses.some(value => !['unfilled', 'at-risk', 'on-track', 'resolved'].includes(value)))
       || typeof search !== 'string' || search.length > 100 || /[\u0000-\u001f\u007f]/.test(search)
-      || typeof direction !== 'string' || !['all', 'outbound', 'return'].includes(direction)
+      || typeof direction !== 'string' || (direction !== 'all' && (direction.split(',').length > 2 || direction.split(',').some(value => !['outbound', 'return'].includes(value))))
       || !['treatment_start', 'patient_name', 'direction', 'status'].includes(sort) || !['asc', 'desc'].includes(order)) throw new BadRequestException('Invalid trip filters.');
     const result = await client.rpc('list_trips', { page_no: Number(page), from_date: from, until_date: until, status_filter: status, search_text: search.trim(), direction_filter: direction, sort_by: sort, sort_order: order });
     this.check(result.error);

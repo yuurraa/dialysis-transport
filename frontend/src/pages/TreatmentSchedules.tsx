@@ -1,5 +1,5 @@
 import { Dropdown } from '../components/Dropdown';
-import { InfoButton, Overlay, PageHeading, ListToolbar, ChoiceGroup, SortOverlay, ListError, ScheduleActionIcon, sortSummary } from '../components/DashboardUI';
+import { InfoButton, Overlay, PageHeading, ListToolbar, ListPagination, ChoiceGroup, SortOverlay, ListError, ScheduleActionIcon, sortSummary } from '../components/DashboardUI';
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { ApiError, apiGet, apiRequest } from '../lib/api';
 import { addDays, singaporeToday } from './TripsPage';
@@ -42,7 +42,7 @@ export default function TreatmentSchedules({ coordinator, notify, onSessionExpir
   const context = useMemo(() => [...new Map([...(data?.schedules ?? []),...(data?.context ?? [])].map(schedule => [schedule.id,schedule])).values()],[data]);
   useEffect(() => {
     if (!data || loading) return;
-    const lastPage=Math.max(1,Math.ceil((data.total ?? data.schedules.length)/(data.pageSize ?? 25)));
+    const lastPage=Math.max(1,Math.ceil((data.total ?? data.schedules.length)/(data.pageSize ?? 10)));
     if (filters.page>lastPage) setFilters(current => ({...current,page:lastPage}));
   },[data,filters.page,loading]);
   const [draftVersion, setDraftVersion] = useState<number>();
@@ -94,6 +94,30 @@ export default function TreatmentSchedules({ coordinator, notify, onSessionExpir
   }, [context]);
   const currentSchedule = editingSchedule;
   const addButton = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (coordinator) return;
+    const mobile = window.matchMedia('(max-width: 760px)');
+    const viewport = window.visualViewport;
+    // Follow the visible viewport as mobile browser controls expand or collapse.
+    const positionAddButton = () => {
+      if (!mobile.matches) return;
+      const bottom = viewport ? viewport.offsetTop + viewport.height : window.innerHeight;
+      addButton.current?.style.setProperty('--schedule-viewport-bottom', `${bottom}px`);
+    };
+    positionAddButton();
+    mobile.addEventListener('change', positionAddButton);
+    viewport?.addEventListener('resize', positionAddButton);
+    viewport?.addEventListener('scroll', positionAddButton);
+    window.addEventListener('resize', positionAddButton);
+    window.addEventListener('scroll', positionAddButton, { passive: true });
+    return () => {
+      mobile.removeEventListener('change', positionAddButton);
+      viewport?.removeEventListener('resize', positionAddButton);
+      viewport?.removeEventListener('scroll', positionAddButton);
+      window.removeEventListener('resize', positionAddButton);
+      window.removeEventListener('scroll', positionAddButton);
+    };
+  }, [coordinator]);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
   useEffect(() => {
     let active = true;
@@ -205,25 +229,24 @@ export default function TreatmentSchedules({ coordinator, notify, onSessionExpir
         {(data?.total ?? data?.schedules.length) === 0 ? (data?.centres.length ?? 0) > 0 && <div className="dashboard-data-status patients-status" role="status">{scheduleIcon}<div><h3>{searchTerm || filters.kind !== 'all' || filters.centre !== 'all' ? 'No matching schedules.' : 'No treatment schedules yet.'}</h3><p>{searchTerm || filters.kind !== 'all' || filters.centre !== 'all' ? 'Try another search or change the filters.' : coordinator ? 'Patient treatment schedules will appear here once submitted.' : 'Add your treatment schedule to share your dialysis requirements.'}</p></div></div> : searchTerm && visibleSchedules.length === 0 ? <div className="dashboard-data-status patients-status" role="status">{scheduleIcon}<div><h3>No matching schedules.</h3><p>{coordinator ? 'Try another patient name, ID, centre, day, date or schedule type.' : 'Try another centre, day, date or schedule type.'}</p></div></div> : <div className="treatment-records panel-scroll" tabIndex={0} role="region" aria-label="Treatment schedules">{visibleSchedules.map((schedule, index) => <article className="treatment-record" key={schedule.id}>
           <div className="treatment-summary">
             <div className="treatment-identity"><p>{schedule.patients.full_name}</p><p className={`treatment-kind treatment-kind-${schedule.replaces_schedule_id ? 'rescheduled' : schedule.kind ?? 'recurring'}`}>{schedule.replaces_schedule_id ? 'Rescheduled Session' : schedule.kind === 'single' ? 'Single Session' : 'Recurring'}</p></div>
-            <div className="treatment-session"><h2>{schedule.kind === 'single' ? formatDayDate(schedule.effective_from) : `Every ${schedule.days.map(day => weekdays[day-1]).join(', ')}`}</h2><p className="treatment-time">{schedule.start_time.slice(0,5)}–{schedule.end_time.slice(0,5)}</p>
-              {schedule.kind !== 'single' && <p className="treatment-date-range">{formatDate(schedule.effective_from)} – {formatDate(schedule.effective_to)}</p>}
+            <div className="treatment-session"><h2>{schedule.kind === 'single' ? formatDayDate(schedule.effective_from) : `Every ${schedule.days.map(day => weekdays[day-1]).join(', ')}`}</h2>{schedule.kind === 'single' ? <p className="treatment-time">{schedule.start_time.slice(0,5)}–{schedule.end_time.slice(0,5)}</p> : <p className="treatment-session-meta"><span>{formatDate(schedule.effective_from)} – {formatDate(schedule.effective_to)}</span><span className="treatment-session-clock"><span aria-hidden="true">·</span><span>{schedule.start_time.slice(0,5)}–{schedule.end_time.slice(0,5)}</span></span></p>}
               {schedule.replaces_date && <p className="treatment-date-range">Replaces {formatDate(schedule.replaces_date)}</p>}
               {replacements.has(schedule.id) && <button className="reschedule-summary" type="button" onClick={() => setHistorySchedule(schedule)}>{replacements.get(schedule.id)!.length} rescheduled {replacements.get(schedule.id)!.length === 1 ? 'session' : 'sessions'}</button>}
             </div>
-            <div className="treatment-location"><span>Dialysis centre</span><p>{data?.centres.find(c => c.id === schedule.centre_id)?.name}</p></div>
+            <div className="treatment-location"><span>Dialysis Centre</span><p>{data?.centres.find(c => c.id === schedule.centre_id)?.name}</p></div>
           </div>
           <div className="schedule-record-info"><InfoButton label="View schedule details" onClick={() => setViewingSchedule(schedule)} /></div>
           <div className="patient-actions schedule-record-actions">{coordinator ? <button className="patient-primary schedule-generate schedule-icon-action" type="button" aria-label="Generate Trips" title="Generate Trips" disabled={!schedule.version || !supportedDate(schedule.effective_from) || (schedule.kind === 'single' && schedule.effective_from < singaporeToday())} onClick={() => openGeneration(schedule)}><ScheduleActionIcon action="generate" /></button> : <button className="patient-primary schedule-icon-action" type="button" aria-label="Edit Schedule" title="Edit Schedule" onClick={() => open(schedule)}><ScheduleActionIcon action="edit" /></button>}</div>
-          <span className="record-number" title="Row number">{((data?.page ?? filters.page) - 1) * (data?.pageSize ?? 25) + index + 1}</span>
+          <span className="record-number" title="Row number">{((data?.page ?? filters.page) - 1) * (data?.pageSize ?? 10) + index + 1}</span>
         </article>)}</div>}
       </>}
     </>}
-    {(!error || !!draft) && <div className="patients-pagination" aria-label="Schedule pages"><span>{data ? <>{data.total ?? visibleSchedules.length} {(data.total ?? visibleSchedules.length)===1 ? 'schedule' : 'schedules'} · Page {filters.page} of {Math.max(1,Math.ceil((data.total ?? visibleSchedules.length)/(data.pageSize ?? 25)))}</> : loading ? 'Loading...' : 'Schedule count unavailable'}</span><div className="patient-actions"><button type="button" aria-label="Previous" title="Previous page" disabled={loading || !!error || search.trim()!==filters.search || filters.page===1} onClick={() => setFilters(current => ({...current,page:current.page-1}))}>{'<'}</button><button type="button" aria-label="Next" title="Next page" disabled={loading || !!error || search.trim()!==filters.search || !data || filters.page*(data.pageSize ?? 25)>=(data.total ?? visibleSchedules.length)} onClick={() => setFilters(current => ({...current,page:current.page+1}))}>{'>'}</button></div></div>}
+    {(!error || !!draft) && <ListPagination label="Schedule pages" page={filters.page} disabled={loading || !!error || search.trim() !== filters.search} hasNext={!!data && filters.page * (data.pageSize ?? 10) < (data.total ?? visibleSchedules.length)} onPageChange={page => setFilters(current => ({ ...current, page }))}>{data ? <>{data.total ?? visibleSchedules.length} {(data.total ?? visibleSchedules.length)===1 ? 'schedule' : 'schedules'} · Page {filters.page} of {Math.max(1,Math.ceil((data.total ?? visibleSchedules.length)/(data.pageSize ?? 10)))}</> : loading ? 'Loading...' : 'Schedule count unavailable'}</ListPagination>}
     {sorting && <SortOverlay sort={filters.sort} order={filters.order} options={scheduleSortOptions.filter(option => coordinator || option.value !== 'patient_name')} defaultSort="effective_from" defaultOrder="asc" onClose={() => setSorting(false)} onApply={(sort, order) => { setFilters(current => ({ ...current, page: 1, sort, order })); setSorting(false); }} />}
-    {filterDraft && <Overlay title="Schedule filters" className="list-options-dialog" onClose={() => setFilterDraft(null)} onSubmit={event => { event.preventDefault(); setFilters(current => ({ ...current, ...filterDraft, page: 1 })); setFilterDraft(null); }}
+    {filterDraft && <Overlay title="Schedule filters" description="Choose the schedules to show." className="list-options-dialog" onClose={() => setFilterDraft(null)} onSubmit={event => { event.preventDefault(); setFilters(current => ({ ...current, ...filterDraft, page: 1 })); setFilterDraft(null); }}
       footer={<><button className="patient-primary" type="submit">Apply Filters</button><button type="button" onClick={() => setFilterDraft({ kind: 'all', centre: 'all' })}>Reset</button><button type="button" onClick={() => setFilterDraft(null)}>Cancel</button></>}>
-      <ChoiceGroup label="Schedule type" value={filterDraft.kind} options={[{ value: 'all', label: 'All types' }, { value: 'recurring', label: 'Recurring' }, { value: 'single', label: 'Single Session' }, { value: 'rescheduled', label: 'Rescheduled Session' }]} onChange={kind => setFilterDraft(current => current && ({ ...current, kind }))} />
-      <div className="patient-field"><label htmlFor="schedule-filter-centre">Dialysis centre</label><Dropdown id="schedule-filter-centre" label="Dialysis centre" value={filterDraft.centre} options={[{ value: 'all', label: 'All centres' }, ...(data?.centres ?? []).map(centre => ({ value: centre.id, label: centre.name }))]} onChange={centre => setFilterDraft(current => current && ({ ...current, centre }))} /></div>
+      <ChoiceGroup label="Schedule type" multiple value={filterDraft.kind} options={[ { value: 'recurring', label: 'Recurring' }, { value: 'single', label: 'Single Session' }, { value: 'rescheduled', label: 'Rescheduled Session' }]} onChange={kind => setFilterDraft(current => current && ({ ...current, kind }))} />
+      <div className="patient-field"><label htmlFor="schedule-filter-centre">Dialysis centre</label><Dropdown id="schedule-filter-centre" label="Dialysis centre" searchable value={filterDraft.centre} options={[{ value: 'all', label: 'All centres' }, ...(data?.centres ?? []).map(centre => ({ value: centre.id, label: centre.name }))]} onChange={centre => setFilterDraft(current => current && ({ ...current, centre }))} /></div>
     </Overlay>}
     {viewingSchedule && <Overlay title="Schedule details" description={viewingSchedule.patients.full_name} onClose={() => setViewingSchedule(null)}>
       <dl className="schedule-detail-fields">
@@ -236,11 +259,17 @@ export default function TreatmentSchedules({ coordinator, notify, onSessionExpir
         {viewingSchedule.replaces_date && <div><dt>Rescheduled from</dt><dd>{formatDate(viewingSchedule.replaces_date)}</dd></div>}
       </dl>
     </Overlay>}
-    {generatingSchedule && coordinator && <Overlay title="Generate Trips" description="Create outbound and return journeys from treatment requirements." busy={generating} onClose={() => setGeneratingSchedule(null)} onSubmit={generateTrips} noValidate error={generationError} onDismissError={() => setGenerationError('')}
+    {generatingSchedule && coordinator && <Overlay title="Generate Trips" description="Create outbound and return trips." className="trip-generation-dialog" busy={generating} onClose={() => setGeneratingSchedule(null)} onSubmit={generateTrips} noValidate error={generationError} onDismissError={() => setGenerationError('')}
       footer={<><button className="patient-primary" type={generationConflict ? 'button' : 'submit'} disabled={generating} onClick={generationConflict ? () => void reloadGeneration() : undefined}>{generating ? 'Loading…' : generationConflict ? 'Reload schedules' : 'Generate Trips'}</button><button type="button" disabled={generating} onClick={() => setGeneratingSchedule(null)}>Cancel</button></>}>
-      <dl className="signup-review"><div><dt>Patient</dt><dd>{generatingSchedule.patients.full_name}</dd></div><div><dt>Patient ID</dt><dd>{generatingSchedule.patient_id}</dd></div><div><dt>Dialysis centre</dt><dd>{data?.centres.find(centre => centre.id === generatingSchedule.centre_id)?.name}</dd></div><div><dt>Source</dt><dd>{generatingSchedule.kind === 'single' ? `Single session · ${formatDate(generatingSchedule.effective_from)}` : 'Recurring series, including rescheduled sessions in this date range'}</dd></div></dl>
+      <section className="generation-summary" aria-label="Treatment schedule">
+        <div className="generation-patient"><h3>{generatingSchedule.patients.full_name}</h3><span className={`generation-kind generation-kind-${generatingSchedule.replaces_schedule_id ? 'rescheduled' : generatingSchedule.kind ?? 'recurring'}`}>{generatingSchedule.replaces_schedule_id ? 'Rescheduled' : generatingSchedule.kind === 'single' ? 'Single Session' : 'Recurring'}</span></div>
+        <p className="generation-patient-id">Patient ID: {generatingSchedule.patient_id}</p>
+        <p className="generation-session">{generatingSchedule.kind === 'single' ? formatDayDate(generatingSchedule.effective_from) : `Every ${generatingSchedule.days.map(day => weekdays[day-1]).join(', ')}`} · {generatingSchedule.start_time.slice(0,5)}–{generatingSchedule.end_time.slice(0,5)}</p>
+        <dl><div><dt>Dialysis centre</dt><dd>{data?.centres.find(centre => centre.id === generatingSchedule.centre_id)?.name}</dd></div></dl>
+      </section>
       <fieldset className="patient-form-fields trip-generation-dates" disabled={generating}><div className="patient-field"><label htmlFor="generation-from">From date</label><input id="generation-from" type="date" min={singaporeToday()} max={generationDates.until} value={generationDates.from} onChange={event => setGenerationDates(current => ({ ...current, from: event.target.value }))} /></div><div className="patient-field"><label htmlFor="generation-until">Until date</label><input id="generation-until" type="date" min={generationDates.from} max={supportedDate(generationDates.from) ? addDays(generationDates.from, 89) : undefined} value={generationDates.until} onChange={event => setGenerationDates(current => ({ ...current, until: event.target.value }))} /></div></fieldset>
-      <p className="patient-overview-note">Trips start as Unfilled. Home pickup time, driver and vehicle assignment are pending. Outbound arrival is 15 minutes before treatment; return pickup is no earlier than 15 minutes after treatment ends. Existing trips are updated without duplicates.</p>
+      <p className="generation-range-hint">Up to 90 days.{generatingSchedule.kind !== 'single' && ' Includes rescheduled sessions.'}</p>
+      <dl className="generation-timing"><div><dt>Outbound arrival</dt><dd>15 min before session starts</dd></div><div><dt>Return pickup</dt><dd>15+ min after session ends</dd></div></dl>
     </Overlay>}
     {draft && !coordinator && <Overlay title={confirmingDelete ? 'Delete Schedule' : id || rescheduling ? 'Edit Schedule' : 'Add Schedule'}
       description={confirmingDelete ? 'Review what will be removed before confirming.' : rescheduling ? 'Change one session. Other weeks stay unchanged.' : currentSchedule?.kind !== 'single' && currentSchedule ? 'Changes apply to the entire recurring schedule.' : 'Record the centre, date and treatment times.'}

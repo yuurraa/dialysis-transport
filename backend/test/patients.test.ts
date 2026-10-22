@@ -32,7 +32,7 @@ const gateway = { forUser: () => ({
     let writing = false;
     const result = () => ({ data: missing ? null : writing ? { ...record, ...(saved as object) } : [record], count: 1, error: failure ? { code: 'XX000', message: 'PRIVATE_DETAIL' } : null });
     const query = {
-      select: () => query, or: (value: string) => { filters = value; return query; }, order: (column: string, options?: { ascending: boolean }) => { orders.push([column, options?.ascending ?? true]); return query; }, range: (from: number, to: number) => { bounds = [from, to]; return Promise.resolve(result()); }, eq: (key: string, value: unknown) => { equalities.push([key, value]); return query; },
+      select: () => query, or: (value: string) => { filters = value; return query; }, order: (column: string, options?: { ascending: boolean }) => { orders.push([column, options?.ascending ?? true]); return query; }, range: (from: number, to: number) => { bounds = [from, to]; return Promise.resolve(result()); }, eq: (key: string, value: unknown) => { equalities.push([key, value]); return query; }, in: (key: string, values: unknown[]) => { equalities.push([key, values]); return query; },
       insert: (body: unknown) => { writes++; writing = true; saved = body; return query; },
       update: (body: unknown) => { writes++; writing = true; saved = body; return query; },
       single: async () => result(), maybeSingle: async () => ({ ...result(), data: missing ? null : { ...record, ...(writing ? saved as object : {}), account_id: id } }),
@@ -66,14 +66,14 @@ test('patient endpoints require an active coordinator and verified session', asy
 test('lists real records with bounded pagination', async () => {
   const result = await request('?page=1');
   assert.equal(result.status, 200);
-  assert.deepEqual(result.body, { patients: [record], total: 1, page: 1, pageSize: 25 });
+  assert.deepEqual(result.body, { patients: [record], total: 1, page: 1, pageSize: 10 });
   for (const page of ['0', '-1', 'no', '1.5', '999999999999999999']) assert.equal((await request(`?page=${page}`)).status, 400);
 });
 test('search and column sorting run before pagination and reject unsupported query options', async () => {
   assert.equal((await request('?page=2&search=Test&sort=full_name&direction=asc')).status, 200);
   assert.equal(filters, 'full_name.ilike."%Test%",phone.ilike."%Test%"');
   assert.deepEqual(orders, [['full_name', true], ['id', true]]);
-  assert.deepEqual(bounds, [25, 49]);
+  assert.deepEqual(bounds, [10, 19]);
   assert.equal((await request(`?search=${id}&sort=id&direction=desc`)).status, 200);
   assert.ok(filters.endsWith(`,id.eq.${id}`));
   assert.deepEqual(orders, [['id', false]]);
@@ -159,5 +159,8 @@ test('patient edits require a version and stale database writes return conflict'
 test('patient filters validate and constrain the query before pagination', async () => {
   assert.equal((await request('?status=inactive&mobility=wheelchair')).status, 200);
   assert.deepEqual(equalities, [['status', 'inactive'], ['mobility', 'wheelchair']]);
-  for (const query of ['status=unknown', 'mobility=unknown', 'status=active&status=inactive']) assert.equal((await request(`?${query}`)).status, 400);
+  assert.equal((await request('?status=active,inactive&mobility=walking-aid,wheelchair')).status, 200);
+  assert.deepEqual(equalities, [['status', ['active', 'inactive']], ['mobility', ['walking-aid', 'wheelchair']]]);
+  assert.deepEqual(bounds, [0, 9]);
+  for (const query of ['status=unknown', 'mobility=unknown', 'status=active&status=inactive', 'status=active,unknown', 'status=active,', 'status=', 'mobility=all,wheelchair', 'mobility=wheelchair,unknown', 'mobility=']) assert.equal((await request(`?${query}`)).status, 400);
 });

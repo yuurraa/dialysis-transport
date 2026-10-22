@@ -30,7 +30,7 @@ export class SchedulingService {
     const { client } = await this.access(header);
     if (typeof requestedPage !== 'string' || !/^\d+$/.test(requestedPage) || !Number.isSafeInteger(Number(requestedPage))
       || Number(requestedPage)<1 || Number(requestedPage)>1000000 || typeof search !== 'string' || search.length>100 || /[\u0000-\u001f\u007f]/.test(search)) throw new BadRequestException('Invalid schedule search.');
-    if (!['all', 'recurring', 'single', 'rescheduled'].includes(kind) || typeof centre !== 'string'
+    if ((typeof kind !== 'string' || (kind !== 'all' && (kind.split(',').length > 3 || kind.split(',').some(value => !['recurring', 'single', 'rescheduled'].includes(value))))) || typeof centre !== 'string'
       || (centre !== 'all' && !/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(centre))
       || !['effective_from', 'start_time', 'patient_name', 'centre_name', 'kind'].includes(sort)
       || !['asc', 'desc'].includes(order)) throw new BadRequestException('Invalid schedule filters or sort.');

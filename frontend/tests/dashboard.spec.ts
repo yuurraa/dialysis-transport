@@ -17,9 +17,12 @@ for (const access of ['signed-out', 'unregistered', 'driver', 'caregiver', 'inac
       await expect(page.getByRole('link', { name: 'Patients', exact: true })).toHaveCount(0);
       return;
     }
+    if (access === 'unregistered') {
+      // Wait for session restoration and the account lookup before checking the redirect.
+      await expect(page.getByRole('heading', { name: 'Create your account', exact: true })).toBeVisible({ timeout: 10000 });
+    }
     await expect(page).toHaveURL('http://127.0.0.1:5199/');
     await expect(page.locator('.dashboard-page')).toHaveCount(0);
-    if (access === 'unregistered') await expect(page.getByRole('heading', { name: 'Create your account' })).toBeVisible();
   });
 }
 

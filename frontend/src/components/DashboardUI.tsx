@@ -66,6 +66,42 @@ export function Overlay({ title, description, children, footer, onClose, onSubmi
   </dialog>;
 }
 
+/** Viewport-pinned pagination shared by the three record lists. */
+export function ListPagination({ children, label, page, hasNext, disabled, onPageChange }: {
+  children: ReactNode; label: string; page: number; hasNext: boolean; disabled: boolean; onPageChange: (page: number) => void;
+}) {
+  const footer = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const element = footer.current!;
+    const main = element.closest<HTMLElement>('.dashboard-main')!;
+    const viewport = window.visualViewport;
+    const measure = () => {
+      main.style.setProperty('--list-pagination-height', `${element.getBoundingClientRect().height}px`);
+      main.style.setProperty('--list-viewport-bottom', `${viewport ? viewport.offsetTop + viewport.height : innerHeight}px`);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    window.addEventListener('resize', measure);
+    window.addEventListener('scroll', measure, { passive: true });
+    viewport?.addEventListener('resize', measure);
+    viewport?.addEventListener('scroll', measure);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', measure);
+      window.removeEventListener('scroll', measure);
+      viewport?.removeEventListener('resize', measure);
+      viewport?.removeEventListener('scroll', measure);
+      main.style.removeProperty('--list-pagination-height');
+      main.style.removeProperty('--list-viewport-bottom');
+    };
+  }, []);
+  return <div ref={footer} className="patients-pagination" aria-label={label}><span>{children}</span><div className="patient-actions">
+    <button type="button" aria-label="Previous" title="Previous page" disabled={disabled || page <= 1} onClick={() => onPageChange(page - 1)}>{'<'}</button>
+    <button type="button" aria-label="Next" title="Next page" disabled={disabled || !hasNext} onClick={() => onPageChange(page + 1)}>{'>'}</button>
+  </div></div>;
+}
+
 /** The same search/filter/sort order is used by every record list. */
 export function ListToolbar({ search, onSearch, label, placeholder, filterCount, onFilter, onSort, sortLabel }: {
   search: string; onSearch: (value: string) => void; label: string; placeholder: string;
@@ -99,12 +135,19 @@ export function ListToolbar({ search, onSearch, label, placeholder, filterCount,
   </div>;
 }
 
-export function ChoiceGroup({ label, value, options, onChange }: {
-  label: string; value: string; options: readonly { value: string; label: string; title?: string }[]; onChange: (value: string) => void;
+export function ChoiceGroup({ label, value, options, onChange, multiple = false }: {
+  label: string; value: string; options: readonly { value: string; label: string; title?: string }[]; onChange: (value: string) => void; multiple?: boolean;
 }) {
   const name = useId();
+  function choose(next: string) {
+    if (!multiple) { onChange(next); return; }
+    const selected = new Set(value === 'all' ? options.map(option => option.value) : value.split(','));
+    if (selected.has(next)) selected.delete(next); else selected.add(next);
+    if (!selected.size) return;
+    onChange(selected.size === options.length ? 'all' : options.filter(option => selected.has(option.value)).map(option => option.value).join(','));
+  }
   return <fieldset className="list-choice-group"><legend>{label}</legend><div className="list-choices">
-    {options.map(option => <label key={option.value} className="list-choice" title={option.title}><input type="radio" name={name} value={option.value} checked={value === option.value} onChange={() => onChange(option.value)} /><span>{option.label}</span></label>)}
+    {options.map(option => <label key={option.value} className="list-choice" title={option.title}><input type={multiple ? "checkbox" : "radio"} name={name} value={option.value} checked={multiple ? value === 'all' || value.split(',').includes(option.value) : value === option.value} onChange={() => choose(option.value)} /><span>{option.label}</span></label>)}
   </div></fieldset>;
 }
 

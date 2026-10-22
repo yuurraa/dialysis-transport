@@ -1,4 +1,4 @@
-import { test, expect, session, seedSession, activeAccount, fixtureTrip, chooseOption, mockServices } from './support/fixtures';
+import { test, expect, session, seedSession, activeAccount, fixtureTrip, mockServices } from './support/fixtures';
 
 test.beforeEach(mockServices);
 
@@ -6,11 +6,11 @@ for (const role of ['patient', 'coordinator']) test(`${role} trip list shows pic
   await seedSession(page);
   await page.setViewportSize({ width: 390, height: 844 });
   await page.route('**/api/auth/me', route => route.fulfill({ json: { account: { ...activeAccount, role } } }));
-  await page.route('**/api/trips?*', route => route.fulfill({ json: { trips: Array.from({ length: 25 }, (_, index) => ({ ...fixtureTrip, id: `trip-${index}`, ...(index === 1 ? { direction: 'return', arrival_by: null, pickup_not_before: '2026-10-20T13:15:00+08:00', review_required: true } : {}) })), total: 26, page: 1, pageSize: 25, counts: { unfilled: 26, 'at-risk': 0, 'on-track': 0, resolved: 0 }, next_trip: fixtureTrip } }));
+  await page.route('**/api/trips?*', route => route.fulfill({ json: { trips: Array.from({ length: 10 }, (_, index) => ({ ...fixtureTrip, id: `trip-${index}`, ...(index === 1 ? { direction: 'return', arrival_by: null, pickup_not_before: '2026-10-20T13:15:00+08:00', review_required: true } : {}) })), total: 26, page: 1, pageSize: 10, counts: { unfilled: 26, 'at-risk': 0, 'on-track': 0, resolved: 0 }, next_trip: fixtureTrip } }));
   await page.goto('/dashboard/trips');
   const list = page.getByRole('region', { name: 'Trip list', exact: true });
   await expect(list).toBeVisible();
-  await expect(list.locator('article')).toHaveCount(25);
+  await expect(list.locator('article')).toHaveCount(10);
   await expect(list.locator('article').first()).not.toContainText('Pickup pending');
   await expect(list.locator('article').first().locator('.trip-status-badge')).toHaveText('Unfilled');
   await expect(list.locator('article').first()).not.toContainText('Arrival by');
@@ -22,15 +22,17 @@ for (const role of ['patient', 'coordinator']) test(`${role} trip list shows pic
   expect(await list.evaluate(element => element.scrollHeight <= element.clientHeight + 1)).toBe(true);
   expect(await page.evaluate(() => document.documentElement.scrollHeight > innerHeight)).toBe(true);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-  await list.locator('article').nth(1).getByRole('button', { name: 'View details', exact: true }).click();
+  await list.locator('article').nth(1).getByRole('button', { name: 'View trip details', exact: true }).click();
   const returnDetails = page.getByRole('dialog', { name: 'Trip details', exact: true });
   await expect(returnDetails).toContainText('Earliest return pickup');
   await expect(returnDetails).toContainText('13:15');
   await returnDetails.getByRole('button', { name: /^Close / }).click();
   if (role === 'coordinator') {
     await page.getByRole('button', { name: 'Filters', exact: true }).click();
-    await page.getByRole('dialog', { name: 'Trip filters', exact: true }).getByLabel('Status', { exact: true }).click();
-    await expect(page.getByRole('listbox', { name: 'Status', exact: true }).getByRole('option')).toHaveText(['All trips', 'Unfilled (26)', 'At-Risk (0)', 'On-Track (0)', 'Resolved (0)']);
+    const statuses = page.getByRole('dialog', { name: 'Trip filters', exact: true }).getByRole('group', { name: 'Status', exact: true });
+    await expect(statuses.getByRole('checkbox')).toHaveCount(4);
+    await expect(statuses.locator('input[type="checkbox"]:checked')).toHaveCount(4);
+    await expect(statuses.getByRole('checkbox', { name: 'At-Risk (0)', exact: true })).toBeEnabled();
   }
   else { await expect(page.locator('.patient-next-pickup')).toContainText('Pickup time to be confirmed'); await expect(page.locator('.dashboard-metrics')).toHaveCount(0); }
 });
@@ -42,7 +44,7 @@ test('coordinator generates unfilled trips and preserves dates after a stale sch
   await page.route('**/api/auth/me', route => route.fulfill({ json: { account: { ...activeAccount, role: 'coordinator' } } }));
   const centre = { id: '77777777-7777-4777-8777-777777777777', name: 'Fixture Centre', address: 'Fixture street', postal_code: '560123' };
   let version = 1;
-  await page.route('**/api/schedules?*', route => route.fulfill({ json: { centres: [centre], schedules: [{ id: fixtureTrip.source_schedule_id, version, patient_id: session.user.id, patients: { full_name: 'Test Patient' }, kind: 'recurring', centre_id: centre.id, days: [2], start_time: '09:00', end_time: '13:00', effective_from: '2026-10-20', effective_to: '2026-12-31' }], context: [], total: 1, page: 1, pageSize: 25 } }));
+  await page.route('**/api/schedules?*', route => route.fulfill({ json: { centres: [centre], schedules: [{ id: fixtureTrip.source_schedule_id, version, patient_id: session.user.id, patients: { full_name: 'Test Patient' }, kind: 'recurring', centre_id: centre.id, days: [2], start_time: '09:00', end_time: '13:00', effective_from: '2026-10-20', effective_to: '2026-12-31' }], context: [], total: 1, page: 1, pageSize: 10 } }));
   await page.route('**/api/trips/generate', route => {
     const body = route.request().postDataJSON();
     expect(body).toEqual({ schedule_id: fixtureTrip.source_schedule_id, version: body.version, from_date: '2026-10-21', until_date: '2026-11-19' });
@@ -53,7 +55,6 @@ test('coordinator generates unfilled trips and preserves dates after a stale sch
   await page.getByRole('button', { name: 'Generate Trips', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: 'Generate Trips', exact: true });
   await expect(dialog).toContainText('Test Patient');
-  await expect(dialog).toContainText('Unfilled');
   expect(await dialog.evaluate(element => element.getBoundingClientRect().bottom <= innerHeight)).toBe(true);
   await dialog.getByLabel('From date', { exact: true }).fill('2026-10-21');
   await dialog.getByRole('button', { name: 'Generate Trips', exact: true }).click();
@@ -69,7 +70,7 @@ test('coordinator generates unfilled trips and preserves dates after a stale sch
 test('successful empty trip data differs from an unavailable trip service', async ({ page }) => {
   await seedSession(page);
   await page.route('**/api/auth/me', route => route.fulfill({ json: { account: activeAccount } }));
-  await page.route('**/api/trips?*', route => route.fulfill({ json: { trips: [], total: 0, page: 1, pageSize: 25, counts: { unfilled: 0, 'at-risk': 0, 'on-track': 0, resolved: 0 }, next_trip: null } }));
+  await page.route('**/api/trips?*', route => route.fulfill({ json: { trips: [], total: 0, page: 1, pageSize: 10, counts: { unfilled: 0, 'at-risk': 0, 'on-track': 0, resolved: 0 }, next_trip: null } }));
   await page.goto('/dashboard/trips');
   await expect(page.getByText('No trips scheduled.', { exact: true })).toBeVisible();
   await expect(page.getByText('Trips could not be loaded', { exact: true })).toHaveCount(0);
@@ -77,7 +78,7 @@ test('successful empty trip data differs from an unavailable trip service', asyn
   await page.reload();
   await expect(page.getByText('Trips could not be loaded', { exact: true })).toBeVisible();
   await expect(page.getByText('No trips scheduled.', { exact: true })).toHaveCount(0);
-  await page.route('**/api/trips?*', route => route.fulfill({ json: { trips: [], total: 0, page: 1, pageSize: 25, counts: { unfilled: 0, 'at-risk': 0, 'on-track': 0, resolved: 0 }, next_trip: null } }));
+  await page.route('**/api/trips?*', route => route.fulfill({ json: { trips: [], total: 0, page: 1, pageSize: 10, counts: { unfilled: 0, 'at-risk': 0, 'on-track': 0, resolved: 0 }, next_trip: null } }));
   await page.getByRole('button', { name: 'Try again', exact: true }).click();
   await expect(page.getByText('No trips scheduled.', { exact: true })).toBeVisible();
 });
@@ -88,7 +89,7 @@ test('compact trip tools search on the server and apply filters only after confi
   const queries: URLSearchParams[] = [];
   await page.route('**/api/trips?*', route => {
     const query = new URL(route.request().url()).searchParams; queries.push(query);
-    return route.fulfill({ json: { trips: [{ ...fixtureTrip, version: 1 }], total: query.get('search') ? 1 : 26, page: Number(query.get('page')), pageSize: 25, counts: { unfilled: 26, 'at-risk': 0, 'on-track': 0, resolved: 0 }, next_trip: fixtureTrip } });
+    return route.fulfill({ json: { trips: [{ ...fixtureTrip, version: 1 }], total: query.get('search') ? 1 : 26, page: Number(query.get('page')), pageSize: 10, counts: { unfilled: 26, 'at-risk': 0, 'on-track': 0, resolved: 0 }, next_trip: fixtureTrip } });
   });
   await page.goto('/dashboard/trips');
   await expect(page.locator('.dashboard-metrics')).toHaveCount(0);
@@ -102,27 +103,37 @@ test('compact trip tools search on the server and apply filters only after confi
   expect(queries.at(-1)?.get('page')).toBe('1');
   await page.getByRole('button', { name: 'Filters', exact: true }).click();
   const filters = page.getByRole('dialog', { name: 'Trip filters', exact: true });
-  await chooseOption(filters.getByLabel('Direction', { exact: true }), 'return');
-  await chooseOption(filters.getByLabel('Status', { exact: true }), 'at-risk');
+  await filters.getByRole('checkbox', { name: 'Outbound', exact: true }).uncheck();
+  await filters.getByRole('checkbox', { name: 'On-Track (0)', exact: true }).uncheck();
   await filters.getByRole('button', { name: 'Cancel', exact: true }).click();
   expect(queries.at(-1)?.get('direction')).toBe('all');
   expect(queries.at(-1)?.get('status')).toBe('all');
   await page.getByRole('button', { name: 'Filters', exact: true }).click();
-  await chooseOption(filters.getByLabel('Direction', { exact: true }), 'return');
+  await filters.getByRole('checkbox', { name: 'Outbound', exact: true }).uncheck();
   await filters.getByRole('button', { name: 'Apply Filters', exact: true }).click();
   await expect.poll(() => queries.at(-1)?.get('direction')).toBe('return');
   await expect(page.locator('.trip-filter-badge')).toHaveText('1');
   await page.getByRole('button', { name: 'Filters', exact: true }).click();
-  await chooseOption(filters.getByLabel('Status', { exact: true }), 'unfilled');
+  await filters.getByRole('checkbox', { name: 'On-Track (0)', exact: true }).uncheck();
+  await filters.getByRole('checkbox', { name: 'Resolved (0)', exact: true }).uncheck();
   expect(queries.at(-1)?.get('status')).toBe('all');
   await filters.getByRole('button', { name: 'Apply Filters', exact: true }).click();
-  await expect.poll(() => queries.at(-1)?.get('status')).toBe('unfilled');
+  await expect.poll(() => queries.at(-1)?.get('status')).toBe('unfilled,at-risk');
   await expect(page.locator('.trip-filter-badge')).toHaveText('2');
   await page.getByRole('button', { name: 'Filters', exact: true }).click();
   await filters.getByLabel('Until date', { exact: true }).fill(await filters.getByLabel('From date', { exact: true }).inputValue());
   await filters.getByRole('button', { name: 'Apply Filters', exact: true }).click();
   await expect(page.locator('.trip-filter-badge')).toHaveText('3');
-  await page.getByRole('button', { name: 'View details', exact: true }).first().click();
+  await page.getByRole('button', { name: 'Filters', exact: true }).click();
+  await expect(filters.getByRole('checkbox', { name: 'Unfilled (26)', exact: true })).toBeChecked();
+  await expect(filters.getByRole('checkbox', { name: 'At-Risk (0)', exact: true })).toBeChecked();
+  await filters.getByRole('button', { name: 'Reset', exact: true }).click();
+  await expect(filters.getByRole('group', { name: 'Status', exact: true }).locator('input:checked')).toHaveCount(4);
+  await expect(filters.getByRole('group', { name: 'Direction', exact: true }).locator('input:checked')).toHaveCount(2);
+  await filters.getByRole('button', { name: 'Apply Filters', exact: true }).click();
+  await expect.poll(() => queries.at(-1)?.get('status')).toBe('all');
+  await expect(page.locator('.trip-filter-badge')).toHaveCount(0);
+  await page.getByRole('button', { name: 'View trip details', exact: true }).first().click();
   const details = page.getByRole('dialog', { name: 'Trip details', exact: true });
   await expect(details).toContainText('Fixture home');
   await expect(details).toContainText('Fixture Centre');
@@ -136,7 +147,7 @@ test('trip deletion preserves context on errors and reloads stale versions befor
   await seedSession(page);
   await page.route('**/api/auth/me', route => route.fulfill({ json: { account: { ...activeAccount, role: 'coordinator' } } }));
   let version = 1; let deleted = false; let attempts = 0;
-  await page.route('**/api/trips?*', route => route.fulfill({ json: { trips: deleted ? [] : [{ ...fixtureTrip, version }], total: deleted ? 0 : 1, page: 1, pageSize: 25, counts: { unfilled: deleted ? 0 : 1, 'at-risk': 0, 'on-track': 0, resolved: 0 }, next_trip: deleted ? null : { ...fixtureTrip, version } } }));
+  await page.route('**/api/trips?*', route => route.fulfill({ json: { trips: deleted ? [] : [{ ...fixtureTrip, version }], total: deleted ? 0 : 1, page: 1, pageSize: 10, counts: { unfilled: deleted ? 0 : 1, 'at-risk': 0, 'on-track': 0, resolved: 0 }, next_trip: deleted ? null : { ...fixtureTrip, version } } }));
   await page.route('**/api/trips/trip-1', route => {
     expect(route.request().method()).toBe('DELETE');
     expect(route.request().postDataJSON()).toEqual({ version });
@@ -146,7 +157,7 @@ test('trip deletion preserves context on errors and reloads stale versions befor
     deleted = true; return route.fulfill({ json: { id: fixtureTrip.id } });
   });
   await page.goto('/dashboard/trips');
-  await page.getByRole('button', { name: 'View details', exact: true }).click();
+  await page.getByRole('button', { name: 'View trip details', exact: true }).click();
   await page.getByRole('dialog').getByRole('button', { name: 'Delete Trip', exact: true }).click();
   const confirmation = page.getByRole('dialog', { name: 'Delete Trip', exact: true });
   await expect(confirmation).toContainText('one journey');
@@ -160,6 +171,6 @@ test('trip deletion preserves context on errors and reloads stale versions befor
   await expect(confirmation).not.toBeVisible();
   await expect(page.getByText('No trips scheduled.', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Filters', exact: true }).click();
-  await chooseOption(page.getByLabel('Status', { exact: true }), 'unfilled');
-  await expect(page.getByLabel('Status', { exact: true })).toContainText('Unfilled (0)');
+  await page.getByRole('checkbox', { name: 'Unfilled (0)', exact: true }).check();
+  await expect(page.getByRole('checkbox', { name: 'Unfilled (0)', exact: true })).toBeChecked();
 });

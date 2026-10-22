@@ -215,15 +215,18 @@ test('schedule pagination sends search to the server and resets to the first pag
     const query = new URL(route.request().url()).searchParams; requests.push(query);
     const number = Number(query.get('page')); const term = query.get('search');
     const filtered = term ? schedules.filter(item => item.patients.full_name.includes(term)) : schedules;
-    return route.fulfill({ json: { centres: [centre], schedules: filtered.slice((number - 1) * 25, number * 25), context: [], total: filtered.length, page: number, pageSize: 25 } });
+    return route.fulfill({ json: { centres: [centre], schedules: filtered.slice((number - 1) * 10, number * 10), context: [], total: filtered.length, page: number, pageSize: 10 } });
   });
   await page.goto('/dashboard/schedules');
-  await expect(page.locator('.treatment-record')).toHaveCount(25);
+  await expect(page.locator('.treatment-record')).toHaveCount(10);
   await page.getByRole('button', { name: 'Next', exact: true }).click();
-  await expect(page.locator('.treatment-record')).toHaveCount(1);
-  await expect(page.locator('.treatment-record')).toContainText('Fixture Patient 26');
+  await expect(page.locator('.treatment-record')).toHaveCount(10);
+  await expect(page.locator('.treatment-record').first()).toContainText('Fixture Patient 11');
+  await page.getByRole('button', { name: 'Next', exact: true }).click();
+  await expect(page.locator('.treatment-record')).toHaveCount(6);
+  await expect(page.locator('.treatment-record').last()).toContainText('Fixture Patient 26');
   await page.getByRole('searchbox', { name: 'Search treatment schedules' }).fill('Fixture Patient 1');
-  await expect(page.locator('.treatment-record')).toHaveCount(11);
+  await expect(page.locator('.treatment-record')).toHaveCount(10);
   expect(requests.at(-1)!.get('page')).toBe('1');
   expect(requests.at(-1)!.get('search')).toBe('Fixture Patient 1');
 
@@ -236,7 +239,7 @@ for (const operation of ['edit', 'delete']) test(`stale schedule ${operation} pr
   let version = 3;
   const schedule = () => ({ id: centre.id, version, patient_id: 'fixture', patients: { full_name: 'Fixture Patient' }, kind: 'recurring', centre_id: centre.id, days: [1], effective_from: '2026-10-19', effective_to: '2026-12-31', start_time: version === 3 ? '09:00' : '08:00', end_time: '13:00' });
   await page.route('**/api/schedules**', route => {
-    if (route.request().method() === 'GET') return route.fulfill({ json: { centres: [centre], schedules: [schedule()], context: [], total: 1, page: 1, pageSize: 25 } });
+    if (route.request().method() === 'GET') return route.fulfill({ json: { centres: [centre], schedules: [schedule()], context: [], total: 1, page: 1, pageSize: 10 } });
     expect(route.request().postDataJSON().version).toBe(3); version = 4;
     return route.fulfill({ status: 409, json: { message: 'Changed' } });
   });
@@ -258,7 +261,7 @@ test("schedule list retries failed loads without showing unavailable pagination"
   await seedSession(page);
   await page.route('**/api/auth/me', route => route.fulfill({ json: { account: { ...activeAccount, role: 'coordinator' } } }));
   let failing = true;
-  await page.route("**/api/schedules?*", route => failing ? route.fulfill({ status: 503, json: { message: 'Unavailable' } }) : route.fulfill({ json: { schedules: [], centres: [], context: [], total: 0, page: 1, pageSize: 25, counts: {}, next_trip: null } }));
+  await page.route("**/api/schedules?*", route => failing ? route.fulfill({ status: 503, json: { message: 'Unavailable' } }) : route.fulfill({ json: { schedules: [], centres: [], context: [], total: 0, page: 1, pageSize: 10, counts: {}, next_trip: null } }));
   const width = 375;
   await page.setViewportSize({ width, height: 800 });
   await page.goto("/dashboard/schedules");
