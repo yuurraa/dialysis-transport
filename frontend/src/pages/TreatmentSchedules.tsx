@@ -94,30 +94,6 @@ export default function TreatmentSchedules({ coordinator, notify, onSessionExpir
   }, [context]);
   const currentSchedule = editingSchedule;
   const addButton = useRef<HTMLButtonElement>(null);
-  useEffect(() => {
-    if (coordinator) return;
-    const mobile = window.matchMedia('(max-width: 760px)');
-    const viewport = window.visualViewport;
-    // Follow the visible viewport as mobile browser controls expand or collapse.
-    const positionAddButton = () => {
-      if (!mobile.matches) return;
-      const bottom = viewport ? viewport.offsetTop + viewport.height : window.innerHeight;
-      addButton.current?.style.setProperty('--schedule-viewport-bottom', `${bottom}px`);
-    };
-    positionAddButton();
-    mobile.addEventListener('change', positionAddButton);
-    viewport?.addEventListener('resize', positionAddButton);
-    viewport?.addEventListener('scroll', positionAddButton);
-    window.addEventListener('resize', positionAddButton);
-    window.addEventListener('scroll', positionAddButton, { passive: true });
-    return () => {
-      mobile.removeEventListener('change', positionAddButton);
-      viewport?.removeEventListener('resize', positionAddButton);
-      viewport?.removeEventListener('scroll', positionAddButton);
-      window.removeEventListener('resize', positionAddButton);
-      window.removeEventListener('scroll', positionAddButton);
-    };
-  }, [coordinator]);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
   useEffect(() => {
     let active = true;

@@ -28,6 +28,30 @@ function tripTimestamp(value: string, options: Intl.DateTimeFormatOptions) {
 }
 const tripDate = (value: string) => tripTimestamp(value, { day: 'numeric', month: 'short', year: 'numeric' });
 const tripTime = (value: string) => tripTimestamp(value, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+// Short list labels only; the API values remain intact for desktop and the details dialog.
+function compactRouteLabel(address: string) {
+  const original = address.trim().replace(/\s+/g, ' ');
+  const label = original
+    .replace(/,?\s*Singapore\s+\d{6}\s*$/i, '')
+    .replace(/,?\s*\d{6}\s*$/, '')
+    .split(/,\s*(?=(?:Blk|Block)\b|\d|#)/i)[0]
+    .replace(/\s*#.*$/, '')
+    .replace(/^(?:Blk|Block)\s+\d+[A-Za-z]?\s+/i, '')
+    .replace(/\bNKF Dialysis Centre Supported by\s+/i, 'NKF ')
+    .replace(/\bNKF Dialysis Centre\b/gi, 'NKF')
+    .replace(/\bDialysis Centre\b/gi, 'Dialysis')
+    .replace(/[\s,]+$/, '');
+  return label || original || 'Address unavailable';
+}
+function RouteAddress({ address }: { address: string }) {
+  return <><span className="trip-address-full">{address}</span><span className="trip-address-short">{compactRouteLabel(address)}</span></>;
+}
+function MobileTripTiming({ trip }: { trip: Trip }) {
+  const timing = trip.pickup_at ? `Pickup at ${tripTime(trip.pickup_at)}`
+    : trip.direction === 'outbound' && trip.arrival_by ? `Arrive by ${tripTime(trip.arrival_by)}`
+    : trip.direction === 'return' && trip.pickup_not_before ? `Earliest pickup ${tripTime(trip.pickup_not_before)}` : null;
+  return timing ? <p className="trip-mobile-timing">{timing}</p> : null;
+}
 function JourneyDetails({ trip }: { trip: Trip }) {
   return <div className="trip-journey-details"><ol className="trip-detail-route" aria-label="Journey route"><li><div><span>From</span><p>{trip.origin}</p></div></li><li><div><span>To</span><p>{trip.destination}</p></div></li></ol>
     <dl className="trip-detail-timings"><div><dt>Treatment</dt><dd>{tripTime(trip.treatment_start)} - {tripTime(trip.treatment_end)}</dd></div>
@@ -130,12 +154,13 @@ export default function TripsPage({ coordinator, onSessionExpired }: { coordinat
           <div className="trip-record-heading">
             <h3 className="trip-record-title"><span>{tripDate(trip.treatment_start)}</span><span className="trip-direction-status"><span>{trip.direction === 'outbound' ? 'Outbound' : 'Return'}</span><TripStatus status={trip.status} /></span></h3>
             {coordinator && <p className="trip-patient-identity">{trip.patient_name}</p>}
+            <MobileTripTiming trip={trip} />
             {trip.review_required && <div className="trip-record-status"><span className="dashboard-access trip-review-badge">Needs review</span></div>}
           </div>
           <div className="trip-route">
-            <div className="trip-stop"><div className="trip-stop-heading"><strong>From:</strong></div><p>{trip.origin}</p></div>
+            <div className="trip-stop"><div className="trip-stop-heading"><strong>From:</strong></div><p><RouteAddress address={trip.origin} /></p></div>
             <div className="trip-stop"><div className="trip-stop-heading"><strong>To:</strong></div>
-              <p>{trip.destination}</p>
+              <p><RouteAddress address={trip.destination} /></p>
             </div>
           </div>
           <div className="patient-actions trip-stop-actions"><InfoButton label="View trip details" onClick={() => setDetails(trip)} /></div>

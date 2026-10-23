@@ -74,26 +74,15 @@ export function ListPagination({ children, label, page, hasNext, disabled, onPag
   useLayoutEffect(() => {
     const element = footer.current!;
     const main = element.closest<HTMLElement>('.dashboard-main')!;
-    const viewport = window.visualViewport;
     const measure = () => {
       main.style.setProperty('--list-pagination-height', `${element.getBoundingClientRect().height}px`);
-      main.style.setProperty('--list-viewport-bottom', `${viewport ? viewport.offsetTop + viewport.height : innerHeight}px`);
     };
     measure();
     const observer = new ResizeObserver(measure);
-    observer.observe(element);
-    window.addEventListener('resize', measure);
-    window.addEventListener('scroll', measure, { passive: true });
-    viewport?.addEventListener('resize', measure);
-    viewport?.addEventListener('scroll', measure);
+    observer.observe(element, { box: 'border-box' });
     return () => {
       observer.disconnect();
-      window.removeEventListener('resize', measure);
-      window.removeEventListener('scroll', measure);
-      viewport?.removeEventListener('resize', measure);
-      viewport?.removeEventListener('scroll', measure);
       main.style.removeProperty('--list-pagination-height');
-      main.style.removeProperty('--list-viewport-bottom');
     };
   }, []);
   return <div ref={footer} className="patients-pagination" aria-label={label}><span>{children}</span><div className="patient-actions">

@@ -991,7 +991,7 @@ input::placeholder, textarea::placeholder { color: var(--ui-muted); opacity: 1; 
   /* Remove short containing boxes so the toolbar sticks for the entire list. */
   .page-heading:has(.list-toolbar), .page-heading-actions:has(.list-toolbar) { display: contents; }
   .page-heading:has(.list-toolbar) > div:first-child { margin-bottom: 12px; }
-  .list-toolbar { position: sticky; top: var(--list-header-height, 65px); z-index: 20; flex: none; margin-bottom: 16px; padding-block: 10px; background: var(--ui-canvas); border-bottom: 1px solid var(--ui-border); }
+  .list-toolbar { position: sticky; top: var(--list-header-height, 65px); z-index: 20; flex: none; margin-bottom: 16px; padding-block: 10px; background: var(--ui-canvas); }
   .page-heading-actions > .patient-primary { align-self: flex-start; margin-bottom: 16px; }
   .trip-record-heading { padding-right: 48px; }
   .trip-record > .trip-stop-actions { top: 12px; transform: none; }
@@ -999,8 +999,9 @@ input::placeholder, textarea::placeholder { color: var(--ui-muted); opacity: 1; 
   .trip-next-summary > .list-info-control { grid-row: 1; align-self: start; }
   .treatment-record { grid-template-columns: minmax(0, 1fr); padding: 16px 0 16px 40px; gap: 16px; }
   .treatment-record > .record-number { top: 20px; left: 0; width: 32px; }
-  .treatment-summary { grid-template-columns: minmax(0, 1fr); gap: 16px; }
-  .treatment-summary .treatment-identity { padding-right: 38px; gap: 6px; }
+  .treatment-summary { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+  .treatment-summary .treatment-identity { padding-right: 38px; gap: 6px; margin-bottom: 12px; }
+  .treatment-location > span { display: none; }
   .schedule-record-info { right: 0; top: 12px; }
   .schedule-record-actions { padding-top: 12px; border-top: 1px solid var(--ui-border); }
   .schedule-record-actions > button { width: auto; }
@@ -1032,7 +1033,7 @@ input::placeholder, textarea::placeholder { color: var(--ui-muted); opacity: 1; 
   .treatment-summary .treatment-identity { min-height: 40px; padding-right: 104px; }
   .treatment-record .schedule-record-actions { position: absolute; top: 12px; right: 52px; width: auto; margin: 0; padding: 0; border: 0; }
   .treatment-panel:has(.schedule-add-action) { padding-bottom: calc(88px + env(safe-area-inset-bottom, 0px)); }
-  .treatment-panel button.schedule-add-action { position: fixed; right: max(16px, env(safe-area-inset-right, 0px)); top: calc(var(--list-viewport-bottom, var(--schedule-viewport-bottom, 100dvh)) - var(--list-pagination-height, 0px) - 72px - env(safe-area-inset-bottom, 0px)); bottom: auto; z-index: 25; width: 56px; height: 56px; min-width: 56px; margin: 0; border-radius: 50%; box-shadow: 0 4px 12px rgb(0 0 0 / 24%); }
+  .treatment-panel button.schedule-add-action { position: fixed; right: max(16px, env(safe-area-inset-right, 0px)); top: auto; bottom: calc(var(--list-pagination-height, env(safe-area-inset-bottom, 0px)) + 16px); z-index: 25; width: 56px; height: 56px; min-width: 56px; margin: 0; border-radius: 50%; box-shadow: 0 4px 12px rgb(0 0 0 / 24%); }
   /* Keep the Info touch target from stretching the three text lines. */
   .trip-next-summary:has(> .list-info-control) { position: relative; display: flex; flex-direction: column; align-items: stretch; gap: 4px; padding-block: 12px; }
   .trip-next-summary:has(> .list-info-control) > h2 { padding-right: 52px; line-height: 1.5rem; }
@@ -1064,8 +1065,48 @@ input::placeholder, textarea::placeholder { color: var(--ui-muted); opacity: 1; 
   .patients-table th { padding-block: 4px; }
 }
 
-/* Keep page counts and navigation visible without covering the final record. */
+/* Let native fixed positioning follow browser toolbars; do not mix in VisualViewport coordinates.
+   The measured footer height includes safe-area padding and also clears the final record. */
 .dashboard-main:has(.patients-pagination) { padding-bottom: calc(var(--list-pagination-height, 68px) + 16px); }
-.dashboard-main .patients-pagination { position: fixed; left: 0; right: 0; top: calc(var(--list-viewport-bottom, 100dvh) - var(--list-pagination-height, 68px)); bottom: auto; z-index: 24; flex-wrap: nowrap; gap: 12px; margin: 0; padding: 12px var(--page-gutter) max(12px, env(safe-area-inset-bottom)); border-top: 0; background: var(--ui-canvas); }
+.dashboard-main .patients-pagination { position: fixed; left: 0; right: 0; top: auto; bottom: 0; z-index: 24; flex-wrap: nowrap; gap: 12px; margin: 0; padding: 12px var(--page-gutter) max(12px, env(safe-area-inset-bottom)); border-top: 0; background: var(--ui-canvas); }
 .dashboard-main .patients-pagination > span { flex: 1; min-width: 0; line-height: 1.4; }
 .dashboard-main .patients-pagination > .patient-actions { flex: 0 0 auto; gap: 8px; }
+
+/* Firefox Android can include the expanded top toolbar in the bottom safe area
+   (Mozilla bug 2057232). Remove that covered viewport portion from the inset;
+   retain normal padding and any remaining safe area. Chrome keeps its native inset. */
+@media (max-width: 760px) {
+  @supports (-moz-appearance: none) {
+    .dashboard-main .patients-pagination {
+      padding-bottom: max(12px, calc(env(safe-area-inset-bottom, 0px) - (100lvh - 100dvh)));
+    }
+  }
+}
+
+/* Mobile journey summaries: short route names, readable type, and natural wrapping. */
+.trip-address-short, .trip-mobile-timing { display: none; }
+@media (max-width: 760px) {
+  .trips-panel .trip-record { padding: 12px 0 12px 28px; }
+  .trips-panel .trip-record > .record-number { top: 12px; width: 24px; font-size: 1rem; line-height: 24px; }
+  .trips-panel .trip-record-heading { min-height: 44px; padding-right: 48px; }
+  .trips-panel .trip-record-title { gap: 4px 8px; margin: 0; font-size: 1rem; line-height: 24px; }
+  .trips-panel .trip-direction-status { gap: 4px 8px; font-weight: 500; }
+  .trips-panel .trip-status-badge { font-size: .75rem; line-height: 1.5; padding: 3px 8px; border-radius: 5px; }
+  .trips-panel .trip-review-badge { font-size: 1rem; line-height: 24px; padding-block: 0; }
+  .trips-panel .trip-record-heading .trip-patient-identity { font-size: 1rem !important; line-height: 24px; }
+  .trips-panel .trip-mobile-timing { display: block; margin: 4px 0 0; font-size: 1rem; line-height: 24px; font-weight: 400; color: var(--ui-muted); }
+  .trips-panel .trip-record > .trip-stop-actions { top: 6px; }
+  .trips-panel .trip-record > .trip-route { gap: 6px; margin-top: 8px !important; }
+  .trips-panel .trip-stop { display: block; padding-left: 20px; }
+  /* Keep route direction available to screen readers without a separate label line. */
+  .trips-panel .trip-stop-heading { position: absolute; width: 1px; height: 1px; min-height: 0; margin: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .trips-panel .trip-stop > p { font-size: 1rem; line-height: 24px; }
+  .trips-panel .trip-stop:first-child::after { top: 16px; bottom: -14px; }
+  .trips-panel .trip-address-full { display: none; }
+  .trips-panel .trip-address-short { display: inline; }
+  /* Make scrolled/focused records clear the sticky header/toolbar and fixed footer. */
+  .trips-panel .trip-record, .trips-panel .list-info-control {
+    scroll-margin-top: 144px;
+    scroll-margin-bottom: calc(var(--list-pagination-height, 68px) + 16px);
+  }
+}
