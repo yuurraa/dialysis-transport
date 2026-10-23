@@ -1,0 +1,1075 @@
+/* Trip records, pickup summary, route timeline and journey details. */
+
+.patient-home {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 20px;
+}
+
+/* Patient overview shares the coordinator's panels, typography and palette. */
+
+.patient-overview-top {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 20px;
+}
+
+.patient-pickup-time {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin: 4px 0 20px;
+}
+
+.patient-journey-icon {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 48px;
+  height: 48px;
+  border: 1px solid var(--ui-border);
+  border-radius: 16px;
+  background: var(--ui-raised);
+  color: var(--ui-accent);
+}
+
+.patient-journey-icon svg {
+  width: 26px;
+  height: 26px;
+}
+
+.patient-pickup-time strong {
+  font-size: 2rem;
+  font-weight: 600;
+  line-height: 1.2;
+  color: var(--ui-accent);
+}
+
+.patient-pickup-time p {
+  margin: 4px 0 0;
+  color: var(--ui-muted);
+  font-size: .875rem;
+}
+
+.patient-trip-details {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin: 0;
+  padding-top: 16px;
+  border-top: 1px solid var(--ui-border);
+}
+
+.patient-trip-details dt {
+  color: var(--ui-muted);
+  font-size: .875rem;
+}
+
+.patient-trip-details dd {
+  margin: 6px 0 0;
+  font-weight: 600;
+}
+
+.trips-workspace {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  gap: 20px;
+}
+
+.trips-workspace > .patient-next-pickup {
+  flex-shrink: 0;
+}
+
+.trip-search-tools {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+}
+
+.trips-panel .trip-filter-button {
+  position: relative;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+}
+
+.trip-filter-badge {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  display: grid;
+  place-items: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 4px;
+  border: 2px solid var(--ui-field);
+  border-radius: 999px;
+  background: var(--ui-accent);
+  color: var(--ui-accent-text);
+  font-size: .6875rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.trip-records {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.trip-record {
+  flex-shrink: 0;
+  padding: 16px;
+  border: 1px solid var(--ui-border);
+  border-radius: 14px;
+  background: var(--ui-field);
+  overflow-wrap: anywhere;
+}
+
+.trip-record-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.trip-record-heading h3 {
+  flex: 1 1 13rem;
+  margin: 0;
+  font-size: .9375rem;
+}
+
+.trip-record > p {
+  margin: 10px 0;
+  font-size: .875rem;
+}
+
+.trip-patient-identity {
+  color: var(--ui-muted);
+  font-size: .75rem !important;
+}
+
+.trip-route {
+  line-height: 1.5;
+}
+
+.trip-route > span {
+  display: block;
+}
+
+.trip-route > span + span {
+  margin-top: 4px;
+}
+
+.trip-card-bottom {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.trip-key-times {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 16px;
+  font-size: .8125rem;
+}
+
+.trip-key-times > span {
+  color: var(--ui-muted);
+}
+
+.trips-panel .trip-delete-control {
+  width: 44px;
+  padding: 0;
+  color: var(--ui-danger);
+}
+
+.trip-next-summary .page-heading {
+  margin-bottom: 8px;
+}
+
+.trip-next-reading {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  align-items: center;
+  font-size: .8125rem;
+}
+
+.trip-next-reading strong {
+  font-size: 1rem;
+}
+
+.trip-next-destination {
+  margin: 6px 0 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ui-muted);
+  font-size: .8125rem;
+}
+
+.trip-next-summary .patient-overview-note {
+  margin: 0;
+}
+
+.trip-next-summary button {
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 1px solid var(--ui-control-border);
+  border-radius: var(--ui-control-radius);
+  background: var(--ui-raised);
+  color: var(--ui-text);
+  font-size: .8125rem;
+}
+
+.trip-pickup-pending {
+  color: var(--ui-accent);
+  font-weight: 600;
+}
+
+.trip-detail-identity {
+  margin-bottom: 20px;
+}
+
+.trip-detail-name {
+  margin: 0;
+  font-size: 1.0625rem;
+  font-weight: 600;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.trip-detail-id {
+  margin: 4px 0 0;
+  color: var(--ui-muted);
+  font-size: .75rem;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.trip-detail-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.trip-journey-details {
+  display: grid;
+  gap: 16px;
+}
+
+.trip-detail-route {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.trip-detail-route li {
+  position: relative;
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr);
+  gap: 12px;
+}
+
+.trip-detail-route li::before {
+  content: '';
+  box-sizing: border-box;
+  width: 10px;
+  height: 10px;
+  margin-top: calc(.5625rem - 5px);
+  border: 2px solid var(--ui-accent);
+  border-radius: 50%;
+  background: var(--ui-surface);
+  z-index: 1;
+}
+
+.trip-detail-route li:first-child {
+  padding-bottom: 20px;
+}
+
+.trip-detail-route li:first-child::after {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: calc(.5625rem + 5px);
+  bottom: calc(5px - .5625rem);
+  border-left: 1px solid var(--ui-border);
+}
+
+.trip-detail-route li:last-child::before {
+  background: var(--ui-accent);
+}
+
+.trip-detail-route li span {
+  display: block;
+}
+
+.trip-detail-route li span, .trip-detail-timings dt {
+  color: var(--ui-muted);
+  font-size: .75rem;
+  line-height: 1.5;
+}
+
+.trip-detail-route p {
+  margin: 4px 0 0;
+  font-size: .9375rem;
+  font-weight: 500;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.trip-detail-timings {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin: 0;
+  padding-top: 16px;
+  border-top: 1px solid var(--ui-border);
+}
+
+.trip-detail-timings dd {
+  margin: 6px 0 0;
+  font-size: 1rem;
+  font-weight: 600;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.trip-detail-review {
+  margin: 0;
+  padding: 12px 16px;
+  border-left: 3px solid var(--ui-warning);
+  background: var(--ui-warning-surface);
+  color: var(--ui-warning);
+  font-size: .875rem;
+  line-height: 1.6;
+}
+
+@media (max-width: 480px) {
+  .trip-detail-timings {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.trip-generation-dates {
+  margin-top: 20px;
+}
+
+@media (max-width: 760px) {
+  .trips-workspace {
+    gap: 12px;
+  }
+
+  .trip-record {
+    padding: 12px;
+  }
+
+  .trip-record-heading {
+    gap: 6px;
+  }
+
+  .trip-record-heading h3 {
+    flex-basis: 100%;
+  }
+
+  .trip-next-summary {
+    padding: 12px 16px;
+  }
+
+  .trip-next-summary .dashboard-eyebrow {
+    margin-top: 4px;
+  }
+}
+
+.patient-overview-note {
+  margin: 20px 0 0;
+  color: var(--ui-muted);
+  font-size: .875rem;
+  line-height: 1.6;
+}
+
+.patient-upcoming-rides {
+  flex: 1;
+  min-height: 200px;
+}
+
+@media (max-width: 1200px) {
+  .patient-overview-top {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.dashboard-access.trip-review-badge {
+  color: var(--ui-warning);
+  background: var(--ui-warning-surface);
+  border-color: var(--ui-warning);
+}
+
+.trip-key-times, .trip-next-reading, .trip-detail-timings, .patient-pickup-time {
+  font-variant-numeric: tabular-nums;
+}
+
+.trip-records {
+  gap: 0;
+}
+
+.trip-record {
+  background: transparent;
+  border: 0;
+  border-top: 1px solid var(--ui-border);
+  border-radius: 0;
+  padding: 20px 0;
+}
+
+.trip-record:last-child {
+  border-bottom: 1px solid var(--ui-border);
+}
+
+.trip-record-heading h3 {
+  font-variant-numeric: tabular-nums;
+}
+
+.trip-route {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  margin-block: 16px !important;
+}
+
+.trip-route > span {
+  padding-left: 16px;
+  border-left: 2px solid var(--ui-border);
+}
+
+.trip-route > span:last-child {
+  border-color: var(--ui-accent);
+  margin: 0;
+}
+
+.trip-route strong {
+  display: block;
+  margin-bottom: 4px;
+  font-size: .75rem;
+  font-weight: 500;
+  color: var(--ui-muted);
+}
+
+.trip-next-summary {
+  padding: 20px 24px;
+}
+
+.trip-next-summary .page-heading {
+  margin-bottom: 12px;
+}
+
+.trip-next-summary .page-heading h2 {
+  font-size: 1.125rem;
+}
+
+.trip-next-reading strong {
+  font-size: 1.25rem;
+}
+
+.trip-detail-review {
+  border-radius: 4px;
+}
+
+@media (max-width: 760px) {
+
+  .trip-route {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+  }
+
+  .trip-card-bottom {
+    align-items: flex-start;
+  }
+
+  .trip-key-times {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .trip-next-summary {
+    padding: 16px 20px;
+  }
+
+  .trip-next-summary .page-heading > div:first-child {
+    flex-basis: 8rem;
+  }
+
+  .trip-next-reading strong {
+    font-size: 1.0625rem;
+  }
+}
+
+.trip-next-summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px 24px;
+}
+
+.trip-next-summary > h2 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: -.02em;
+}
+
+.trip-next-summary .trip-next-reading {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+
+.trip-next-summary .trip-next-reading strong {
+  font-size: 1.0625rem;
+}
+
+.trip-next-note {
+  color: var(--ui-muted);
+}
+
+.trip-next-confirmed {
+  color: var(--ui-accent);
+  font-weight: 600;
+}
+
+.trip-next-summary > button {
+  justify-self: end;
+}
+
+@media (max-width: 600px) {
+  .trip-next-summary {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px 12px;
+    padding: 16px;
+  }
+
+  .trip-next-summary > h2 {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .trip-next-summary .trip-next-reading {
+    grid-column: 1;
+    grid-row: 2;
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .trip-next-summary > button {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+  }
+}
+
+.dashboard-access.trip-review-badge {
+  padding: 4px 8px;
+  border: 0;
+  border-left: 3px solid var(--ui-warning);
+  border-radius: 0;
+}
+
+.trip-next-summary {
+  background: var(--ui-raised);
+  border: 0;
+  border-left: 3px solid var(--ui-accent);
+  border-radius: 0;
+  padding: 16px 20px;
+}
+
+.trips-workspace {
+  gap: 24px;
+}
+
+.trip-record {
+  padding: 12px 0;
+}
+
+.trip-record-heading {
+  display: block;
+}
+
+.trip-record-heading h3 {
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.trip-record-heading .trip-patient-identity {
+  margin: 4px 0 0;
+  font-size: .9375rem !important;
+  color: var(--ui-text);
+}
+
+.trip-record-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  margin-top: 6px;
+}
+
+.trip-status-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 9px;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  font-size: .8125rem;
+  line-height: 1.5;
+  font-weight: 600;
+  color: var(--ui-muted);
+  background: var(--ui-raised);
+}
+
+.trip-status-unfilled {
+  color: var(--ui-danger);
+  background: var(--ui-danger-surface);
+}
+
+.trip-status-at-risk {
+  color: var(--ui-warning);
+  background: var(--ui-warning-surface);
+}
+
+.trip-status-on-track {
+  color: var(--ui-info);
+  background: var(--ui-info-surface);
+}
+
+.trip-status-resolved {
+  color: var(--ui-success);
+  background: var(--ui-success-surface);
+}
+
+.trip-record > p {
+  font-size: 1rem;
+}
+
+.trip-route {
+  gap: 24px;
+  align-items: start;
+}
+
+.trip-stop {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: auto 1fr;
+  column-gap: 8px;
+  position: relative;
+  padding-left: 20px;
+  min-width: 0;
+}
+
+.trip-stop::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 8px;
+  width: 8px;
+  height: 8px;
+  border: 2px solid var(--ui-accent);
+  border-radius: 50%;
+}
+
+.trip-stop:last-child::before {
+  background: var(--ui-accent);
+}
+
+.trip-stop-heading {
+  display: flex;
+  align-items: center;
+  min-height: 24px;
+  margin-bottom: 4px;
+}
+
+.trip-route strong {
+  font-size: .8125rem;
+  margin: 0;
+}
+
+.trip-stop > p {
+  grid-column: 1;
+  grid-row: 2;
+  margin: 0;
+  font-size: 1rem;
+}
+
+.trip-stop-actions {
+  flex-direction: column;
+  flex-wrap: nowrap;
+  align-items: center;
+  align-self: center;
+  gap: 4px;
+  grid-column: 2;
+  grid-row: 1 / span 2;
+}
+
+.trip-stop-actions .trip-delete-control {
+  width: 44px;
+  height: 44px;
+  min-height: 44px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-color: transparent;
+  background: transparent;
+  flex-shrink: 0;
+}
+
+.trip-stop-actions button:hover:not(:disabled), .trip-next-summary > button:hover:not(:disabled) {
+  background: var(--ui-raised);
+  border-color: var(--ui-control-border);
+}
+
+.trip-key-times {
+  font-size: .9375rem;
+}
+
+.trip-next-reading {
+  font-size: .9375rem;
+}
+
+.trip-next-summary > button {
+  background: transparent;
+}
+
+.trip-next-summary:has(> .patient-overview-note) {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+}
+
+.trip-next-summary > .patient-overview-note {
+  grid-column: 1;
+}
+
+.trip-detail-badges > span + span::before {
+  content: '·';
+  margin-right: 8px;
+}
+
+.trip-delete-summary {
+  display: grid;
+  gap: 8px;
+  overflow-wrap: anywhere;
+}
+
+.trip-delete-summary p {
+  margin: 0;
+}
+
+.trip-delete-person {
+  font-weight: 600;
+  font-size: 1.0625rem;
+}
+
+.trip-delete-destination {
+  margin-block: 8px !important;
+}
+
+.trip-delete-destination > span {
+  display: block;
+  margin-bottom: 4px;
+  font-size: .8125rem;
+  color: var(--ui-muted);
+}
+
+.trip-delete-scope {
+  padding-top: 12px;
+  border-top: 1px solid var(--ui-border);
+  color: var(--ui-muted);
+  font-size: .875rem;
+  line-height: 1.6;
+}
+
+@media (min-width: 1051px) {
+  .trip-record {
+    display: grid;
+    grid-template-columns: clamp(12rem, 20vw, 15rem) minmax(0, 1fr);
+    gap: 24px;
+    align-items: start;
+  }
+
+  .trip-record-heading {
+    padding-top: 0;
+  }
+
+  .trip-record > .trip-route {
+    margin: 0 !important;
+    align-self: stretch;
+    align-items: stretch;
+  }
+}
+
+@media (max-width: 760px) {
+  .trips-workspace, .patient-home {
+    flex: 0 0 auto;
+    max-height: none;
+    overflow: visible;
+  }
+
+  .trips-workspace {
+    gap: 20px;
+  }
+
+  .trip-next-summary {
+    padding: 16px;
+  }
+
+  .trip-next-reading {
+    font-size: .875rem;
+  }
+
+  .trip-record {
+    padding-block: 16px;
+  }
+
+  .trip-key-times {
+    font-size: 1rem;
+  }
+
+  .trip-route {
+    margin: 8px 0 0 !important;
+  }
+
+  .trip-stop:first-child::after {
+    content: '';
+    position: absolute;
+    left: 3px;
+    top: 16px;
+    bottom: -32px;
+    border-left: 1px solid var(--ui-border);
+  }
+}
+
+.trip-record {
+  position: relative;
+  padding-inline-start: 40px;
+}
+
+/* Keep direction and status together, including when the date wraps. */
+
+.trip-record-title, .trip-detail-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+
+.trip-record-title > span:first-child {
+  flex-basis: 100%;
+}
+
+.trip-direction-status {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.trip-record-title .trip-status-badge, .trip-detail-heading .trip-status-badge {
+  font-size: .75rem;
+  padding: 2px 7px;
+  line-height: 1.5;
+}
+
+.trip-record > .trip-route {
+  padding-right: 48px;
+}
+
+.trip-record > .trip-stop-actions {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.trip-stop {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@media (max-width: 760px) {
+  .trip-record-heading {
+    padding-right: 48px;
+  }
+
+  .trip-record > .trip-route {
+    padding-right: 0;
+  }
+
+  .trip-next-summary > .list-info-control {
+    grid-row: 1;
+    align-self: start;
+  }
+}
+
+/* Mobile record controls stay at the top right; desktop keeps centred controls. */
+
+@media (max-width: 760px) {
+  .trip-record {
+    padding-left: 40px;
+  }
+
+  .trip-record-heading {
+    min-height: 40px;
+    padding-right: 52px;
+  }
+
+  .trip-record > .trip-stop-actions {
+    left: auto;
+    right: 0;
+    top: 12px;
+    transform: none;
+  }
+
+  /* Keep the Info touch target from stretching the three text lines. */
+
+  .trip-next-summary:has(> .list-info-control) {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 4px;
+    padding-block: 12px;
+  }
+
+  .trip-next-summary:has(> .list-info-control) > h2 {
+    padding-right: 52px;
+    line-height: 1.5rem;
+  }
+
+  .trip-next-summary:has(> .list-info-control) .trip-next-reading {
+    gap: 4px;
+    line-height: 1.5rem;
+  }
+
+  .trip-next-summary > .list-info-control {
+    position: absolute;
+    top: 2px;
+    right: 12px;
+  }
+}
+
+/* Mobile journey summaries: short route names, readable type, and natural wrapping. */
+
+.trip-address-short, .trip-mobile-timing {
+  display: none;
+}
+
+@media (max-width: 760px) {
+  .trips-panel .trip-record {
+    padding: 12px 0 12px 28px;
+  }
+
+  .trips-panel .trip-record-heading {
+    min-height: 44px;
+    padding-right: 48px;
+  }
+
+  .trips-panel .trip-record-title {
+    gap: 4px 8px;
+    margin: 0;
+    font-size: 1rem;
+    line-height: 24px;
+  }
+
+  .trips-panel .trip-direction-status {
+    gap: 4px 8px;
+    font-weight: 500;
+  }
+
+  .trips-panel .trip-status-badge {
+    font-size: .75rem;
+    line-height: 1.5;
+    padding: 3px 8px;
+    border-radius: 5px;
+  }
+
+  .trips-panel .trip-review-badge {
+    font-size: 1rem;
+    line-height: 24px;
+    padding-block: 0;
+  }
+
+  .trips-panel .trip-record-heading .trip-patient-identity {
+    font-size: 1rem !important;
+    line-height: 24px;
+  }
+
+  .trips-panel .trip-mobile-timing {
+    display: block;
+    margin: 4px 0 0;
+    font-size: 1rem;
+    line-height: 24px;
+    font-weight: 400;
+    color: var(--ui-muted);
+  }
+
+  .trips-panel .trip-record > .trip-stop-actions {
+    top: 6px;
+  }
+
+  .trips-panel .trip-record > .trip-route {
+    gap: 6px;
+    margin-top: 8px !important;
+  }
+
+  .trips-panel .trip-stop {
+    display: block;
+    padding-left: 20px;
+  }
+
+  /* Keep route direction available to screen readers without a separate label line. */
+
+  .trips-panel .trip-stop-heading {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    min-height: 0;
+    margin: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .trips-panel .trip-stop > p {
+    font-size: 1rem;
+    line-height: 24px;
+  }
+
+  .trips-panel .trip-stop:first-child::after {
+    top: 16px;
+    bottom: -14px;
+  }
+
+  .trips-panel .trip-address-full {
+    display: none;
+  }
+
+  .trips-panel .trip-address-short {
+    display: inline;
+  }
+
+  /* Make scrolled/focused records clear the sticky header/toolbar and fixed footer. */
+
+  .trips-panel .trip-record {
+    scroll-margin-top: 144px;
+    scroll-margin-bottom: calc(var(--list-pagination-height, 68px) + 16px);
+  }
+}

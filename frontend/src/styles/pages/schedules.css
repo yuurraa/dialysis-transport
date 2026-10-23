@@ -1,0 +1,661 @@
+/* Treatment schedule records, editor, generation and mobile Add action. */
+
+.generation-summary {
+  overflow-wrap: anywhere;
+}
+
+.generation-patient {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.generation-patient h3 {
+  margin: 0;
+  font-size: 1.125rem;
+  font-weight: 600;
+}
+
+.generation-kind {
+  padding: 2px 8px;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  font-size: .75rem;
+  font-weight: 600;
+  color: var(--ui-info);
+  background: var(--ui-info-surface);
+}
+
+.generation-kind-single {
+  color: var(--ui-success);
+  background: var(--ui-success-surface);
+}
+
+.generation-kind-rescheduled {
+  color: var(--ui-warning);
+  background: var(--ui-warning-surface);
+}
+
+.generation-patient-id {
+  margin: 6px 0 12px;
+  color: var(--ui-muted);
+  font-size: .75rem;
+}
+
+.generation-session {
+  margin: 0 0 16px;
+  font-weight: 600;
+  font-size: .9375rem;
+}
+
+.generation-summary dl, .generation-timing {
+  margin: 0;
+}
+
+.generation-summary dt, .generation-timing dt {
+  margin-bottom: 4px;
+  color: var(--ui-muted);
+  font-size: .8125rem;
+}
+
+.generation-summary dd, .generation-timing dd {
+  margin: 0;
+  font-size: .9375rem;
+  line-height: 1.5;
+}
+
+.generation-range-hint {
+  margin: 8px 0 0;
+  color: var(--ui-muted);
+  font-size: .8125rem;
+  line-height: 1.5;
+}
+
+.generation-timing {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--ui-border);
+}
+
+@media (max-width: 400px) {
+  .generation-timing {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+  }
+}
+
+.treatment-panel .page-heading-actions:has(.patient-search) {
+  flex: 0 1 24rem;
+  width: 100%;
+}
+
+.treatment-panel .page-heading-actions:has(.patient-primary) {
+  flex-basis: 34rem;
+  align-items: center;
+}
+
+@media (max-width: 760px) {
+  .treatment-panel .page-heading-actions:has(.patient-search) {
+    flex-basis: 100%;
+  }
+}
+
+.treatment-record {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  padding: 20px;
+  border: 1px solid var(--ui-border);
+  border-radius: 16px;
+  background: var(--ui-field);
+}
+
+.treatment-record:last-child {
+  margin-bottom: 0;
+}
+
+.treatment-record > div {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.treatment-record h2 {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  margin: 0 0 10px;
+}
+
+.treatment-record p {
+  margin: 6px 0;
+  color: var(--ui-muted);
+  font-size: .875rem;
+  line-height: 1.6;
+}
+
+.treatment-identity {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  margin-bottom: 10px;
+}
+
+.treatment-record .treatment-identity p {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.treatment-identity-separator {
+  margin-inline-end: 12px;
+}
+
+.treatment-patient-id {
+  font-variant-numeric: tabular-nums;
+}
+
+.treatment-time {
+  white-space: nowrap;
+}
+
+.treatment-record button {
+  flex-shrink: 0;
+}
+
+.treatment-hint {
+  margin: 0;
+  color: var(--ui-muted);
+  font-size: .8125rem;
+  line-height: 1.6;
+}
+
+@media (max-width: 760px) {
+  .treatment-record {
+    align-items: flex-start;
+    padding: 16px;
+  }
+
+  .treatment-record .patient-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+}
+
+.centre-picker {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.treatment-panel .patient-field > .treatment-hint {
+  margin: 0;
+  font-size: .8125rem;
+}
+
+.centre-picker input:focus {
+  border-color: var(--ui-accent);
+  outline: 2px solid var(--ui-focus);
+  outline-offset: -2px;
+}
+
+.treatment-record p.treatment-kind {
+  display: inline-flex;
+  margin: 0;
+  padding: 3px 10px;
+  border: 1px solid var(--ui-border);
+  border-radius: 999px;
+  color: var(--ui-accent);
+}
+
+.occurrence-dates {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+@media (max-width: 760px) {
+  .occurrence-dates {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.schedule-editor {
+  height: min(52rem, calc(100dvh - 32px));
+}
+
+.treatment-panel .reschedule-summary {
+  margin-top: 8px;
+  min-height: 44px;
+  padding: 8px 0;
+  border: 0;
+  background: transparent;
+  color: var(--ui-accent);
+  font-size: .875rem;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.reschedule-history {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.reschedule-history li {
+  padding: 16px 0;
+  border-bottom: 1px solid var(--ui-border);
+}
+
+.reschedule-history li:first-child {
+  padding-top: 0;
+}
+
+.reschedule-history dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin: 0;
+}
+
+.reschedule-history dt, .reschedule-history p {
+  color: var(--ui-muted);
+  font-size: .875rem;
+  line-height: 1.6;
+}
+
+.reschedule-history dd {
+  margin: 4px 0 0;
+  line-height: 1.6;
+}
+
+@media (max-width: 760px) {
+  .reschedule-history dl {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+  }
+}
+
+.treatment-record {
+  padding: 20px 0;
+  margin: 0;
+  gap: 24px;
+}
+
+.treatment-record > div:first-child {
+  flex: 1;
+}
+
+.treatment-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr);
+  gap: 24px;
+}
+
+.treatment-summary .treatment-identity {
+  margin: 0;
+  align-content: start;
+}
+
+.treatment-summary .treatment-patient-id {
+  flex: 1 1 100%;
+  order: 1;
+}
+
+.treatment-summary .treatment-identity-separator {
+  display: none;
+}
+
+.treatment-session {
+  min-width: 0;
+}
+
+.treatment-record h2 {
+  margin-bottom: 6px;
+  font-size: 1.0625rem;
+  letter-spacing: -.015em;
+  font-variant-numeric: tabular-nums;
+}
+
+.treatment-identity {
+  margin-bottom: 8px;
+}
+
+.treatment-identity > p:first-child {
+  font-weight: 600;
+  color: var(--ui-text);
+}
+
+.treatment-patient-id {
+  font-size: .75rem !important;
+}
+
+.treatment-record p.treatment-kind {
+  background: var(--ui-raised);
+  border-color: var(--ui-border);
+  border-radius: 4px;
+  color: var(--ui-muted);
+}
+
+.treatment-time {
+  font-variant-numeric: tabular-nums;
+}
+
+.treatment-record .patient-actions button {
+  white-space: nowrap;
+}
+
+@media (max-width: 1050px) {
+  .treatment-summary {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 12px 24px;
+  }
+
+  .treatment-summary .treatment-identity {
+    grid-column: 1 / -1;
+  }
+
+  .treatment-summary .treatment-identity > p:first-child {
+    flex: 0 1 auto;
+  }
+}
+
+@media (max-width: 760px) {
+  .treatment-record {
+    gap: 12px;
+  }
+
+  .treatment-record .patient-actions {
+    justify-content: flex-end;
+  }
+}
+
+.treatment-record p.treatment-kind {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  font-size: .8125rem;
+}
+
+.treatment-record {
+  gap: 20px;
+  padding-block: 16px;
+}
+
+.treatment-record h2 {
+  font-size: 1.125rem;
+}
+
+.treatment-record .treatment-patient-id {
+  color: var(--ui-muted);
+}
+
+.treatment-location > span {
+  color: var(--ui-muted);
+  font-size: .8125rem;
+}
+
+.treatment-location > p {
+  margin-top: 4px;
+  color: var(--ui-text);
+  font-size: 1rem;
+}
+
+@media (max-width: 760px) {
+  .treatment-record {
+    padding-block: 16px;
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+
+.treatment-record {
+  position: relative;
+  padding-inline-start: 40px;
+}
+
+.schedule-detail-fields {
+  display: grid;
+  gap: 16px;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.schedule-detail-fields dt {
+  color: var(--ui-muted);
+  font-size: .8125rem;
+  margin-bottom: 4px;
+}
+
+.schedule-detail-fields dd {
+  margin: 0;
+}
+
+.schedule-record-actions {
+  align-items: center;
+  flex-wrap: nowrap;
+}
+
+.treatment-panel .page-heading-actions:has(.patient-primary) {
+  flex-basis: 42rem;
+}
+
+/* Flat schedule rows retain the original separators with consistent content and actions. */
+
+.treatment-record {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
+  padding: 20px 64px 20px 40px;
+  border: 0;
+  border-top: 1px solid var(--ui-border);
+  border-radius: 0;
+  background: transparent;
+}
+
+.treatment-record:last-child {
+  border-bottom: 1px solid var(--ui-border);
+}
+
+.treatment-summary {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr) minmax(0, 1.3fr);
+  gap: 20px;
+  align-items: start;
+}
+
+.treatment-summary .treatment-identity {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  grid-column: auto;
+}
+
+.treatment-summary .treatment-identity > p:first-child {
+  margin: 0;
+  font-size: 1rem;
+  line-height: 1.5;
+}
+
+.treatment-record h2, .treatment-location > span {
+  font-size: 1rem;
+  line-height: 1.5;
+  margin: 0 0 4px;
+  font-weight: 600;
+  letter-spacing: 0;
+  color: var(--ui-text);
+}
+
+.treatment-record p.treatment-time, .treatment-record p.treatment-date-range, .treatment-record p.treatment-session-meta, .treatment-location p {
+  margin: 0;
+  font-size: .8125rem;
+  line-height: 1.6;
+  font-weight: 400;
+  color: var(--ui-muted);
+}
+
+.treatment-record p.treatment-session-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+}
+
+.treatment-session-clock {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.treatment-location > span {
+  display: block;
+}
+
+.treatment-record p.treatment-kind {
+  border: 1px solid currentColor;
+  border-radius: 5px;
+  padding: 3px 8px;
+  font-size: .75rem;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.treatment-record p.treatment-kind-recurring {
+  background: var(--ui-info-surface);
+  color: var(--ui-info);
+}
+
+.treatment-record p.treatment-kind-single {
+  background: var(--ui-success-surface);
+  color: var(--ui-success);
+}
+
+.treatment-record p.treatment-kind-rescheduled {
+  background: var(--ui-warning-surface);
+  color: var(--ui-warning);
+}
+
+.schedule-record-info {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.schedule-record-actions {
+  align-self: center;
+  justify-content: flex-end;
+}
+
+@media (min-width: 761px) and (max-width: 1200px) {
+  .treatment-record {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .schedule-record-actions {
+    border-top: 1px solid var(--ui-border);
+    padding-top: 12px;
+  }
+}
+
+@media (max-width: 760px) {
+  .treatment-record {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 16px 0 16px 40px;
+    gap: 16px;
+  }
+
+  .treatment-summary {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+  }
+
+  .treatment-summary .treatment-identity {
+    padding-right: 38px;
+    gap: 6px;
+    margin-bottom: 12px;
+  }
+
+  .treatment-location > span {
+    display: none;
+  }
+
+  .schedule-record-actions {
+    padding-top: 12px;
+    border-top: 1px solid var(--ui-border);
+  }
+
+  .schedule-record-actions > button {
+    width: auto;
+  }
+}
+
+/* Compact icon actions and consistent, flat recovery states. */
+
+.treatment-panel button.schedule-icon-action {
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  flex: 0 0 44px;
+}
+
+.treatment-panel .page-heading-actions:has(.schedule-icon-action) {
+  flex-basis: 36rem;
+}
+
+/* Mobile record controls stay at the top right; desktop keeps centred controls. */
+
+@media (max-width: 760px) {
+  .treatment-record {
+    padding-left: 40px;
+  }
+
+  .schedule-record-info {
+    left: auto;
+    right: 0;
+    top: 12px;
+    transform: none;
+  }
+
+  .treatment-summary .treatment-identity {
+    min-height: 40px;
+    padding-right: 104px;
+  }
+
+  .treatment-record .schedule-record-actions {
+    position: absolute;
+    top: 12px;
+    right: 52px;
+    width: auto;
+    margin: 0;
+    padding: 0;
+    border: 0;
+  }
+
+  .treatment-panel:has(.schedule-add-action) {
+    padding-bottom: calc(88px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .treatment-panel button.schedule-add-action {
+    position: fixed;
+    right: max(16px, env(safe-area-inset-right, 0px));
+    top: auto;
+    bottom: calc(var(--list-pagination-height, env(safe-area-inset-bottom, 0px)) + 16px);
+    z-index: 25;
+    width: 56px;
+    height: 56px;
+    min-width: 56px;
+    margin: 0;
+    border-radius: 50%;
+    box-shadow: 0 4px 12px rgb(0 0 0 / 24%);
+  }
+}

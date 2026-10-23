@@ -1,0 +1,78 @@
+/* Element defaults, focus visibility and reduced-motion behaviour. */
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+}
+
+button, input, select, textarea {
+  font: inherit;
+}
+
+button, input, select {
+  min-height: 44px;
+}
+
+input, select, textarea {
+  min-width: 0;
+  width: 100%;
+}
+
+main {
+  overflow-wrap: anywhere;
+}
+
+button:not(:disabled) {
+  cursor: pointer;
+}
+
+:focus-visible {
+  outline: 3px solid var(--ui-focus);
+  outline-offset: 3px;
+}
+
+button {
+  transition: background-color 150ms ease, filter 150ms ease, box-shadow 150ms ease, transform 150ms ease;
+}
+
+button:hover:not(:disabled) {
+  filter: brightness(1.12);
+  box-shadow: inset 0 0 0 100vmax var(--ui-hover);
+}
+
+/* Care and wayfinding: quiet surfaces, strong alignment and useful time hierarchy. */
+
+body {
+  background: var(--ui-canvas);
+  color: var(--ui-text);
+}
+
+/* Switch theme colours together so intermediate animation colours cannot lose contrast. */
+
+button {
+  transition: none;
+}
+
+button:hover:not(:disabled) {
+  filter: none;
+  box-shadow: none;
+}
+
+input, select, textarea {
+  accent-color: var(--ui-accent);
+}
+
+input::placeholder, textarea::placeholder {
+  color: var(--ui-muted);
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button {
+    transition: none;
+  }
+}

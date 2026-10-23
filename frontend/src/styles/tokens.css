@@ -1,0 +1,59 @@
+/* Theme palette, typography defaults and shared design tokens. */
+
+:root {
+  color-scheme: light;
+  --ui-canvas: #F6F4EE;
+  --ui-surface: #FFFEFB;
+  --ui-field: #FFFEFB;
+  --ui-raised: #EFEAE0;
+  --ui-hover: #E7E0D4;
+  --ui-text: #292721;
+  --ui-muted: #625E56;
+  --ui-border: #D4CEC2;
+  --ui-control-border: #898174;
+  --ui-accent: #743B52;
+  --ui-accent-hover: #623046;
+  --ui-accent-text: #FFFFFF;
+  --ui-focus: #743B52;
+  --ui-danger: #A32E36;
+  --ui-danger-surface: #FBEAEC;
+  --ui-warning: #805318;
+  --ui-warning-surface: #F6EDD8;
+  --ui-success: #326447;
+  --ui-success-surface: #E7F1E8;
+  --ui-info: #245E85;
+  --ui-info-surface: #E7F1F8;
+  --ui-disabled: #EFEAE0;
+  --ui-radius: 10px;
+  --ui-control-radius: 8px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  color: var(--ui-text);
+  background: var(--ui-canvas);
+  font-size: 100%;
+}
+
+:root[data-theme=dark] {
+  color-scheme: dark;
+  --ui-canvas: #1C1A18;
+  --ui-surface: #262320;
+  --ui-field: #262320;
+  --ui-raised: #332F2B;
+  --ui-hover: #403A35;
+  --ui-text: #F4F0E7;
+  --ui-muted: #C1B8AC;
+  --ui-border: #514B44;
+  --ui-control-border: #92877B;
+  --ui-accent: #F0ADC4;
+  --ui-accent-hover: #F7C4D5;
+  --ui-accent-text: #241A1F;
+  --ui-focus: #F0ADC4;
+  --ui-danger: #FFB1B5;
+  --ui-danger-surface: #442A2C;
+  --ui-warning: #F1C56E;
+  --ui-warning-surface: #3C3220;
+  --ui-success: #A5D3AE;
+  --ui-success-surface: #263B2B;
+  --ui-info: #9DCCEC;
+  --ui-info-surface: #243644;
+  --ui-disabled: #332F2B;
+}

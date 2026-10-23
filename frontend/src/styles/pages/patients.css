@@ -1,0 +1,215 @@
+/* Patient directory table, sorting and mobile record layout. */
+
+.patients-table-scroll::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.patients-table-scroll::-webkit-scrollbar-thumb {
+  background: var(--ui-control-border);
+  border-radius: 8px;
+}
+
+.patients-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.patients-heading {
+  flex-shrink: 0;
+}
+
+.patients-heading > div {
+  min-width: 0;
+}
+
+.patients-loading {
+  flex: 1;
+}
+
+.patients-status {
+  margin-top: 0;
+}
+
+.patients-table {
+  width: 100%;
+  min-width: 54rem;
+  table-layout: fixed;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: .875rem;
+}
+
+.patients-table th, .patients-table td {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--ui-border);
+  overflow-wrap: anywhere;
+  vertical-align: middle;
+}
+
+.patients-table th {
+  color: var(--ui-muted);
+  font-weight: 600;
+}
+
+.patients-table .patient-record-id {
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, monospace;
+  font-size: .8125rem;
+  user-select: all;
+}
+
+.patients-panel button.patient-sort-button {
+  justify-content: space-between;
+  gap: 4px;
+  width: 100%;
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ui-muted);
+  text-align: left;
+}
+
+.patients-panel button.patient-sort-button:hover {
+  background: transparent;
+  color: var(--ui-text);
+}
+
+.patient-sort-button span {
+  flex-shrink: 0;
+  color: var(--ui-accent);
+}
+
+.patients-table th {
+  background: var(--ui-raised);
+}
+
+.patients-table td {
+  font-size: .9375rem;
+  padding-block: 10px;
+}
+
+.patients-table th {
+  background: transparent;
+  border-top: 1px solid var(--ui-border);
+}
+
+.patients-table .patient-record-name {
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+@media (max-width: 760px) {
+  .patients-table {
+    display: block;
+    min-width: 0;
+    width: 100%;
+  }
+
+  .patients-table colgroup, .patients-table thead button {
+    display: none;
+  }
+
+  /* Preserve headers and the ID column in the accessibility tree; visible sorting uses the Sort overlay. */
+
+  .patients-table thead, .patients-table .patient-record-id {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+    padding: 0;
+    border: 0;
+  }
+
+  .patients-table tbody {
+    display: block;
+  }
+
+  .patients-table tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 12px;
+    padding: 20px 0;
+    border-top: 1px solid var(--ui-border);
+  }
+
+  .patients-table tr:last-child {
+    border-bottom: 1px solid var(--ui-border);
+  }
+
+  .patients-table td {
+    display: block;
+    border: 0;
+    padding: 0;
+    grid-column: 1 / -1;
+    font-size: 1rem;
+  }
+
+  .patients-table td::before {
+    content: attr(data-label);
+    display: inline-block;
+    min-width: 5rem;
+    margin-right: 12px;
+    color: var(--ui-muted);
+    font-size: .875rem;
+  }
+
+  .patients-table .patient-record-name {
+    grid-column: 1;
+    align-self: center;
+    font-size: 1.125rem;
+  }
+
+  .patients-table .patient-record-action {
+    grid-column: 2;
+  }
+
+  .patients-table .patient-record-name::before, .patients-table .patient-record-action::before {
+    display: none;
+  }
+
+  .patients-table tr {
+    grid-template-columns: 2ch minmax(0, 1fr) auto;
+  }
+
+  .patients-table td {
+    grid-column: 2 / -1;
+  }
+}
+
+/* Mobile record controls stay at the top right; desktop keeps centred controls. */
+
+@media (max-width: 760px) {
+  .patients-table tr {
+    position: relative;
+    grid-template-columns: 2ch minmax(0, 1fr) 44px;
+    gap: 8px 12px;
+    padding-block: 16px;
+  }
+
+  .patients-table .patient-record-action {
+    grid-column: 3;
+    grid-row: 1;
+    align-self: start;
+  }
+
+  .patients-table .patient-record-name {
+    grid-column: 2;
+    grid-row: 1;
+  }
+}
+
+/* Keep the shared 44px sorting controls within a shorter desktop table heading. */
+
+@media (min-width: 761px) {
+  .patients-table th {
+    padding-block: 4px;
+  }
+}

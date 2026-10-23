@@ -1,0 +1,320 @@
+/* Loading indicators, empty/error states and toast notifications. */
+
+.account-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: .5em;
+  font-size: 1.25rem;
+  line-height: 1;
+  min-height: 120px;
+  color: var(--ui-muted);
+}
+
+.account-spinner {
+  width: 1em;
+  height: 1em;
+  flex-shrink: 0;
+  border: 2px solid var(--ui-border);
+  border-top-color: var(--ui-accent);
+  border-radius: 50%;
+  animation: account-spin .8s linear infinite;
+}
+
+@keyframes account-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .account-spinner {
+    animation: none;
+  }
+}
+
+.toast-region {
+  position: fixed;
+  z-index: 20;
+  left: max(16px, env(safe-area-inset-left));
+  right: max(16px, env(safe-area-inset-right));
+  bottom: max(20px, env(safe-area-inset-bottom));
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.auth-toast {
+  position: relative;
+  overflow: hidden;
+  animation: toast-enter 240ms ease-out;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: max-content;
+  max-width: min(100%, 32rem);
+  padding: 12px 12px 12px 18px;
+  border: 1px solid var(--ui-control-border);
+  border-radius: 16px;
+  box-shadow: 0 8px 32px rgb(0 0 0 / 30%);
+  pointer-events: auto;
+}
+
+.auth-toast p {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 1rem;
+  line-height: 1.5;
+}
+
+.auth-toast button {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  min-height: 24px;
+  padding: 0;
+  border-radius: 6px;
+  display: grid;
+  place-items: center;
+  font-size: 1rem;
+  line-height: 1;
+}
+
+@media (pointer: coarse) {
+  .auth-toast button {
+    width: 44px;
+    height: 44px;
+    min-height: 44px;
+  }
+}
+
+.auth-toast button:hover {
+  background: var(--ui-hover);
+}
+
+.auth-toast button:focus-visible {
+  outline-color: var(--ui-accent);
+  outline-offset: -3px;
+}
+
+.toast-progress {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 100%;
+  height: 3px;
+  background: var(--ui-text);
+  transform-origin: left;
+  animation: toast-fill 3s linear forwards;
+}
+
+.auth-toast[data-closing="true"] {
+  animation: toast-exit 180ms ease-in forwards;
+  pointer-events: none;
+}
+
+.auth-toast[data-closing="true"] .toast-progress, .auth-toast[data-paused="true"] .toast-progress {
+  animation-play-state: paused;
+}
+
+@keyframes toast-enter {
+  from {
+    opacity: 0;
+    transform: translateY(calc(100% + 32px));
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes toast-exit {
+  from {
+    opacity: 1;
+  }
+
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes toast-fill {
+  from {
+    transform: scaleX(0);
+  }
+
+  to {
+    transform: scaleX(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .auth-toast {
+    animation: none;
+  }
+
+  .toast-progress {
+    animation-timing-function: steps(1, end);
+  }
+}
+
+@media (max-width: 480px) {
+  .account-loading {
+    font-size: 1rem;
+  }
+}
+
+.dashboard-data-status {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 20px;
+  padding: 20px 16px;
+  text-align: center;
+}
+
+.dashboard-data-status > div {
+  min-width: 0;
+  max-width: 26rem;
+}
+
+.dashboard-data-status-icon {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  color: var(--ui-accent);
+}
+
+.dashboard-data-status h3 {
+  margin: 0 0 4px;
+  font-size: .875rem;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.dashboard-data-status p {
+  margin: 0;
+  color: var(--ui-muted);
+  font-size: .875rem;
+  line-height: 1.6;
+}
+
+.trip-toast-region {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 100;
+  width: min(90vw, 32rem);
+}
+
+:is(.treatment-panel, .trips-panel) > .account-loading {
+  flex: 1;
+  min-height: 0;
+}
+
+/* Modal errors stay in the native dialog top layer, above its scrolling body. */
+
+.overlay-toast-region {
+  grid-column: 1;
+  grid-row: 1;
+  align-self: end;
+  z-index: 6;
+  min-width: 0;
+  margin: 12px 16px;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.error-toast {
+  animation: none;
+  max-width: 100%;
+  border-color: var(--ui-danger);
+}
+
+.dashboard-dialog .error-toast button {
+  flex: 0 0 auto;
+  width: auto;
+  min-height: 44px;
+  padding: 10px;
+  border: 0;
+  background: transparent;
+  color: var(--ui-danger);
+}
+
+.dashboard-data-status {
+  flex: 0 0 auto;
+  padding-block: 32px;
+  margin: 0;
+}
+
+.dashboard-data-status h3 {
+  font-size: 1rem;
+}
+
+.account-loading {
+  font-size: 1rem;
+}
+
+:is(.treatment-panel, .trips-panel) > .account-loading {
+  flex: 0 0 auto;
+  min-height: 160px;
+}
+
+.auth-toast {
+  background: var(--ui-surface);
+  color: var(--ui-text);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 12%);
+}
+
+.error-toast {
+  background: var(--ui-danger-surface);
+  color: var(--ui-danger);
+}
+
+.toast-progress {
+  background: var(--ui-accent);
+}
+
+.list-error-state {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 32px 0;
+  margin-top: 20px;
+  border-block: 1px solid var(--ui-border);
+}
+
+.list-error-icon {
+  color: var(--ui-warning);
+  display: inline-flex;
+}
+
+.list-error-state h3 {
+  margin: 0 0 8px;
+  font-size: 1.125rem;
+  font-weight: 600;
+}
+
+.list-error-state p {
+  margin: 0;
+  max-width: 40rem;
+  color: var(--ui-muted);
+  line-height: 1.6;
+}
+
+/* Mobile record controls stay at the top right; desktop keeps centred controls. */
+
+@media (max-width: 760px) {
+  .list-error-state {
+    padding-block: 24px;
+  }
+}

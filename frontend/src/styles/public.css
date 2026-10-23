@@ -1,0 +1,746 @@
+/* Public landing, sign-in, account creation and session restoration. */
+
+.landing-page {
+  --page-gutter: max(clamp(24px, 10vw, 176px), calc((100vw - 1320px) / 2));
+}
+
+.landing-page {
+  min-height: 100svh;
+  display: flex;
+  flex-direction: column;
+  padding: 0 var(--page-gutter);
+  background-color: var(--ui-canvas);
+  background-image: none;
+  background-size: cover;
+  background-position: center 48%;
+}
+
+.landing-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: .875rem;
+  font-weight: 600;
+  line-height: 1.5;
+  letter-spacing: .13em;
+  text-transform: uppercase;
+  text-decoration: none;
+}
+
+.landing-brand > span:last-child {
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
+}
+
+.landing-brand {
+  min-height: 84px;
+  padding: 20px 0;
+}
+
+.brand-symbol {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 38px;
+  height: 38px;
+  border: 1px solid var(--ui-border);
+  border-radius: 12px;
+  font-size: .875rem;
+  font-weight: 600;
+  letter-spacing: -.04em;
+}
+
+.landing-content {
+  flex: 1;
+  width: 100%;
+  max-width: 1280px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 560px;
+  align-items: center;
+  gap: clamp(40px, 7vw, 112px);
+  padding: 24px 0;
+}
+
+.landing-intro {
+  width: 100%;
+  max-width: 610px;
+  justify-self: center;
+}
+
+.entry-eyebrow {
+  margin: 0 0 22px;
+  font-weight: 600;
+  letter-spacing: .17em;
+  text-transform: uppercase;
+}
+
+.landing-intro h1 {
+  margin: 0;
+  font-size: clamp(3rem, 5.5vw, 5rem);
+  font-weight: 600;
+  line-height: 1.06;
+  text-wrap: balance;
+}
+
+.landing-description {
+  max-width: 380px;
+  margin: 28px 0 0;
+  font-size: 1.0625rem;
+  line-height: 1.75;
+  color: var(--ui-text);
+}
+
+.journey-detail {
+  display: flex;
+  align-items: center;
+  margin: 0 0 24px;
+  font-size: .75rem;
+  font-weight: 600;
+  letter-spacing: .17em;
+  text-transform: uppercase;
+}
+
+.journey-point {
+  width: 7px;
+  height: 7px;
+  border: 1px solid var(--ui-accent);
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.journey-line {
+  width: 35px;
+  border-top: 1px dashed var(--ui-border);
+  margin: 0 5px;
+  flex-shrink: 0;
+}
+
+.journey-destination {
+  margin-right: 14px;
+  background: var(--ui-accent);
+}
+
+.landing-entry {
+  min-width: 0;
+  width: 100%;
+  max-width: 420px;
+  justify-self: center;
+}
+
+.entry-card {
+  padding: 40px 32px;
+  border-radius: 28px;
+  box-shadow: 0 24px 80px rgb(0 0 0 / 24%);
+  backdrop-filter: blur(24px);
+}
+
+.entry-eyebrow {
+  font-size: .75rem;
+  margin-bottom: 12px;
+}
+
+.entry-title {
+  margin: 0;
+  font-size: clamp(1.75rem, 3vw, 2.25rem);
+  font-weight: 600;
+  letter-spacing: -.04em;
+  line-height: 1.2;
+}
+
+.entry-description {
+  margin-top: 16px;
+  line-height: 1.7;
+  white-space: nowrap;
+  letter-spacing: -.025em;
+}
+
+.google-signin {
+  width: 100%;
+  min-height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 14px 18px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: var(--ui-text);
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.google-signin:hover:not(:disabled) {
+  background: var(--ui-hover);
+  transform: translateY(-1px);
+}
+
+.google-signin:disabled {
+  opacity: .6;
+}
+
+.google-signin:focus-visible {
+  outline-color: var(--ui-accent);
+  outline-offset: 5px;
+}
+
+.entry-note {
+  padding-top: 23px;
+  margin-top: 26px;
+  border-top: 1px solid var(--ui-border);
+  color: var(--ui-muted);
+  text-align: center;
+  font-size: .875rem;
+  line-height: 1.6;
+}
+
+.entry-message {
+  margin-top: 16px;
+  font-size: .875rem;
+  line-height: 1.6;
+}
+
+.entry-message:empty {
+  margin: 0;
+}
+
+.entry-card-account .text-slate-600, .entry-card-account .entry-message {
+  color: var(--ui-muted);
+}
+
+.entry-card-account input, .entry-card-account select {
+  background: var(--ui-field);
+  border-radius: 12px;
+}
+
+.entry-card-account input::placeholder {
+  color: var(--ui-muted);
+}
+
+.entry-card-account button {
+  border-radius: 999px;
+  min-height: 48px;
+}
+
+.entry-card-account button:focus-visible, .entry-card-account input:focus-visible, .entry-card-account select:focus-visible {
+  outline-color: var(--ui-accent);
+}
+
+.entry-card-account button:disabled {
+  opacity: .6;
+}
+
+.account-role {
+  display: inline-block;
+  margin: 0;
+  white-space: nowrap;
+  padding: 5px 12px;
+  border: 1px solid var(--ui-border);
+  border-radius: 999px;
+  color: var(--ui-accent);
+  font-size: .875rem;
+}
+
+.account-summary > section {
+  border-top: 1px solid var(--ui-border);
+  padding-top: 24px;
+}
+
+.account-summary > section p {
+  color: var(--ui-muted);
+  line-height: 1.7;
+}
+
+.account-summary > button {
+  margin-top: 28px;
+  border-color: var(--ui-control-border);
+}
+
+.landing-footer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 16px 0 20px;
+  border-top: 1px solid var(--ui-border);
+  font-size: .75rem;
+  line-height: 1.6;
+}
+
+@media (min-width: 1800px) {
+  .landing-page {
+    background-position: center 42%;
+  }
+}
+
+@media (max-width: 1050px) {
+  .landing-page {
+    background-position: 54% center;
+  }
+
+  .landing-content {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 36px;
+    padding: 40px 0 48px;
+    max-width: 480px;
+  }
+
+  .landing-intro h1 {
+    font-size: clamp(2.5rem, 10vw, 4rem);
+  }
+
+  .landing-description {
+    margin-top: 22px;
+    font-size: 1rem;
+  }
+
+  .journey-detail {
+    font-size: .75rem;
+    margin-bottom: 18px;
+  }
+
+  .landing-entry {
+    max-width: none;
+  }
+
+  .entry-card {
+    border-radius: 24px;
+    padding: 28px;
+  }
+
+  .entry-description {
+    white-space: normal;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .google-signin {
+    transition: none;
+  }
+}
+
+.signin-control {
+  position: relative;
+  margin-top: 34px;
+  border-radius: 999px;
+}
+
+.signin-control:focus-visible {
+  outline-color: var(--ui-accent);
+  outline-offset: 5px;
+}
+
+.signin-control:has(button:disabled) {
+  cursor: not-allowed;
+}
+
+.signin-control button:disabled {
+  pointer-events: none;
+}
+
+.signin-tooltip {
+  position: absolute;
+  z-index: 1;
+  bottom: calc(100% + 12px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: 100%;
+  padding: 10px 14px;
+  border: 1px solid var(--ui-control-border);
+  border-radius: 10px;
+  text-align: center;
+  font-size: .875rem;
+  line-height: 1.5;
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 180ms ease, visibility 0s linear 180ms;
+}
+
+.signin-control:hover .signin-tooltip, .signin-control:focus-within .signin-tooltip {
+  visibility: visible;
+  opacity: 1;
+  transition-delay: 450ms, 450ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .signin-tooltip {
+    transition: none;
+  }
+}
+
+.account-identity {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 16px;
+  min-width: 0;
+}
+
+.account-email {
+  margin: 0;
+  min-width: 0;
+  color: var(--ui-muted);
+  font-size: .875rem;
+  overflow-wrap: anywhere;
+}
+
+.account-identity .account-role {
+  flex-shrink: 0;
+}
+
+@media (min-width: 1051px) {
+  .landing-entry:has(.account-summary) {
+    max-width: 460px;
+  }
+}
+
+@media (max-width: 1050px) {
+  .account-identity {
+    flex-wrap: wrap;
+  }
+
+  .account-role {
+    max-width: 100%;
+    white-space: normal;
+  }
+
+  .account-summary > section p {
+    white-space: normal;
+  }
+}
+
+.google-signin svg {
+  flex-shrink: 0;
+}
+
+@media (max-width: 480px) {
+  .landing-content {
+    padding: 32px 0 40px;
+    gap: 28px;
+  }
+
+  .entry-card {
+    padding: 28px 20px;
+  }
+
+  .google-signin {
+    padding: 14px 12px;
+    gap: 10px;
+  }
+
+  .landing-brand {
+    letter-spacing: .08em;
+  }
+
+  .landing-brand {
+    flex-wrap: wrap;
+  }
+}
+
+.signup-email-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.entry-card-account .signup-email-row input {
+  min-width: 0;
+  background: var(--ui-raised);
+  color: var(--ui-muted);
+  opacity: 1;
+  -webkit-text-fill-color: var(--ui-muted);
+  cursor: not-allowed;
+}
+
+.signup-change-account {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 48px;
+  min-height: 48px;
+  border: 1px solid var(--ui-control-border);
+  color: var(--ui-text);
+}
+
+.signup-change-account:hover:not(:disabled) {
+  background: var(--ui-hover);
+}
+
+.signup-actions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 6rem), 1fr));
+  gap: 12px;
+}
+
+.signup-form {
+  display: grid;
+  gap: 1.25rem;
+}
+
+@media (max-width: 1050px) {
+  .landing-page {
+    --page-gutter: 24px;
+  }
+
+  .landing-brand {
+    min-height: 64px;
+    padding: 16px 0;
+    font-size: .75rem;
+    white-space: nowrap;
+    flex-wrap: nowrap;
+  }
+
+  .landing-brand .brand-symbol {
+    display: none;
+  }
+}
+
+/* Keep the public landing hidden while a saved identity and role are checked. */
+
+.session-restoring {
+  position: relative;
+  isolation: isolate;
+  justify-content: center;
+  align-items: center;
+  padding: 24px;
+  background: transparent;
+}
+
+.session-restoring > .landing-brand, .session-restoring .landing-intro, .session-restoring > .landing-footer {
+  display: none;
+}
+
+.session-restoring .landing-content {
+  flex: none;
+  display: block;
+  max-width: 420px;
+}
+
+.session-restoring .entry-card {
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+.signup-profile .patient-form-fields {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr));
+  gap: 16px;
+}
+
+.signup-profile .patient-form-fields > .patient-field {
+  justify-content: space-between;
+}
+
+@media (min-width: 1051px) {
+  .landing-entry:has(.signup-profile) {
+    max-width: 560px;
+  }
+}
+
+.signup-review {
+  margin: 0;
+  display: grid;
+  gap: 16px;
+}
+
+.signup-review dt {
+  color: var(--ui-muted);
+  font-size: .875rem;
+}
+
+.signup-review dd {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.landing-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.landing-page {
+  --page-gutter: max(clamp(20px, 4vw, 64px), calc((100vw - 1440px) / 2));
+}
+
+.landing-page {
+  background: var(--ui-canvas);
+  color: var(--ui-text);
+}
+
+.landing-brand {
+  color: var(--ui-text);
+  letter-spacing: -.02em;
+  text-transform: none;
+  font-size: 1rem;
+}
+
+.brand-symbol {
+  color: var(--ui-accent);
+  border: 1px solid var(--ui-accent);
+  border-radius: 8px;
+}
+
+.landing-content {
+  gap: clamp(40px, 6vw, 96px);
+  padding-block: 64px;
+}
+
+.landing-intro h1 {
+  font-family: Georgia, 'Times New Roman', serif;
+  font-weight: 400;
+  letter-spacing: -.055em;
+  line-height: 1.08;
+  font-size: clamp(3.25rem, 5.7vw, 5.75rem);
+}
+
+.landing-intro h1 span {
+  color: var(--ui-accent);
+}
+
+.landing-description {
+  color: var(--ui-muted);
+  max-width: 36ch;
+  font-size: 1.125rem;
+  line-height: 1.7;
+}
+
+.journey-detail {
+  color: var(--ui-muted);
+  font-size: .875rem;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.entry-card {
+  background: var(--ui-surface);
+  border: 1px solid var(--ui-border);
+  border-top: 3px solid var(--ui-accent);
+  border-radius: 8px;
+  box-shadow: none;
+  backdrop-filter: none;
+  padding: 32px;
+}
+
+.entry-card-account {
+  color: var(--ui-text);
+}
+
+.entry-eyebrow {
+  color: var(--ui-muted);
+  font-size: .875rem;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.entry-title {
+  font-size: 1.875rem;
+  letter-spacing: -.035em;
+}
+
+.entry-description {
+  white-space: normal;
+  color: var(--ui-muted);
+}
+
+.google-signin {
+  border: 1px solid var(--ui-control-border);
+  border-radius: 8px;
+  background: var(--ui-field);
+  color: var(--ui-text);
+}
+
+.google-signin:hover:not(:disabled) {
+  background: var(--ui-raised);
+  transform: none;
+}
+
+.signin-control, .entry-card-account button {
+  border-radius: 8px;
+}
+
+.entry-card-account button {
+  background: var(--ui-raised);
+  color: var(--ui-text);
+  border-color: var(--ui-control-border);
+}
+
+.entry-card-account button[type=submit] {
+  background: var(--ui-accent);
+  color: var(--ui-accent-text);
+  border-color: var(--ui-accent);
+}
+
+.entry-card-account button[type=submit]:hover:not(:disabled) {
+  background: var(--ui-accent-hover);
+}
+
+.entry-card-account button:not([type=submit]):hover:not(:disabled) {
+  background: var(--ui-hover);
+}
+
+.entry-card-account input, .entry-card-account select {
+  color: var(--ui-text);
+  border-color: var(--ui-control-border);
+  border-radius: 8px;
+}
+
+.landing-footer {
+  color: var(--ui-muted);
+  border-color: var(--ui-border);
+}
+
+.session-restoring > .landing-header {
+  display: none;
+}
+
+.session-restoring .landing-content {
+  padding: 0;
+}
+
+.session-restoring .entry-card {
+  border: 0;
+}
+
+.account-role {
+  border-radius: 4px;
+  background: var(--ui-raised);
+  color: var(--ui-muted);
+  border-color: var(--ui-border);
+}
+
+.signin-tooltip {
+  color: var(--ui-text);
+  background: var(--ui-surface);
+}
+
+@media (max-width: 1050px) {
+  .landing-content {
+    padding-block: 40px;
+  }
+
+  .landing-intro h1 {
+    font-size: clamp(3rem, 9vw, 4.5rem);
+  }
+}
+
+@media (max-width: 480px) {
+  .landing-page {
+    --page-gutter: 16px;
+  }
+
+  .landing-brand {
+    font-size: .875rem;
+  }
+
+  .entry-card {
+    padding: 24px 20px;
+  }
+}

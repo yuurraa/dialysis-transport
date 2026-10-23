@@ -1,0 +1,157 @@
+/* Bounded dropdown popovers and centre-picker results. */
+
+.centre-results-panel {
+  position: absolute;
+  top: 100%;
+  inset-inline: 0;
+  z-index: 5;
+  margin-top: 6px;
+  border: 1px solid var(--ui-control-border);
+  border-radius: 12px;
+  background: var(--ui-field);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 30%);
+  overflow: hidden;
+}
+
+.centre-results-panel ul {
+  max-height: min(14rem, 35svh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+}
+
+.centre-results-panel li {
+  padding: 10px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.centre-results-panel li:hover, .centre-results-panel li.is-active {
+  background: var(--ui-hover);
+}
+
+.centre-results-panel li span {
+  display: block;
+  font-size: .875rem;
+}
+
+.centre-results-panel li small {
+  display: block;
+  margin-top: 4px;
+  color: var(--ui-muted);
+  font-size: .8125rem;
+}
+
+.centre-results-panel p {
+  margin: 0;
+  padding: 12px;
+  font-size: .875rem;
+  color: var(--ui-muted);
+}
+
+/* Select popups are bounded independently of the browser's native select menu. */
+
+.dashboard-dialog .bounded-select {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  min-height: 50px;
+  padding: 12px;
+  border: 1px solid var(--ui-control-border);
+  border-radius: var(--ui-control-radius);
+  background: var(--ui-field);
+  color: var(--ui-text);
+  font-size: 1rem;
+  font-weight: 400;
+  text-align: left;
+}
+
+.bounded-select > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.bounded-select > svg {
+  flex-shrink: 0;
+}
+
+.bounded-options {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  z-index: 20;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  overflow: hidden;
+  border: 1px solid var(--ui-control-border);
+  border-radius: 12px;
+  background: var(--ui-field);
+  color: var(--ui-text);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 30%);
+}
+
+.bounded-options [role=option] {
+  min-height: 56px;
+  padding: 16px 12px;
+  border-radius: 8px;
+  font-size: .875rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.bounded-options [role=option].is-active {
+  background: var(--ui-hover);
+}
+
+.bounded-options-list {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
+.bounded-options-search {
+  flex-shrink: 0;
+  padding: 4px 0 8px;
+  background: var(--ui-field);
+}
+
+.bounded-options-search input {
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 1px solid var(--ui-control-border);
+  border-radius: 4px;
+  background: var(--ui-field);
+  color: var(--ui-text);
+  font-size: 1rem;
+}
+
+.bounded-options-search input:focus-visible {
+  outline-offset: -3px;
+}
+
+.bounded-options-empty {
+  margin: 0;
+  padding: 12px;
+  color: var(--ui-muted);
+  font-size: .875rem;
+}
+
+.bounded-options [aria-selected=true] {
+  color: var(--ui-accent);
+  font-weight: 600;
+}
+
+.centre-results-panel, .bounded-options {
+  border-radius: 8px;
+}

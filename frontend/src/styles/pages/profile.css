@@ -1,0 +1,131 @@
+/* Patient profile display and inline editing. */
+
+.patient-profile-fields {
+  margin: 0;
+}
+
+.patient-account-profile {
+  flex-direction: column;
+}
+
+.patient-form-panel {
+  flex: 0 0 auto;
+}
+
+@media (min-width: 761px) {
+  .patient-form-panel .patient-form-fields {
+    gap: 16px;
+  }
+
+  .patient-form-panel .patient-field {
+    gap: 6px;
+  }
+
+  .patient-form-panel .patient-readonly-fields {
+    margin-bottom: 16px;
+  }
+
+  .patient-form-panel .patient-form > .patient-actions {
+    margin-top: 16px;
+  }
+}
+
+.patient-notes {
+  white-space: pre-wrap;
+}
+
+@media (min-width: 761px) {
+  .dashboard-main:has(> .patients-panel:not(.patient-form-panel)) {
+    min-height: 0;
+  }
+}
+
+.patient-readonly-fields {
+  margin-bottom: 24px;
+}
+
+.profile-id {
+  margin: 0 0 6px;
+  color: var(--ui-muted);
+  font-size: .875rem;
+  font-weight: 400;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.patient-account-profile {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.patient-account-profile .patient-actions {
+  flex-shrink: 0;
+  padding-top: 20px;
+}
+
+@media (max-width: 760px) {
+  .patient-account-profile {
+    flex: 0 0 auto;
+    max-height: none;
+    overflow: visible;
+  }
+}
+
+/* Profile editing stays in place; highlighted controls distinguish editable values. */
+
+.patient-profile-form {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.patient-profile-form .patient-readonly-fields {
+  margin-bottom: 0;
+}
+
+/* Keep focus visible inside the profile scroll area without shifting the fields. */
+
+.patient-profile-form .patient-form-fields :is(input, select, textarea):focus-visible {
+  outline-offset: -3px;
+}
+
+.patient-profile-actions {
+  flex-shrink: 0;
+}
+
+.patient-profile-actions .patient-actions > button {
+  min-width: 140px;
+}
+
+.patient-editing .patient-form-fields :is(input, select, textarea):not(:disabled) {
+  background: color-mix(in srgb, var(--ui-accent) 10%, var(--ui-field));
+  border-color: var(--ui-accent);
+}
+
+.profile-save-error {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 20px;
+  padding: 12px;
+  border-left: 3px solid var(--ui-danger);
+  background: var(--ui-danger-surface);
+  color: var(--ui-danger);
+}
+
+.profile-save-error p {
+  flex: 1;
+  margin: 0;
+}
+
+@media (max-width: 760px) {
+  .patient-profile-form {
+    flex: 0 0 auto;
+  }
+
+  .profile-save-error {
+    flex-wrap: wrap;
+  }
+}

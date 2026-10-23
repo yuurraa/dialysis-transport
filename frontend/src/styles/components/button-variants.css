@@ -1,0 +1,50 @@
+/* Semantic button variants and shared control shapes; loaded after page rules. */
+
+.dashboard-page a, .dashboard-page button {
+  min-height: 44px;
+}
+
+.dashboard-page a {
+  transition: background-color 150ms ease, color 150ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dashboard-page a {
+    transition: none;
+  }
+}
+
+.dashboard-dialog .button-danger {
+  background: var(--ui-danger-surface);
+  color: var(--ui-danger);
+}
+
+.dashboard-dialog .button-danger:hover:not(:disabled) {
+  color: var(--ui-text);
+}
+
+/* Switch theme colours together so intermediate animation colours cannot lose contrast. */
+
+.dashboard-page a {
+  transition: none;
+}
+
+.dashboard-dialog .button-danger:hover:not(:disabled) {
+  background: var(--ui-danger-surface);
+  color: var(--ui-danger);
+}
+
+.dashboard-dialog .button-danger {
+  border-color: var(--ui-danger);
+}
+
+.dashboard-page button {
+  border-radius: 5px;
+}
+
+@media (max-width: 760px) {
+  .page-heading-actions > .patient-primary {
+    align-self: flex-start;
+    margin-bottom: 16px;
+  }
+}

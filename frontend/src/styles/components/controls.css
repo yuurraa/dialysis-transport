@@ -1,0 +1,173 @@
+/* Shared form fields, action rows and foundational dashboard controls. */
+
+:is(.page-panel, .patients-panel, .treatment-panel, .dashboard-dialog) button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 10px 16px;
+  border: 1px solid var(--ui-control-border);
+  border-radius: var(--ui-control-radius);
+  background: var(--ui-raised);
+  color: var(--ui-text);
+  font-size: .875rem;
+  font-weight: 600;
+  line-height: 22px;
+}
+
+:is(.page-panel, .patients-panel, .treatment-panel, .dashboard-dialog) button:hover:not(:disabled) {
+  background: var(--ui-hover);
+  color: var(--ui-text);
+  filter: none;
+  box-shadow: none;
+}
+
+:is(.page-panel, .patients-panel, .treatment-panel, .dashboard-dialog) button.patient-primary {
+  background: var(--ui-accent);
+  border-color: var(--ui-accent);
+  color: var(--ui-accent-text);
+}
+
+:is(.page-panel, .patients-panel, .treatment-panel, .dashboard-dialog) button.patient-primary:hover:not(:disabled) {
+  background: var(--ui-accent-hover);
+  border-color: var(--ui-accent-hover);
+  color: var(--ui-accent-text);
+}
+
+:is(.page-panel, .patients-panel, .treatment-panel, .dashboard-dialog) button:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+}
+
+.patient-form h2 {
+  margin: 0 0 20px;
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+
+.patient-form-fields {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+}
+
+.patient-field {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.patient-form-fields label {
+  font-size: .875rem;
+  font-weight: 600;
+}
+
+.patient-form-fields input:not([type=checkbox]), .patient-form-fields textarea, .patient-form-fields select {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  padding: 12px;
+  border: 1px solid var(--ui-control-border);
+  border-radius: 12px;
+  background: var(--ui-field);
+  color: var(--ui-text);
+  font: inherit;
+  font-size: 1rem;
+}
+
+.patient-form-fields textarea {
+  resize: vertical;
+}
+
+.patient-form-wide {
+  grid-column: 1 / -1;
+}
+
+.patient-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+.patient-form > .patient-actions {
+  margin-top: 24px;
+}
+
+.patient-error {
+  color: var(--ui-danger);
+  line-height: 1.6;
+}
+
+@media (max-width: 760px) {
+  .patient-form-fields {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+  }
+}
+
+.patient-required::after {
+  content: " *";
+  color: var(--ui-danger);
+}
+
+/* Includes controls disabled through a parent fieldset. Keep values readable. */
+
+:root :is(.entry-card-account, .patient-form-fields) :is(input, select, textarea):is(:disabled, [readonly]) {
+  background: var(--ui-disabled);
+  border-color: var(--ui-border);
+  color: var(--ui-muted);
+  -webkit-text-fill-color: var(--ui-muted);
+  opacity: 1;
+  cursor: not-allowed;
+}
+
+.patient-form-fields input:not([type=checkbox]), .patient-form-fields textarea, .patient-form-fields select {
+  border-radius: 8px;
+}
+
+.patient-form-fields label {
+  font-size: .9375rem;
+}
+
+.patient-form-fields input:not([type=checkbox]), .patient-form-fields textarea, .patient-form-fields select {
+  border-radius: 5px;
+}
+
+:is(.page-panel, .patients-panel, .treatment-panel) .list-tool-button {
+  flex: 0 0 44px;
+  width: 44px;
+  padding: 0;
+  position: relative;
+}
+
+:is(.page-panel, .dashboard-dialog) button.patient-primary {
+  background: var(--ui-accent);
+  color: var(--ui-accent-text);
+  border-color: var(--ui-accent);
+}
+
+:is(.page-panel, .dashboard-dialog) button.patient-primary:hover:not(:disabled) {
+  background: var(--ui-accent-hover);
+  color: var(--ui-accent-text);
+  border-color: var(--ui-accent-hover);
+}
+
+:is(.page-panel, .dashboard-dialog) button.button-danger {
+  color: var(--ui-danger);
+  background: var(--ui-danger-surface);
+  border-color: var(--ui-danger);
+}
+
+:is(.page-panel, .dashboard-dialog) button.button-danger:hover:not(:disabled) {
+  color: var(--ui-danger);
+  background: var(--ui-danger-surface);
+  box-shadow: inset 0 0 0 1px var(--ui-danger);
+}
