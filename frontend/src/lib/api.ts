@@ -1,7 +1,7 @@
 import { supabase } from './supabase';
 
 export class ApiError extends Error {
-  constructor(readonly status: number) {
+  constructor(readonly status: number, readonly code?: string) {
     super(`Request failed (${status}).`);
   }
 }
@@ -23,7 +23,13 @@ export async function apiRequest<T>(path: string, method: 'GET' | 'POST' | 'PATC
       headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
-    if (!response.ok) throw new ApiError(response.status);
+    if (!response.ok) {
+      // Only expose a bounded machine code. Screens supply their own user-facing messages.
+      const details: unknown = await response.json().catch(() => null);
+      const code = details && typeof details === 'object' && 'code' in details
+        && typeof details.code === 'string' && /^[a-z_]{1,64}$/.test(details.code) ? details.code : undefined;
+      throw new ApiError(response.status, code);
+    }
     // Keep the deadline active until the body is read, not just until headers arrive.
     return await response.json() as T;
   } finally {

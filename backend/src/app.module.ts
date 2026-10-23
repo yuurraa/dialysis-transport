@@ -1,5 +1,6 @@
 import { Controller, Get, Module } from '@nestjs/common';
 import { SupabaseModule } from './supabase.module';
+import { DriversModule } from './drivers/drivers.module';
 import { AuthModule } from './auth/auth.module';
 import { ProfilesModule } from './profiles/profiles.module';
 import { SchedulingModule } from './scheduling/scheduling.module';
@@ -14,7 +15,7 @@ class HealthController {
 }
 
 @Module({
-  imports: [SupabaseModule, AuthModule, ProfilesModule, SchedulingModule, TripsModule, IntegrationsModule],
+  imports: [DriversModule, SupabaseModule, AuthModule, ProfilesModule, SchedulingModule, TripsModule, IntegrationsModule],
   controllers: [HealthController],
 })
 export class AppModule {}

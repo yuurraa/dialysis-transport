@@ -1,3 +1,4 @@
+import { Toast } from './Toast';
 import { useId, useLayoutEffect, useRef, useState, type FormEventHandler, type ReactNode, type Ref } from 'react';
 
 export function InfoButton({ label, onClick, disabled, buttonRef }: {
@@ -43,7 +44,7 @@ export function Overlay({ title, description, children, footer, onClose, onSubmi
     };
   }, []);
   useLayoutEffect(() => { heading.current?.focus(); }, [title]);
-  const content = <><div className="overlay-body">{children}</div>{error && <div className="overlay-toast-region"><div className="auth-toast error-toast" role="alert"><p>{error}</p><button type="button" aria-label="Dismiss error" onClick={onDismissError}>Dismiss</button></div></div>}<footer className="overlay-footer patient-actions">{footer ?? <button type="button" aria-label={`Close ${title}`} disabled={busy} onClick={onClose}>Close</button>}</footer></>;
+  const content = <><div className="overlay-body">{children}</div><footer className="overlay-footer patient-actions">{footer ?? <button type="button" aria-label={`Close ${title}`} disabled={busy} onClick={onClose}>Close</button>}</footer></>;
   return <dialog className={`dashboard-dialog ${className}`} ref={dialog} aria-labelledby={titleId} aria-describedby={description ? descriptionId : undefined} aria-busy={busy}
     onCancel={event => { event.preventDefault(); if (!busy) onClose(); }}
     onKeyDown={event => {
@@ -60,6 +61,7 @@ export function Overlay({ title, description, children, footer, onClose, onSubmi
       const bounds = event.currentTarget.getBoundingClientRect();
       if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) onClose();
     }}>
+    {error && <div className="toast-region"><Toast key={error} message={error} urgent onDismiss={() => onDismissError?.()} /></div>}
     <header className="overlay-header"><div><h2 id={titleId} ref={heading} tabIndex={-1}>{title}</h2>{description && <p id={descriptionId} className="page-description">{description}</p>}</div>
     </header>
     {onSubmit ? <form className="overlay-content patient-form" onSubmit={onSubmit} noValidate={noValidate}>{content}</form> : <div className="overlay-content">{content}</div>}
@@ -94,7 +96,7 @@ export function ListPagination({ children, label, page, hasNext, disabled, onPag
 /** The same search/filter/sort order is used by every record list. */
 export function ListToolbar({ search, onSearch, label, placeholder, filterCount, onFilter, onSort, sortLabel }: {
   search: string; onSearch: (value: string) => void; label: string; placeholder: string;
-  filterCount: number; onFilter: () => void; onSort: () => void; sortLabel: string;
+  filterCount: number; onFilter: () => void; onSort?: () => void; sortLabel?: string;
 }) {
   const toolbar = useRef<HTMLDivElement>(null);
   const [compact, setCompact] = useState(() => window.matchMedia('(max-width: 760px)').matches);
@@ -110,7 +112,7 @@ export function ListToolbar({ search, onSearch, label, placeholder, filterCount,
     observer.observe(header);
     return () => { observer.disconnect(); media.removeEventListener('change', resized); };
   }, []);
-  return <div ref={toolbar} className="list-toolbar" role="group" aria-label="Search, filter and sort records">
+  return <div ref={toolbar} className="list-toolbar" role="group" aria-label={onSort ? "Search, filter and sort records" : "Search and filter records"}>
     <label className="patient-search"><svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 5 5" /></svg>
       <input type="search" aria-label={label} placeholder={compact ? label.replace('treatment ', '') : placeholder} title={placeholder} maxLength={100} value={search} onChange={event => onSearch(event.target.value)} />
     </label>
@@ -118,9 +120,9 @@ export function ListToolbar({ search, onSearch, label, placeholder, filterCount,
       <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M4 5h16l-6 7v6l-4 2v-8z" /></svg>
       {filterCount > 0 && <span className="trip-filter-badge" aria-label={`${filterCount} active filters`}>{filterCount}</span>}
     </button>
-    <button className="list-tool-button" type="button" aria-label="Sort" aria-haspopup="dialog" title={`Sort: ${sortLabel}`} onClick={onSort}>
+    {onSort && <button className="list-tool-button" type="button" aria-label="Sort" aria-haspopup="dialog" title={`Sort: ${sortLabel ?? ''}`} onClick={onSort}>
       <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M8 4v16m-4-4 4 4 4-4M16 20V4m-4 4 4-4 4 4" /></svg>
-    </button>
+    </button>}
   </div>;
 }
 

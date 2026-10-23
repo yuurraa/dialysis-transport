@@ -80,6 +80,7 @@ export async function expectHeaderContext(page: Page) {
 
 // API/Auth boundaries use fixtures; React runs unchanged and unexpected Auth traffic is denied.
 export async function mockServices({ page }: { page: Page }) {
+  await page.route('**/api/drivers/me', route => route.fulfill({ json: { vehicle: null } }));
   await page.route('**/api/trips?*', route => route.fulfill({ status: 503, json: {} }));
   await page.route('**/api/profiles/patient', route => route.fulfill({ json: { patient: { id: session.user.id, full_name: 'Test Patient', birth_date: '1990-04-12', gender: 'female', phone: '+65 81234567', pickup_address: 'Test street', unit_no: '', postal_code: '560123', notes: '', mobility: 'ambulant', assistance_required: false, status: 'active' } } }));
   await page.route('**/api/auth/me', route => route.fulfill({ json: { id: session.user.id, email: session.user.email, account: null } }));
@@ -88,4 +89,22 @@ export async function mockServices({ page }: { page: Page }) {
   await page.route('https://auth.example.test/**', route => route.fulfill(route.request().method() === 'OPTIONS' ? { status: 204, headers: cors } : {
     status: 400, headers: cors, json: { code: 'unexpected_request', message: 'Fixture endpoint not configured.' },
   }));
+}
+
+/** Content dialogs stay centred with viewport gutters and consistent footer padding. */
+export async function expectPopup(dialog: Locator) {
+  await expect(dialog).toBeVisible();
+  const viewport = dialog.page().viewportSize()!;
+  await expect.poll(async () => {
+    const bounds = (await dialog.boundingBox())!;
+    return Math.abs(bounds.x + bounds.width / 2 - viewport.width / 2)
+      + Math.abs(bounds.y + bounds.height / 2 - viewport.height / 2);
+  }).toBeLessThanOrEqual(2);
+  const bounds = (await dialog.boundingBox())!;
+  expect(bounds.x).toBeGreaterThanOrEqual(11);
+  expect(bounds.y).toBeGreaterThanOrEqual(11);
+  expect(bounds.width).toBeLessThanOrEqual(viewport.width - 22);
+  expect(bounds.height).toBeLessThanOrEqual(viewport.height - 22);
+  await expect(dialog.locator('.overlay-footer')).toHaveCSS('padding-bottom', '12px');
+  await expect(dialog.locator('.overlay-footer')).toBeInViewport();
 }

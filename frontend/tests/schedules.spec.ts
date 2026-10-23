@@ -1,4 +1,4 @@
-import { test, expect, session, seedSession, activeAccount, chooseOption, mockServices } from './support/fixtures';
+import { test, expect, session, seedSession, activeAccount, chooseOption, expectPopup, mockServices } from './support/fixtures';
 
 test.beforeEach(mockServices);
 
@@ -73,6 +73,7 @@ test('patient records an independent single session without recurring fields', a
   await page.goto('/dashboard/schedules');
   await page.getByRole('button', { name: 'Add Schedule', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: 'Add Schedule', exact: true });
+  await expectPopup(dialog);
   await chooseOption(dialog.getByLabel('Schedule type', { exact: true }), 'single');
   await expect(dialog.getByLabel('Treatment day', { exact: true })).toHaveCount(0);
   await expect(dialog.getByLabel('Effective from', { exact: true })).toHaveCount(0);
@@ -116,6 +117,7 @@ test('rescheduling replaces one recurring occurrence and failed saves leave the 
   await page.getByRole('button', { name: 'Edit Schedule', exact: true }).first().click();
   await chooseOption(page.getByLabel('Apply changes to'), 'occurrence');
   const dialog = page.getByRole('dialog', { name: 'Edit Schedule', exact: true });
+  await expectPopup(dialog);
   const source = dialog.getByRole('combobox', { name: 'Session to change', exact: true });
   await expect(source).toBeVisible();
   await source.click();
@@ -123,9 +125,9 @@ test('rescheduling replaces one recurring occurrence and failed saves leave the 
   await page.keyboard.press('Escape');
   await expect(dialog.getByLabel('Schedule type', { exact: true })).toHaveCount(0);
   await dialog.getByRole('button', { name: 'Save Schedule', exact: true }).click();
-  await expect(dialog.locator('.error-toast')).toContainText('session');
+  await expect(dialog.locator('.auth-toast[role="alert"]')).toContainText('session');
   expect(writes).toBe(0);
-  await dialog.getByRole('button', { name: 'Dismiss error' }).click();
+  await dialog.getByRole('button', { name: 'Dismiss notification' }).click();
   await chooseOption(source, '2026-10-26');
   await expect(dialog.getByLabel('New session date', { exact: true })).toHaveValue('2026-10-26');
   await chooseOption(source, '2026-11-02');
@@ -134,7 +136,7 @@ test('rescheduling replaces one recurring occurrence and failed saves leave the 
   await chooseOption(source, '2026-10-26');
   await expect(dialog.getByLabel('New session date', { exact: true })).toHaveValue('2026-10-27');
   await dialog.getByRole('button', { name: 'Save Schedule', exact: true }).click();
-  await expect(dialog.locator('.error-toast')).toContainText('could not be saved');
+  await expect(dialog.locator('.auth-toast[role="alert"]')).toContainText('could not be saved');
   await expect(source).toHaveText('Monday, 26 Oct 2026');
   expect(replacement).toBeNull();
   fail = false;

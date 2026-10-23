@@ -82,6 +82,18 @@
   font-size: 1rem;
 }
 
+/* A subtle neutral shade distinguishes editable fields from read-only values. */
+.patient-form-fields :is(input:not([type=checkbox]), select, textarea):not(:disabled):not([readonly]) {
+  background: color-mix(in srgb, var(--ui-field) 92%, black);
+}
+
+/* Editable fields stay neutral; only the focused control gets the pink outline.
+   An inset outline remains visible inside scrolling forms and dialogs. */
+.patient-form-fields :is(input, select, textarea):not(:disabled):focus {
+  outline: 3px solid var(--ui-accent);
+  outline-offset: -3px;
+}
+
 .patient-form-fields textarea {
   resize: vertical;
 }

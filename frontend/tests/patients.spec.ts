@@ -1,4 +1,4 @@
-import { test, expect, session, seedSession, activeAccount, chooseOption, mockServices } from './support/fixtures';
+import { test, expect, session, seedSession, activeAccount, chooseOption, expectPopup, mockServices } from './support/fixtures';
 
 test.beforeEach(mockServices);
 
@@ -22,6 +22,7 @@ test('coordinator reads patient details but persists only Status and Notes', asy
   await expect(page.getByRole('button', { name: 'Add patient', exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: 'View Test Patient', exact: true }).click();
   const details = page.getByRole('dialog', { name: 'Patient Details', exact: true });
+  await expectPopup(details);
   await expect(details.getByRole('heading', { name: 'Patient Details', exact: true })).toBeVisible();
   await expect(page.locator('.profile-id')).toHaveText(`Patient ID: ${patient.id}`);
   await expect(page.getByRole('dialog', { name: 'Patient Details', exact: true }).getByText('Patient Management', { exact: true })).toHaveCount(0);
@@ -69,6 +70,7 @@ test('patient list retries failed loads and preserves edits after a failed save'
   available = true;
   await page.getByRole('button', { name: 'Try again', exact: true }).click();
   await page.getByRole('button', { name: 'View Test Patient', exact: true }).click();
+  await expectPopup(page.getByRole('dialog', { name: 'Patient Details', exact: true }));
   await page.getByRole('button', { name: 'Edit Patient', exact: true }).click();
   await page.getByRole('dialog', { name: 'Patient Details', exact: true }).getByLabel('Notes', { exact: true }).fill('Call on arrival.');
   await page.getByRole('button', { name: 'Save Patient', exact: true }).click();

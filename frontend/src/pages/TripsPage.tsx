@@ -1,3 +1,4 @@
+import { Toast } from '../components/Toast';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { InfoButton, Overlay, PageHeading, ListToolbar, ListPagination, ChoiceGroup, SortOverlay, ListError, sortSummary } from '../components/DashboardUI';
 import { ApiError, apiGet, apiRequest } from '../lib/api';
@@ -174,6 +175,6 @@ export default function TripsPage({ coordinator, onSessionExpired }: { coordinat
       : details && <Overlay className="trip-details-dialog" title="Trip details" description={<span className="trip-detail-heading"><span>{tripDate(details.treatment_start)}</span><span className="trip-direction-status"><span>{details.direction === 'outbound' ? 'Outbound' : 'Return'}</span><TripStatus status={details.status} /></span></span>} onClose={() => setDetails(null)} footer={<>{coordinator && <button className="button-danger" type="button" aria-label="Delete Trip" title="Delete Trip" onClick={() => confirmDelete(details)}>Delete Trip</button>}<button type="button" aria-label="Close Trip details" onClick={() => setDetails(null)}>Close</button></>}>
         <div className="trip-detail-identity"><p className="trip-detail-name">{details.patient_name}</p><p className="trip-detail-id">Patient ID: {details.patient_id}</p>{details.pickup_at && <p>Pickup {tripTime(details.pickup_at)}</p>}</div><JourneyDetails trip={details} />
       </Overlay>}
-    {toast && <div className="trip-toast-region"><div className="auth-toast" role="status"><p>{toast}</p><button type="button" aria-label="Dismiss notification" onClick={() => setToast('')}>×</button></div></div>}
+    {toast && <div className="toast-region" role="status" aria-live="polite" aria-atomic="true"><Toast key={toast} message={toast} onDismiss={() => setToast('')} /></div>}
   </div>;
 }

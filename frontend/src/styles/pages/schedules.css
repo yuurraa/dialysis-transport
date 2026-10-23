@@ -227,10 +227,6 @@
   }
 }
 
-.schedule-editor {
-  height: min(52rem, calc(100dvh - 32px));
-}
-
 .treatment-panel .reschedule-summary {
   margin-top: 8px;
   min-height: 44px;
@@ -454,7 +450,7 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 16px;
-  padding: 20px 64px 20px 40px;
+  padding: 20px 48px 20px 40px;
   border: 0;
   border-top: 1px solid var(--ui-border);
   border-radius: 0;
@@ -634,7 +630,7 @@
   .treatment-record .schedule-record-actions {
     position: absolute;
     top: 12px;
-    right: 52px;
+    right: 48px;
     width: auto;
     margin: 0;
     padding: 0;

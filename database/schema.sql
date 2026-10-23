@@ -14,6 +14,15 @@ create table if not exists public.accounts (
   status text not null default 'active' check (status in ('active', 'inactive')),
   created_at timestamptz not null default now()
 );
+-- Account status has its own concurrency version, independent of personal/vehicle details.
+alter table public.accounts add column if not exists status_version integer not null default 1 check (status_version > 0);
+create or replace function private.increment_account_status_version() returns trigger
+language plpgsql set search_path = '' as $$
+begin new.status_version := old.status_version + 1; return new; end;
+$$;
+drop trigger if exists account_status_version on public.accounts;
+create trigger account_status_version before update of status on public.accounts
+  for each row execute function private.increment_account_status_version();
 -- Upgrade earlier account statuses without recreating the table or deleting data.
 alter table public.accounts drop constraint if exists accounts_status_check;
 alter table public.accounts alter column status set default 'active';
@@ -287,7 +296,7 @@ language sql security invoker set search_path = '' as $$ select private.register
 revoke all on function private.register_patient_account(text,jsonb), public.register_patient_account(text,jsonb) from public, anon;
 grant execute on function private.register_patient_account(text,jsonb), public.register_patient_account(text,jsonb) to authenticated;
 
--- Driver personal signup only. Vehicle registration and approval are a later milestone.
+-- Driver personal profiles are separate from vehicle registration approval.
 create table if not exists public.drivers (
   account_id uuid primary key references public.accounts(id) on delete restrict,
   full_name text not null check (length(btrim(full_name)) between 1 and 100),
@@ -308,6 +317,35 @@ grant execute on function private.driver_account_id() to authenticated;
 drop policy if exists drivers_read on public.drivers;
 create policy drivers_read on public.drivers for select to authenticated
   using (account_id=(select private.driver_account_id()));
+
+alter table public.drivers add column if not exists version integer not null default 1 check (version>0);
+
+-- Owner edits are separate from signup completion and cannot change vehicle approval.
+create or replace function private.update_my_driver(details jsonb, expected_version integer) returns jsonb
+language plpgsql security definer set search_path='' as $$
+declare owner_id uuid; saved public.drivers;
+begin
+  owner_id:=private.driver_account_id();
+  if owner_id is null then raise exception 'Driver access required.' using errcode='42501'; end if;
+  perform private.verified_email();
+  perform private.validate_personal_details(details);
+  if details-array['full_name','phone','birth_date','gender']<>'{}'::jsonb
+    or expected_version is null or expected_version<1 then raise exception 'Invalid driver details.' using errcode='22023'; end if;
+  perform 1 from public.accounts where id=owner_id and status='active' and role='driver' for update;
+  if not found then raise exception 'Driver access required.' using errcode='42501'; end if;
+  select * into saved from public.drivers where account_id=owner_id for update;
+  if not found then raise exception 'Driver profile not found.' using errcode='P0002'; end if;
+  if saved.version<>expected_version then raise exception 'Driver profile changed. Reload before saving.' using errcode='40001'; end if;
+  update public.drivers set full_name=btrim(details->>'full_name'),phone=btrim(details->>'phone'),
+    birth_date=(details->>'birth_date')::date,gender=details->>'gender',version=version+1
+    where account_id=owner_id returning * into saved;
+  return to_jsonb(saved);
+end;
+$$;
+create or replace function public.update_my_driver(details jsonb, expected_version integer) returns jsonb
+language sql security invoker set search_path='' as $$ select private.update_my_driver(details,expected_version); $$;
+revoke all on function private.update_my_driver(jsonb,integer),public.update_my_driver(jsonb,integer) from public,anon;
+grant execute on function private.update_my_driver(jsonb,integer),public.update_my_driver(jsonb,integer) to authenticated;
 
 -- Used for signup and completion of legacy driver accounts; personal details are not approval.
 create or replace function private.save_my_driver(details jsonb) returns jsonb
@@ -354,6 +392,256 @@ revoke all on function private.save_my_driver(jsonb),public.save_my_driver(jsonb
   private.register_driver_account(text,jsonb),public.register_driver_account(text,jsonb) from public, anon;
 grant execute on function private.save_my_driver(jsonb),public.save_my_driver(jsonb),
   private.register_driver_account(text,jsonb),public.register_driver_account(text,jsonb) to authenticated;
+
+create table if not exists public.driver_vehicles (
+  id uuid primary key default gen_random_uuid(),
+  driver_id uuid not null unique references public.drivers(account_id) on delete restrict,
+  licence_number text not null check (length(btrim(licence_number)) between 1 and 50),
+  plate_number text not null unique check (plate_number = upper(btrim(plate_number)) and length(plate_number) between 1 and 20),
+  make text not null check (length(btrim(make)) between 1 and 60),
+  model text not null check (length(btrim(model)) between 1 and 60),
+  passenger_capacity integer not null check (passenger_capacity between 1 and 12),
+  wheelchair_accessible boolean not null,
+  status text not null default 'pending' check (status in ('pending','approved','rejected')),
+  version integer not null default 1 check (version > 0),
+  submitted_at timestamptz not null default now(),
+  reviewed_at timestamptz,
+  reviewed_by uuid references public.accounts(id) on delete restrict,
+  review_reason text not null default '' check (length(review_reason) <= 1000),
+  check ((status='pending' and reviewed_at is null and reviewed_by is null and review_reason='')
+    or (status in ('approved','rejected') and reviewed_at is not null and reviewed_by is not null)),
+  check (status <> 'rejected' or length(btrim(review_reason)) > 0)
+);
+-- Internal audit: resubmission must not erase previous review decisions.
+create table if not exists private.driver_registration_events (
+  id uuid primary key default gen_random_uuid(),
+  driver_id uuid not null references public.drivers(account_id),
+  actor_id uuid not null references public.accounts(id),
+  recorded_at timestamptz not null default now(),
+  snapshot jsonb not null
+);
+-- Retain the latest approval through edits so returning drivers keep My Vehicle.
+alter table public.driver_vehicles add column if not exists registered_at timestamptz;
+update public.driver_vehicles v set registered_at=coalesce(
+  case when v.status='approved' then v.reviewed_at end,
+  (select max((e.snapshot->>'reviewed_at')::timestamptz) from private.driver_registration_events e
+    where e.driver_id=v.driver_id and e.snapshot->>'status'='approved')
+) where v.registered_at is null;
+alter table private.driver_registration_events enable row level security;
+revoke all on private.driver_registration_events from public, anon, authenticated;
+
+alter table public.drivers enable row level security;
+alter table public.driver_vehicles enable row level security;
+revoke all on public.drivers, public.driver_vehicles from public, anon, authenticated;
+grant select on public.drivers, public.driver_vehicles to authenticated;
+drop policy if exists drivers_read on public.drivers;
+create policy drivers_read on public.drivers for select to authenticated
+  using ((select private.is_coordinator()) or account_id=(select private.driver_account_id()));
+drop policy if exists driver_vehicles_read on public.driver_vehicles;
+create policy driver_vehicles_read on public.driver_vehicles for select to authenticated
+  using ((select private.is_coordinator()) or driver_id=(select private.driver_account_id()));
+
+create or replace function private.submit_driver_vehicle(details jsonb, expected_version integer) returns jsonb
+language plpgsql security definer set search_path = '' as $$
+declare owner_id uuid; saved public.driver_vehicles; candidate public.driver_vehicles;
+begin
+  owner_id := private.driver_account_id();
+  if owner_id is null then raise exception 'Driver access required.' using errcode='42501'; end if;
+  perform 1 from public.accounts where id=owner_id and status='active' and role='driver' for update;
+  if not found then raise exception 'Driver access required.' using errcode='42501'; end if;
+  if not exists(select 1 from public.drivers where account_id=owner_id) then
+    raise exception 'Complete driver personal details first.' using errcode='22023'; end if;
+  if details is null or jsonb_typeof(details)<>'object'
+    or details - array['licence_number','plate_number','make','model','passenger_capacity','wheelchair_accessible'] <> '{}'::jsonb
+    or coalesce(jsonb_typeof(details->'licence_number'),'')<>'string'
+    or coalesce(jsonb_typeof(details->'plate_number'),'')<>'string'
+    or coalesce(jsonb_typeof(details->'make'),'')<>'string'
+    or coalesce(jsonb_typeof(details->'model'),'')<>'string'
+    or coalesce(jsonb_typeof(details->'passenger_capacity'),'')<>'number'
+    or coalesce(details->>'passenger_capacity','') !~ '^([1-9]|1[0-2])$'
+    or coalesce(jsonb_typeof(details->'wheelchair_accessible'),'')<>'boolean' then
+    raise exception 'Invalid vehicle details.' using errcode='22023'; end if;
+  candidate := jsonb_populate_record(null::public.driver_vehicles,details);
+  select * into saved from public.driver_vehicles where driver_id=owner_id for update;
+  if found then
+    if expected_version is null or expected_version<>saved.version then
+      raise exception 'Registration changed. Reload before saving.' using errcode='40001'; end if;
+  elsif expected_version is not null then raise exception 'Registration changed. Reload before saving.' using errcode='40001'; end if;
+  insert into public.driver_vehicles(driver_id,licence_number,plate_number,make,model,passenger_capacity,wheelchair_accessible)
+    values (owner_id,btrim(candidate.licence_number),upper(btrim(candidate.plate_number)),btrim(candidate.make),btrim(candidate.model),candidate.passenger_capacity,candidate.wheelchair_accessible)
+    on conflict (driver_id) do update set licence_number=excluded.licence_number,plate_number=excluded.plate_number,
+      make=excluded.make,model=excluded.model,passenger_capacity=excluded.passenger_capacity,wheelchair_accessible=excluded.wheelchair_accessible,
+      status='pending',version=public.driver_vehicles.version+1,submitted_at=now(),reviewed_at=null,reviewed_by=null,review_reason=''
+    returning * into saved;
+  insert into private.driver_registration_events(driver_id,actor_id,snapshot) values(owner_id,owner_id,to_jsonb(saved));
+  return to_jsonb(saved);
+end;
+$$;
+create or replace function public.submit_driver_vehicle(details jsonb, expected_version integer) returns jsonb
+language sql security invoker set search_path = '' as $$ select private.submit_driver_vehicle(details,expected_version); $$;
+
+create or replace function private.review_driver_vehicle(target uuid, expected_version integer, decision text, reason text) returns jsonb
+language plpgsql security definer set search_path = '' as $$
+declare saved public.driver_vehicles; actor uuid;
+begin
+  if not private.is_coordinator() then raise exception 'Coordinator access required.' using errcode='42501'; end if;
+  if decision is null or decision not in ('approved','rejected') or reason is null or length(reason)>1000
+    or (decision='rejected' and length(btrim(reason))=0) then
+    raise exception 'A valid decision and rejection reason are required.' using errcode='22023'; end if;
+  -- Same lock order as submission: account, then vehicle.
+  perform 1 from public.accounts where id=target and role='driver' and status='active' for update;
+  if not found then raise exception 'Active driver not found.' using errcode='P0002'; end if;
+  select * into saved from public.driver_vehicles where driver_id=target for update;
+  if not found then raise exception 'Vehicle registration not found.' using errcode='P0002'; end if;
+  if expected_version is null or saved.version<>expected_version then raise exception 'Registration changed. Reload before reviewing.' using errcode='40001'; end if;
+  if saved.status<>'pending' then raise exception 'Only pending registrations can be reviewed.' using errcode='22023'; end if;
+  select id into actor from public.accounts where auth_user_id=(select auth.uid()) and role='coordinator' and status='active' for share;
+  if actor is null then raise exception 'Coordinator access required.' using errcode='42501'; end if;
+  update public.driver_vehicles set status=decision,review_reason=btrim(reason),reviewed_by=actor,reviewed_at=now(),
+    registered_at=case when decision='approved' then now() else registered_at end,version=version+1
+    where driver_id=target returning * into saved;
+  insert into private.driver_registration_events(driver_id,actor_id,snapshot) values(target,actor,to_jsonb(saved));
+  return to_jsonb(saved);
+end;
+$$;
+create or replace function public.review_driver_vehicle(target uuid, expected_version integer, decision text, reason text) returns jsonb
+language sql security invoker set search_path = '' as $$ select private.review_driver_vehicle(target,expected_version,decision,reason); $$;
+
+-- Coordinators may change only the login status of a Driver account, never its identity/role.
+create or replace function private.save_driver_status(target uuid, expected_version integer, new_status text) returns jsonb
+language plpgsql security definer set search_path = '' as $$
+declare selected public.accounts; actor uuid;
+begin
+  if not private.is_coordinator() then raise exception 'Coordinator access required.' using errcode='42501'; end if;
+  if new_status is null or new_status not in ('active','inactive') or expected_version is null or expected_version < 1 then
+    raise exception 'Invalid driver status.' using errcode='22023'; end if;
+  select * into selected from public.accounts where id=target and role='driver' for update;
+  if not found then raise exception 'Driver not found.' using errcode='P0002'; end if;
+  if selected.status_version<>expected_version then raise exception 'Driver status changed. Reload before saving.' using errcode='40001'; end if;
+  select id into actor from public.accounts where auth_user_id=(select auth.uid()) and role='coordinator' and status='active' for share;
+  if actor is null then raise exception 'Coordinator access required.' using errcode='42501'; end if;
+  update public.accounts set status=new_status where id=target returning * into selected;
+  return jsonb_build_object('id',selected.id,'account_status',selected.status,'status_version',selected.status_version);
+end;
+$$;
+create or replace function public.save_driver_status(target uuid, expected_version integer, new_status text) returns jsonb
+language sql security invoker set search_path = '' as $$ select private.save_driver_status(target,expected_version,new_status); $$;
+revoke all on function private.save_driver_status(uuid,integer,text),public.save_driver_status(uuid,integer,text) from public,anon;
+grant execute on function private.save_driver_status(uuid,integer,text),public.save_driver_status(uuid,integer,text) to authenticated;
+
+-- Replace the earlier three-argument API; defaults retain compatibility with existing calls.
+drop function if exists public.list_drivers(integer,text,text);
+drop function if exists private.list_drivers(integer,text,text);
+create or replace function private.list_drivers(page_no integer, search_text text, status_filter text, sort_by text default 'created_at', sort_order text default 'desc') returns jsonb
+language plpgsql security definer set search_path = '' as $$
+declare result jsonb;
+begin
+  if not private.is_coordinator() then raise exception 'Coordinator access required.' using errcode='42501'; end if;
+  if page_no is null or page_no not between 1 and 1000000 or search_text is null or length(search_text)>100
+    or status_filter is null or status_filter not in ('all','not-submitted','pending','approved','rejected')
+    or sort_by is null or sort_by not in ('created_at','id','full_name','phone','plate_number','status')
+    or sort_order is null or sort_order not in ('asc','desc') then
+    raise exception 'Invalid driver filters.' using errcode='22023'; end if;
+  with matching as (
+    select a.id,a.email,a.display_name,a.status as account_status,a.status_version,a.created_at,
+      case when d.account_id is not null then to_jsonb(d) else null end as profile,
+      case when v.driver_id is not null then to_jsonb(v) else null end as vehicle,
+      case sort_by when 'id' then a.id::text when 'full_name' then lower(coalesce(d.full_name,a.display_name))
+        when 'phone' then coalesce(d.phone,'') when 'plate_number' then coalesce(v.plate_number,'')
+        when 'status' then coalesce(v.status,'not-submitted') else '' end as sort_value
+    from public.accounts a left join public.drivers d on d.account_id=a.id left join public.driver_vehicles v on v.driver_id=a.id
+    where a.role='driver' and (status_filter='all' or coalesce(v.status,'not-submitted')=status_filter)
+      and (search_text='' or strpos(lower(concat_ws(' ',d.full_name,d.phone,a.display_name,a.email,a.id::text,v.plate_number)),lower(btrim(search_text)))>0)
+  ), ordered as (
+    select matching.*,row_number() over (order by
+      case when sort_by='created_at' and sort_order='asc' then created_at end asc,
+      case when sort_by='created_at' and sort_order='desc' then created_at end desc,
+      case when sort_order='asc' then sort_value end asc,
+      case when sort_order='desc' then sort_value end desc,id) as list_position from matching
+  ), selected as (select * from ordered order by list_position limit 10 offset (page_no-1)*10)
+  select jsonb_build_object('drivers',coalesce((select jsonb_agg(to_jsonb(s)-array['sort_value','list_position'] order by s.list_position) from selected s),'[]'::jsonb),
+    'total',(select count(*) from matching),'page',page_no,'pageSize',10) into result;
+  return result;
+end;
+$$;
+create or replace function public.list_drivers(page_no integer, search_text text, status_filter text, sort_by text default 'created_at', sort_order text default 'desc') returns jsonb
+language sql security invoker set search_path = '' as $$ select private.list_drivers(page_no,search_text,status_filter,sort_by,sort_order); $$;
+
+revoke all on function private.submit_driver_vehicle(jsonb,integer),public.submit_driver_vehicle(jsonb,integer),
+  private.review_driver_vehicle(uuid,integer,text,text),public.review_driver_vehicle(uuid,integer,text,text),
+  private.list_drivers(integer,text,text,text,text),public.list_drivers(integer,text,text,text,text) from public, anon;
+grant execute on function private.submit_driver_vehicle(jsonb,integer),public.submit_driver_vehicle(jsonb,integer),
+  private.review_driver_vehicle(uuid,integer,text,text),public.review_driver_vehicle(uuid,integer,text,text),
+  private.list_drivers(integer,text,text,text,text),public.list_drivers(integer,text,text,text,text) to authenticated;
+
+-- Weekly availability uses Singapore time: Monday=0, 48 half-hour slots per day.
+-- A slot key is weekday_index*48 + half_hour_index (0..335); no selected slots means unavailable.
+create table if not exists public.driver_availability (
+  driver_id uuid primary key references public.drivers(account_id) on delete restrict,
+  weekly_slots integer[] not null default '{}' check (cardinality(weekly_slots)<=336 and 0<=all(weekly_slots) and 335>=all(weekly_slots) and array_position(weekly_slots,null) is null),
+  version integer not null default 1 check (version>0),
+  updated_at timestamptz not null default now()
+);
+-- Date overrides are retired; existing weekly slots remain unchanged.
+drop function if exists public.save_my_availability(integer[],jsonb,integer);
+drop function if exists private.save_my_availability(integer[],jsonb,integer);
+alter table public.driver_availability drop column if exists exceptions;
+create or replace function private.approved_driver_id() returns uuid
+language sql stable security definer set search_path='' as $$
+  select a.id from public.accounts a join public.driver_vehicles v on v.driver_id=a.id
+    where a.auth_user_id=(select auth.uid()) and a.role='driver' and a.status='active' and v.status='approved';
+$$;
+revoke all on function private.approved_driver_id() from public,anon;
+grant execute on function private.approved_driver_id() to authenticated;
+alter table public.driver_availability enable row level security;
+revoke all on public.driver_availability from public,anon,authenticated;
+grant select on public.driver_availability to authenticated;
+drop policy if exists driver_availability_read on public.driver_availability;
+create policy driver_availability_read on public.driver_availability for select to authenticated
+  using (driver_id=(select private.approved_driver_id()));
+
+create or replace function private.get_my_availability() returns jsonb
+language plpgsql security definer set search_path='' as $$
+declare owner_id uuid;
+begin
+  owner_id:=private.driver_account_id();
+  if owner_id is null then raise exception 'Driver access required.' using errcode='42501'; end if;
+  if private.approved_driver_id() is null then return jsonb_build_object('eligible',false,'availability',null); end if;
+  return jsonb_build_object('eligible',true,'availability',(select to_jsonb(a) from public.driver_availability a where driver_id=owner_id));
+end;
+$$;
+create or replace function public.get_my_availability() returns jsonb
+language sql security invoker set search_path='' as $$ select private.get_my_availability(); $$;
+
+create or replace function private.save_my_availability(slots integer[], expected_version integer) returns jsonb
+language plpgsql security definer set search_path='' as $$
+declare owner_id uuid; saved public.driver_availability;
+begin
+  owner_id:=private.driver_account_id();
+  if owner_id is null then raise exception 'Approved Driver access required.' using errcode='42501'; end if;
+  -- Serialize against status changes, vehicle resubmission/review and other availability saves.
+  perform 1 from public.accounts where id=owner_id and role='driver' and status='active' for update;
+  if not found then raise exception 'Approved Driver access required.' using errcode='42501'; end if;
+  perform 1 from public.driver_vehicles where driver_id=owner_id and status='approved' for share;
+  if not found then raise exception 'Approved Driver access required.' using errcode='42501'; end if;
+  if slots is null or cardinality(slots)>336 or array_position(slots,null) is not null
+    or not (0<=all(slots) and 335>=all(slots)) or (select count(distinct x) from unnest(slots) x)<>cardinality(slots)
+    or expected_version is null or expected_version<0 then
+    raise exception 'Invalid availability.' using errcode='22023'; end if;
+  select * into saved from public.driver_availability where driver_id=owner_id for update;
+  if (found and saved.version<>expected_version) or (not found and expected_version<>0) then
+    raise exception 'Availability changed. Reload before saving.' using errcode='40001'; end if;
+  insert into public.driver_availability(driver_id,weekly_slots)
+    values(owner_id,array(select x from unnest(slots) x order by x))
+    on conflict(driver_id) do update set weekly_slots=excluded.weekly_slots,
+      version=public.driver_availability.version+1,updated_at=now() returning * into saved;
+  return to_jsonb(saved);
+end;
+$$;
+create or replace function public.save_my_availability(slots integer[], expected_version integer) returns jsonb
+language sql security invoker set search_path='' as $$ select private.save_my_availability(slots,expected_version); $$;
+revoke all on function private.get_my_availability(),public.get_my_availability(),private.save_my_availability(integer[],integer),public.save_my_availability(integer[],integer) from public,anon;
+grant execute on function private.get_my_availability(),public.get_my_availability(),private.save_my_availability(integer[],integer),public.save_my_availability(integer[],integer) to authenticated;
 
 -- Treatment requirements are separate from operational Trips and pickup times.
 create table if not exists public.dialysis_centres (

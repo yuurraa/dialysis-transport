@@ -13,7 +13,7 @@ for (const access of ['signed-out', 'unregistered', 'driver', 'caregiver', 'inac
     }));
     await page.goto(access === 'driver' || access === 'caregiver' ? '/dashboard/patients' : '/dashboard/account');
     if (access === 'driver' || access === 'caregiver') {
-      await expect(page).toHaveURL(/\/dashboard\/trips$/);
+      await expect(page).toHaveURL(access === 'driver' ? /\/dashboard\/vehicle$/ : /\/dashboard\/trips$/);
       await expect(page.getByRole('link', { name: 'Patients', exact: true })).toHaveCount(0);
       return;
     }
@@ -30,6 +30,7 @@ test('mobile navigation traps focus, supports dismissal and opens protected page
   await seedSession(page);
   await page.route('**/api/auth/me', route => route.fulfill({ json: { account: { ...activeAccount, role: 'coordinator' } } }));
   await page.goto('/dashboard');
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
   const width = 375;
 
   await page.setViewportSize({ width, height: 900 });
@@ -39,6 +40,14 @@ test('mobile navigation traps focus, supports dismissal and opens protected page
   await expect(page.locator('.dashboard-header .dashboard-brand')).toBeHidden();
   await toggle.click();
   await expect(drawer).toBeVisible();
+  await expect(drawer.locator('.dashboard-brand-symbol')).toHaveText('DT');
+  await expect(drawer.getByRole('button', { name: 'Close navigation' })).toHaveText('');
+  await drawer.evaluate(element => {
+    element.addEventListener('animationstart', event => {
+      if ((event as AnimationEvent).animationName === 'drawer-exit') element.setAttribute('data-exit-was-open', String((element as HTMLDialogElement).open));
+    });
+  });
+
   await expect(drawer.getByRole('button', { name: 'Close navigation' })).toBeFocused();
   expect(await page.evaluate(() => document.body.style.overflow)).toBe('hidden');
   await page.keyboard.press('Tab');
@@ -48,9 +57,12 @@ test('mobile navigation traps focus, supports dismissal and opens protected page
   await page.keyboard.press('Tab');
   await expect(drawer.getByRole('link', { name: 'Patients', exact: true })).toBeFocused();
   await page.keyboard.press('Tab');
+  await expect(drawer.getByRole('link', { name: 'Drivers', exact: true })).toBeFocused();
+  await page.keyboard.press('Tab');
   await expect(drawer.getByRole('button', { name: 'Close navigation' })).toBeFocused();
   await page.keyboard.press('Escape');
   await expect(drawer).toBeHidden();
+  await expect(drawer).toHaveAttribute('data-exit-was-open', 'true');
   await expect(toggle).toBeFocused();
   expect(await page.evaluate(() => document.body.style.overflow)).toBe('');
   await toggle.click();
@@ -64,6 +76,13 @@ test('mobile navigation traps focus, supports dismissal and opens protected page
   await expect(drawer).toBeHidden();
   await expect(toggle).toBeFocused();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await toggle.click();
+  await expect(drawer).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(drawer).toBeHidden();
+  await expect(toggle).toBeFocused();
+
 
 });
 
@@ -79,6 +98,7 @@ for (const [role, label] of [['coordinator', 'Transport Coordinator'], ['patient
     await openAccountDropdown(page);
     await expect(page.locator('.dashboard-profile-name').getByText(label, { exact: true })).toBeVisible();
     await page.getByRole('link', { name: 'My Account', exact: true }).click();
+    await expect(page.getByText('Account Management', { exact: true })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'My Account', exact: true })).toHaveCount(0);
     await expect(page.getByRole('heading', { name: 'Account Details', exact: true })).toBeVisible();
     await expect(page.locator('.profile-id')).toHaveText(`${label} ID: ${role === 'patient' ? session.user.id : activeAccount.id}`);

@@ -1156,3 +1156,18 @@
   border-radius: var(--ui-control-radius);
   background: var(--ui-raised);
 }
+
+/* Keep the mobile menu modal until its exit animation finishes. */
+.dashboard-drawer[open][data-closing=true] { animation: drawer-exit 180ms ease-in forwards; }
+.dashboard-drawer[open]::backdrop { animation: drawer-backdrop-enter 180ms ease-out; }
+.dashboard-drawer[open][data-closing=true]::backdrop { animation: drawer-backdrop-exit 180ms ease-in forwards; }
+.dashboard-drawer-brand { display: flex; align-items: center; gap: 10px; }
+.dashboard-drawer-brand .dashboard-brand-symbol { flex-shrink: 0; }
+.dashboard-drawer .dashboard-drawer-close { display: inline-flex; align-items: center; justify-content: center; width: 38px; height: 38px; min-height: 38px; padding: 0; }
+@keyframes drawer-exit { from { transform: translateX(0); } to { transform: translateX(-100%); } }
+@keyframes drawer-backdrop-enter { from { opacity: 0; } to { opacity: 1; } }
+@keyframes drawer-backdrop-exit { from { opacity: 1; } to { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .dashboard-drawer[open], .dashboard-drawer[open][data-closing=true],
+  .dashboard-drawer[open]::backdrop, .dashboard-drawer[open][data-closing=true]::backdrop { animation: none; }
+}

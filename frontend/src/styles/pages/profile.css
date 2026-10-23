@@ -72,7 +72,7 @@
   }
 }
 
-/* Profile editing stays in place; highlighted controls distinguish editable values. */
+/* Profile editing stays in place with neutral fields and focus-only outlines. */
 
 .patient-profile-form {
   display: flex;
@@ -85,23 +85,12 @@
   margin-bottom: 0;
 }
 
-/* Keep focus visible inside the profile scroll area without shifting the fields. */
-
-.patient-profile-form .patient-form-fields :is(input, select, textarea):focus-visible {
-  outline-offset: -3px;
-}
-
 .patient-profile-actions {
   flex-shrink: 0;
 }
 
 .patient-profile-actions .patient-actions > button {
   min-width: 140px;
-}
-
-.patient-editing .patient-form-fields :is(input, select, textarea):not(:disabled) {
-  background: color-mix(in srgb, var(--ui-accent) 10%, var(--ui-field));
-  border-color: var(--ui-accent);
 }
 
 .profile-save-error {
@@ -128,4 +117,8 @@
   .profile-save-error {
     flex-wrap: wrap;
   }
+}
+
+.vehicle-registration-dates {
+  margin-bottom: 20px;
 }

@@ -16,6 +16,7 @@ let conflict = false;
 let missing = false;
 let writes = 0;
 let saved: unknown;
+let driverVersion: number | undefined;
 let filters = '';
 let equalities: Array<[string, unknown]> = [];
 let orders: Array<[string, boolean]> = [];
@@ -23,8 +24,9 @@ let bounds: number[] = [];
 const record = { id, version: 1, full_name: 'Test Patient', birth_date: '1990-04-12', gender: 'female', phone: '81234567', pickup_address: 'Test address', mobility: 'wheelchair', assistance_required: true, status: 'active' };
 const gateway = { forUser: () => ({
   auth: { getUser: async (token: string) => token === 'invalid' ? { data: { user: null }, error: { status: 401 } } : { data: { user: { id, email_confirmed_at: '2026-01-01', identities: [{ provider: 'google' }] } }, error: null } },
-  rpc: async (name: string, args?: { details: unknown }) => {
-    if (name === 'save_my_patient' || name === 'save_patient' || name === 'save_my_driver') { writes++; saved = args?.details; return { data: { ...record, ...(saved as object), account_id: id }, error: conflict ? { code: '40001' } : missing ? { code: 'P0002' } : null }; }
+  rpc: async (name: string, args?: { details: unknown; expected_version?: number }) => {
+    if (name === 'update_my_driver') driverVersion = args?.expected_version;
+    if (name === 'update_my_driver' || name === 'save_my_patient' || name === 'save_patient' || name === 'save_my_driver') { writes++; saved = args?.details; return { data: { ...record, ...(saved as object), account_id: id }, error: conflict ? { code: '40001' } : missing ? { code: 'P0002' } : null }; }
     return { data: { id, role, status }, error: null };
   },
   from: () => {
@@ -175,6 +177,7 @@ test('driver personal profiles require their active driver account and reject pr
     role = other;
     assert.equal((await driverRequest()).status, 403);
     assert.equal((await driverRequest('PATCH', personal)).status, 403);
+    assert.equal((await driverRequest('PATCH', {...personal,version:1})).status,403);
   }
   role = 'driver'; status = 'inactive';
   assert.equal((await driverRequest()).status, 403);
@@ -186,5 +189,11 @@ test('driver personal profiles require their active driver account and reject pr
   }
   assert.equal((await driverRequest('PATCH', personal)).status, 200);
   assert.deepEqual(saved, personal);
+  for (const version of [null,0,-1,'1',1.5]) assert.equal((await driverRequest('PATCH',{...personal,version})).status,400);
+  assert.equal((await driverRequest('PATCH',{...personal,version:1,status:'active'})).status,400);
+  assert.equal((await driverRequest('PATCH',{...personal,version:1})).status,200);
+  assert.equal(driverVersion,1);assert.deepEqual(saved,personal);
+  conflict=true;assert.equal((await driverRequest('PATCH',{...personal,version:1})).status,409);conflict=false;
+
   role = 'coordinator';
 });

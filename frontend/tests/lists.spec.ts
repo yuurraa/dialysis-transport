@@ -1,4 +1,4 @@
-import { test, expect, seedSession, activeAccount, fixtureTrip, mockServices } from './support/fixtures';
+import { test, expect, seedSession, activeAccount, fixtureTrip, expectPopup, mockServices } from './support/fixtures';
 
 test.beforeEach(mockServices);
 
@@ -19,6 +19,7 @@ for (const kind of ['patients', 'schedules', 'trips']) test(`list toolbar ${kind
   await page.goto(`/dashboard/${kind}`);
   await page.getByRole('button', { name: 'Sort', exact: true }).click();
   const sort = page.getByRole('dialog', { name: 'Sort records' });
+  await expectPopup(sort);
   await sort.getByRole('radio', { name: kind === 'patients' ? 'Name' : kind === 'schedules' ? 'Start date' : 'Treatment date', exact: true }).check();
   await sort.getByRole('radio', { name: 'Descending', exact: true }).check();
   if (kind === 'patients') {
@@ -34,6 +35,7 @@ for (const kind of ['patients', 'schedules', 'trips']) test(`list toolbar ${kind
   await expect.poll(() => requests.at(-1)?.get('page')).toBe('1');
   await page.getByRole('button', { name: 'Filters', exact: true }).click();
   const filters = page.getByRole('dialog');
+  await expectPopup(filters);
   if (kind === 'patients') await filters.getByRole('checkbox', { name: 'Active', exact: true }).uncheck();
   if (kind === 'schedules') {
     await filters.getByRole('checkbox', { name: 'Single Session', exact: true }).uncheck();

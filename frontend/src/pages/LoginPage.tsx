@@ -1,3 +1,4 @@
+import { Toast } from '../components/Toast';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { User } from '@supabase/supabase-js';
 import AccountPanel, { type Account } from './AccountPanel';
@@ -20,12 +21,10 @@ export default function LoginPage() {
   const [backendReady, setBackendReady] = useState(false);
   const [accountLoading, setAccountLoading] = useState(true);
   const [toast, setToast] = useState<{ message: string; id: number; kind: 'notice' | 'loading' } | null>(null);
-  const [toastPaused, setToastPaused] = useState(false);
   const [toastClosing, setToastClosing] = useState(false);
 
   const notify = useCallback((text: string, kind: 'notice' | 'loading' = 'notice') => {
     setMessage('');
-    setToastPaused(false);
     setToastClosing(false);
     setToast(previous => ({ message: text, id: (previous?.id ?? 0) + 1, kind }));
   }, []);
@@ -53,8 +52,9 @@ export default function LoginPage() {
   useEffect(() => {
     if (checking) return;
     if (dashboardAccess && account?.role === 'patient' && path === '/dashboard/profile') { navigate('/dashboard/account', true); return; }
-    const allowed = ['/dashboard/trips', '/dashboard/account', ...(['patient', 'coordinator'].includes(account?.role ?? '') ? ['/dashboard/schedules'] : []), ...(account?.role === 'coordinator' ? ['/dashboard/patients'] : [])];
-    if (dashboardAccess && !allowed.includes(path)) navigate('/dashboard/trips', true);
+    const home = account?.role === 'driver' ? '/dashboard' : '/dashboard/trips';
+    const allowed = [home, '/dashboard/account', ...(account?.role === 'driver' ? ['/dashboard/availability', '/dashboard/vehicle'] : []), ...(['patient', 'coordinator'].includes(account?.role ?? '') ? ['/dashboard/schedules'] : []), ...(account?.role === 'coordinator' ? ['/dashboard/patients', '/dashboard/drivers'] : [])];
+    if (dashboardAccess && !allowed.includes(path)) navigate(home, true);
     else if (path.startsWith('/dashboard') && (!user || (resolvedAccount?.userId === user.id && !dashboardAccess))) navigate('/', true);
   }, [checking, dashboardAccess, account?.role, path, user?.id, resolvedAccount, navigate]);
 
@@ -258,17 +258,7 @@ export default function LoginPage() {
       </section>
       </PageLayout>}
       <div className="toast-region" role="status" aria-live="polite" aria-atomic="true">
-        {toast && <div key={toast.id} className="auth-toast" data-closing={toastClosing} data-paused={toastPaused}
-          onAnimationEnd={event => {
-            if (event.target === event.currentTarget && event.animationName === 'toast-exit') setToast(null);
-          }} onMouseEnter={() => setToastPaused(true)} onMouseLeave={event => setToastPaused(event.currentTarget.contains(document.activeElement))}
-          onFocus={() => setToastPaused(true)} onBlur={event => {
-            if (!event.currentTarget.contains(event.relatedTarget)) setToastPaused(event.currentTarget.matches(':hover'));
-          }}>
-          <p>{toast.message}</p>
-          <button type="button" aria-label="Dismiss notification" onClick={() => setToastClosing(true)}>×</button>
-          <span className="toast-progress" aria-hidden="true" onAnimationEnd={() => setToastClosing(true)} />
-        </div>}
+        {toast && <Toast key={toast.id} message={toast.message} closing={toastClosing} onDismiss={() => setToast(null)} />}
     </div>
     </>
   );

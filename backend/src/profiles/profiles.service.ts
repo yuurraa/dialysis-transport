@@ -20,14 +20,20 @@ export class ProfilesService {
 
   async ownDriver(header?: string) {
     const { client, account } = await this.requireRole(header, 'driver');
-    const result = await client.from('drivers').select('account_id,full_name,phone,birth_date,gender').eq('account_id', account.id).maybeSingle();
+    const result = await client.from('drivers').select('account_id,full_name,phone,birth_date,gender,version').eq('account_id', account.id).maybeSingle();
     this.checkError(result.error);
     return { driver: result.data };
   }
 
   async completeOwnDriver(header: string | undefined, body: unknown) {
     const { client } = await this.requireRole(header, 'driver');
-    const result = await client.rpc('save_my_driver', { details: driverInput(body) });
+    if (!body || typeof body !== 'object' || Array.isArray(body)) throw new BadRequestException('Invalid driver details.');
+    const { version, ...input } = body as Record<string, unknown>;
+    if ('version' in body && (!Number.isSafeInteger(version) || (version as number)<1 || (version as number)>2147483646)) throw new BadRequestException('A valid driver profile version is required.');
+    const details = driverInput(input);
+    const result = 'version' in body
+      ? await client.rpc('update_my_driver', { details, expected_version: version })
+      : await client.rpc('save_my_driver', { details });
     this.checkError(result.error);
     return result.data;
   }

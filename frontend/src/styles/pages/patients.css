@@ -213,3 +213,17 @@
     padding-block: 4px;
   }
 }
+
+/* Driver rows keep vehicle details immediately left of the shared Info control. */
+.driver-record-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+@media (max-width: 760px) {
+  .drivers-panel .patients-table tr {
+    grid-template-columns: 2ch minmax(0, 1fr) 92px;
+  }
+}

@@ -1,0 +1,84 @@
+/* The availability editor shares the dashboard's neutral fields and focus colours. */
+.availability-content { padding-bottom: 24px; }
+.availability-hours { color: var(--ui-muted); font-size: .875rem; line-height: 1.6; }
+.availability-hours { font-variant-numeric: tabular-nums; }
+.availability-grid { position: relative; display: grid; grid-template-columns: 64px repeat(7, minmax(0, 1fr)); gap: 4px; user-select: none; }
+.availability-day, .availability-time-column { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.availability-day-heading { height: 32px; display: flex; justify-content: center; align-items: center; color: var(--ui-muted); font-size: .8rem; font-weight: 600; }
+.availability-time { height: 24px; display: flex; align-items: center; color: var(--ui-muted); font-size: .8rem; font-variant-numeric: tabular-nums; }
+.dashboard-page .availability-slot { height: 24px; min-height: 24px; padding: 0; border: 1px solid var(--ui-border); background: var(--ui-surface); color: var(--ui-text); cursor: pointer; }
+.dashboard-page .patient-editing .availability-slot { background: color-mix(in srgb, var(--ui-field) 92%, black); }
+.dashboard-page .availability-slot[aria-pressed=true],
+.dashboard-page .availability-slot[aria-pressed=true]:hover:not(:disabled) { background: var(--ui-success-surface); border-color: var(--ui-success); color: var(--ui-success); }
+.dashboard-page .availability-slot:disabled { opacity: 1; cursor: default; }
+.dashboard-page .availability-slot:focus-visible { outline: 2px solid var(--ui-focus); outline-offset: 1px; }
+.dashboard-page .availability-slot:hover:not(:disabled) { background: var(--ui-hover); }
+.availability-mobile-days { display: none; }
+.availability-panel > .page-heading { margin-bottom: 12px; }
+.availability-edit-actions { margin-left: auto; }
+@media (max-width: 760px) {
+  .availability-grid { display: none; }
+  .availability-mobile-days { display: block; padding-top: 6px; }
+}
+
+@media (min-width: 761px) {
+  .availability-day-heading { position: sticky; top: 0; z-index: 3; background: var(--ui-surface); }
+}
+
+/* A bounded approval state gives the driver a clear route back to vehicle details. */
+.availability-approval {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  min-height: 320px;
+  margin-top: 12px;
+  padding: 40px 24px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius);
+  background: var(--ui-surface);
+  text-align: center;
+}
+.availability-approval-icon {
+  display: grid;
+  place-items: center;
+  width: 64px;
+  height: 64px;
+  border: 1px solid var(--ui-border);
+  border-radius: 50%;
+  background: var(--ui-raised);
+  color: var(--ui-muted);
+}
+.availability-approval h2 { margin: 0; font-size: 1.25rem; font-weight: 600; }
+.availability-approval p { max-width: 42ch; margin: 0; color: var(--ui-muted); line-height: 1.6; }
+.availability-approval-actions { justify-content: center; margin-top: 8px; }
+@media (max-width: 760px) {
+  .availability-approval { min-height: 0; padding: 32px 20px; }
+  .availability-approval-actions { width: 100%; }
+  .availability-approval-actions button { width: 100%; }
+}
+
+/* The live marker is visual only and never intercepts slot selection. */
+.availability-today .availability-day-heading { background: color-mix(in srgb, var(--ui-accent) 18%, var(--ui-surface)); color: var(--ui-text); font-weight: 700; gap: 6px; }
+.availability-now-marker { position: absolute; left: 0; right: 0; height: 0; z-index: 2; pointer-events: none; }
+.availability-now-marker::after { content: ''; position: absolute; left: 68px; right: 0; top: -1.5px; border-top: 3px solid var(--ui-accent); }
+.availability-now-time { position: absolute; left: 0; transform: translateY(-50%); padding: 2px 5px; border-radius: 4px; background: var(--ui-accent); color: var(--ui-accent-text); font-size: .75rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+
+.availability-mobile-day { display: grid; grid-template-columns: 104px minmax(0, 1fr); align-items: center; gap: 8px; min-height: 48px; }
+.availability-mobile-day h2 { margin: 0; font-size: .875rem; font-weight: 600; padding: 6px 10px; border-radius: 5px; }
+.availability-mobile-day h2[aria-current=date] { background: color-mix(in srgb, var(--ui-accent) 18%, var(--ui-surface)); }
+.availability-mobile-ranges { display: flex; gap: 8px; min-width: 0; margin: 0; padding: 4px 0; list-style: none; overflow-x: auto; scrollbar-width: thin; }
+.availability-mobile-ranges li { flex-shrink: 0; white-space: nowrap; padding: 7px 10px; border: 1px solid var(--ui-success); border-radius: 5px; background: var(--ui-success-surface); color: var(--ui-success); font-size: .875rem; font-variant-numeric: tabular-nums; }
+.availability-unavailable { margin: 0; color: var(--ui-muted); font-size: .875rem; }
+.availability-range-editor { display: grid; gap: 20px; }
+.availability-range-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; border: 0; border-bottom: 1px solid var(--ui-border); border-radius: 0; padding: 0 0 16px; }
+.availability-range-heading { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--ui-muted); font-size: .875rem; }
+.dashboard-dialog .availability-remove-range { width: 44px; height: 44px; padding: 0; flex-shrink: 0; }
+
+.availability-mobile-actions { display: none; }
+@media (max-width: 760px) {
+  .availability-panel > .page-heading { display: block; margin-bottom: 8px; padding-bottom: 12px; border-bottom: 1px solid var(--ui-border); }
+  .availability-panel > .page-heading .dashboard-eyebrow { margin-top: 4px; }
+  .availability-mobile-actions { display: flex; justify-content: flex-end; flex-shrink: 0; padding-top: 12px; }
+}

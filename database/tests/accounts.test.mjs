@@ -966,10 +966,152 @@ test('driver personal signup is atomic, owns its profile and preserves the exist
     assert.deepEqual(await act(patient,'select * from public.drivers'),[]);
     await assert.rejects(act(driver,"update public.drivers set full_name='Other'"),/permission denied/);
     await assert.rejects(act(driver,'select public.save_my_driver($1::jsonb)',[JSON.stringify(personal)]),/already exists/);
+    const update=(who,details,version)=>act(who,'select public.update_my_driver($1::jsonb,$2) as driver',[JSON.stringify(details),version]);
+    const [{driver:edited}]=await update(driver,{...personal,full_name:'Updated Driver'},1);
+    assert.equal(edited.full_name,'Updated Driver');assert.equal(edited.version,2);
+    await assert.rejects(update(driver,personal,1),/changed/);
+    await assert.rejects(update(patient,personal,2),/Driver access/);
+    await assert.rejects(update(driver,{...personal,status:'active'},2),/Invalid/);
+    await assert.rejects(update(driver,{...personal,birth_date:'2999-01-01'},2),/Invalid/);
+    assert.equal((await act(driver,'select * from public.drivers'))[0].version,2);
+
     await local.exec(schema);
     assert.equal((await act(driver,'select public.current_account() as account'))[0].account.profile_complete,true);
     await local.query("update public.accounts set status='inactive' where id=$1",[account.id]);
     assert.deepEqual(await act(driver,'select * from public.drivers'),[]);
     await assert.rejects(act(driver,'select public.save_my_driver($1::jsonb)',[JSON.stringify(personal)]),/Driver access/);
   } finally { await local.close(); }
+});
+
+test('vehicle submissions and reviews enforce ownership, pending-only decisions, resubmission and concurrency versions', async () => {
+  const local = await databaseWithAuth();
+  try {
+    await local.exec(schema);
+    async function act(who, sql, params = []) {
+      await local.exec('begin; set local role authenticated;');
+      try {
+        await local.query("select set_config('request.jwt.claim.sub',$1,true)",[who]);
+        const result = await local.query(sql,params);
+        await local.exec('commit'); return result.rows;
+      } catch (error) { await local.exec('rollback'); throw error; }
+    }
+    const personal = { full_name:'Fixture Driver', phone:'81234567', birth_date:'1990-04-12', gender:'male' };
+    const [{account}] = await act(driver,"select public.register_driver_account('Driver',$1::jsonb) as account",[JSON.stringify(personal)]);
+    await local.query("insert into public.accounts(auth_user_id,email,display_name,role) values ($1,'coordinator@example.test','Coordinator','coordinator'),($2,'patient@example.test','Patient','patient')",[coordinator,patient]);
+    const list = (who=coordinator,filter='all',search='') => act(who,'select public.list_drivers(1,$1,$2) as result',[search,filter]);
+    assert.equal((await list())[0].result.drivers[0].vehicle,null);
+    assert.equal((await list(coordinator,'not-submitted'))[0].result.total,1);
+    const details = { licence_number:'MOCK123', plate_number:'test123', make:'Fixture', model:'Car', passenger_capacity:3, wheelchair_accessible:false };
+    const submit = (who,version,body=details) => act(who,'select public.submit_driver_vehicle($1::jsonb,$2) as vehicle',[JSON.stringify(body),version]);
+    const review = (who,version,decision,reason='') => act(who,'select public.review_driver_vehicle($1,$2,$3,$4) as vehicle',[account.id,version,decision,reason]);
+    await assert.rejects(submit(patient,null),/Driver access/);
+    await assert.rejects(list(driver),/Coordinator/);
+    await assert.rejects(submit(driver,null,{...details,status:'approved'}),/Invalid/);
+    await assert.rejects(submit(driver,null,{...details,passenger_capacity:0}),/Invalid/);
+    let [{vehicle}] = await submit(driver,null);
+    assert.equal(vehicle.status,'pending'); assert.equal(vehicle.plate_number,'TEST123');
+    const previousVersion=vehicle.version;
+    [{vehicle}]=await submit(driver,vehicle.version,{...details,model:'Updated while pending'});
+    assert.equal(vehicle.status,'pending');assert.equal(vehicle.version,previousVersion+1);
+    await assert.rejects(review(coordinator,previousVersion,'approved'),/changed/i);
+    await assert.rejects(review(driver,vehicle.version,'approved'),/Coordinator/);
+    await assert.rejects(review(coordinator,vehicle.version,'rejected'),/reason/i);
+    await assert.rejects(review(coordinator,vehicle.version+1,'approved'),/changed/i);
+    [{vehicle}] = await review(coordinator,vehicle.version,'rejected','Correct the plate');
+    assert.equal(vehicle.review_reason,'Correct the plate');
+    await assert.rejects(submit(driver,1),/changed/i);
+    [{vehicle}] = await submit(driver,vehicle.version);
+    assert.equal(vehicle.status,'pending'); assert.equal(vehicle.reviewed_by,null);
+    [{vehicle}] = await review(coordinator,vehicle.version,'approved');
+    assert.equal(vehicle.status,'approved');
+    await assert.rejects(review(coordinator,vehicle.version,'rejected','Again'),/pending/i);
+    const approvedVersion=vehicle.version;
+    [{vehicle}] = await submit(driver,vehicle.version,{...details,model:'Replacement'});
+    assert.equal(vehicle.status,'pending'); assert.equal(vehicle.review_reason,'');
+    assert.equal(vehicle.version,approvedVersion+1);
+    assert.deepEqual(await act(patient,'select * from public.driver_vehicles'),[]);
+    await assert.rejects(act(driver,"update public.driver_vehicles set status='approved'"),/permission/);
+    assert.equal((await list(coordinator,'pending','TEST123'))[0].result.total,1);
+    assert.equal((await list(coordinator,'all','%'))[0].result.total,0);
+    await local.exec(schema);
+    assert.equal((await list())[0].result.drivers[0].vehicle.version,vehicle.version);
+    assert.equal((await local.query('select count(*)::integer as total from private.driver_registration_events')).rows[0].total,6);
+    assert.equal((await list(coordinator,'pending','81234567'))[0].result.total,1);
+    await local.query("insert into public.accounts(email,display_name,role) select 'sort-driver-'||i||'@example.test','Sort Driver '||lpad(i::text,2,'0'),'driver' from generate_series(1,12) i");
+    const sorted = (page,field,order) => act(coordinator,'select public.list_drivers($1,$2,$3,$4,$5) as result',[page,'','all',field,order]);
+    const ascending=(await sorted(1,'full_name','asc'))[0].result;
+    const secondPage=(await sorted(2,'full_name','asc'))[0].result;
+    const descending=(await sorted(1,'full_name','desc'))[0].result;
+    assert.equal(ascending.total,13);
+    assert.equal(ascending.drivers[0].profile.full_name,'Fixture Driver');
+    assert.deepEqual(secondPage.drivers.map(row=>row.display_name),['Sort Driver 10','Sort Driver 11','Sort Driver 12']);
+    assert.equal(descending.drivers[0].display_name,'Sort Driver 12');
+    assert.equal(ascending.drivers[0].list_position,undefined);
+    await assert.rejects(sorted(1,'licence_number','asc'),/Invalid/);
+    await assert.rejects(sorted(1,'full_name','sideways'),/Invalid/);
+    await local.query("update public.accounts set status='inactive' where id=$1",[account.id]);
+    await assert.rejects(submit(driver,vehicle.version),/Driver access/);
+    await assert.rejects(review(coordinator,vehicle.version,'approved'),/Active driver/);
+    const [{version:statusVersion}]= (await local.query('select status_version as version from public.accounts where id=$1',[account.id])).rows;
+    const saveStatus=(who,version,value)=>act(who,'select public.save_driver_status($1,$2,$3) as driver',[account.id,version,value]);
+    for(const other of [driver,patient]) await assert.rejects(saveStatus(other,statusVersion,'active'),/Coordinator/);
+    await assert.rejects(saveStatus(coordinator,statusVersion,'approved'),/Invalid/);
+    const [{driver:reactivated}]=await saveStatus(coordinator,statusVersion,'active');
+    assert.equal(reactivated.account_status,'active');
+    assert.equal(reactivated.status_version,statusVersion+1);
+    await assert.rejects(saveStatus(coordinator,statusVersion,'inactive'),/changed/);
+    const [{driver:deactivated}]=await saveStatus(coordinator,reactivated.status_version,'inactive');
+    assert.equal(deactivated.account_status,'inactive');
+    assert.deepEqual(await act(driver,'select * from public.driver_vehicles'),[]);
+    const missingProfile=(await local.query("select id from public.accounts where email='sort-driver-1@example.test'")).rows[0].id;
+    assert.equal((await act(coordinator,'select public.save_driver_status($1,1,$2) as driver',[missingProfile,'inactive']))[0].driver.account_status,'inactive');
+
+  } finally { await local.close(); }
+});
+
+test('driver availability is approved-owner-only, versioned and validates weekly slots without date overrides', async () => {
+  const local=await databaseWithAuth();
+  try {
+    await local.exec(schema);
+    async function act(who,sql,params=[]) {
+      await local.exec('begin; set local role authenticated');
+      try {await local.query("select set_config('request.jwt.claim.sub',$1,true)",[who]);const result=await local.query(sql,params);await local.exec('commit');return result.rows;}
+      catch(error){await local.exec('rollback');throw error;}
+    }
+    const personal={full_name:'Availability Driver',phone:'81234567',birth_date:'1990-01-01',gender:'male'};
+    const [{account}]=await act(driver,"select public.register_driver_account('Driver',$1::jsonb) as account",[JSON.stringify(personal)]);
+    await local.query("insert into public.accounts(auth_user_id,email,display_name,role) values ($1,'coordinator@example.test','Coordinator','coordinator')",[coordinator]);
+    const get=()=>act(driver,'select public.get_my_availability() as result');
+    const save=(who,version,slots=[])=>act(who,'select public.save_my_availability($1,$2) as availability',[slots,version]);
+    assert.equal((await get())[0].result.eligible,false);
+    await assert.rejects(save(driver,0),/approved/i);
+    const [{vehicle}]=await act(driver,'select public.submit_driver_vehicle($1::jsonb,null) as vehicle',[JSON.stringify({licence_number:'MOCK',plate_number:'AVAIL123',make:'Fixture',model:'Car',passenger_capacity:3,wheelchair_accessible:false})]);
+    await act(coordinator,"select public.review_driver_vehicle($1,$2,'approved','')",[account.id,vehicle.version]);
+    assert.deepEqual((await get())[0].result,{eligible:true,availability:null});
+    await act(driver,'select public.update_my_driver($1::jsonb,1)',[JSON.stringify({...personal,full_name:'Updated Availability Driver'})]);
+    assert.equal((await local.query('select status from public.driver_vehicles where driver_id=$1',[account.id])).rows[0].status,'approved');
+
+    const [{availability}]=await save(driver,0,[10,11,60,335]);
+    assert.deepEqual(availability.weekly_slots,[10,11,60,335]);assert.equal(availability.version,1);
+    await assert.rejects(save(driver,0),/changed/i);
+    for(const who of [patient,coordinator]) await assert.rejects(save(who,0),/Driver|approved/i);
+    for(const slots of [[-1],[336],[10,10],[1,null]]) await assert.rejects(save(driver,1,slots),/Invalid/i);
+    const [{availability:cleared}]=await save(driver,1,[]);assert.equal(cleared.version,2);assert.deepEqual(cleared.weekly_slots,[]);
+    assert.deepEqual(await act(patient,'select * from public.driver_availability'),[]);
+    await assert.rejects(act(driver,'update public.driver_availability set weekly_slots=array[1]'),/permission/i);
+    await local.exec("alter table public.driver_availability add column exceptions jsonb not null default '[]';");
+    await local.query('update public.driver_availability set weekly_slots=array[10],exceptions=$1::jsonb',[JSON.stringify([{date:'2027-01-02',start_slot:10,end_slot:14,available:false}])]);
+    await local.exec(schema);assert.equal((await get())[0].result.availability.version,2);
+    assert.equal('exceptions' in (await get())[0].result.availability,false);
+    assert.deepEqual((await get())[0].result.availability.weekly_slots,[10]);
+    assert.equal((await local.query("select to_regprocedure('public.save_my_availability(integer[],jsonb,integer)') as legacy")).rows[0].legacy,null);
+    await act(driver,'select public.submit_driver_vehicle($1::jsonb,$2)',[JSON.stringify({licence_number:'MOCK',plate_number:'AVAIL123',make:'Fixture',model:'Updated',passenger_capacity:3,wheelchair_accessible:false}),vehicle.version+1]);
+    assert.equal((await get())[0].result.eligible,false);await assert.rejects(save(driver,2),/approved/i);
+    const originalApproval=(await local.query('select registered_at from public.driver_vehicles where driver_id=$1',[account.id])).rows[0].registered_at;
+    assert.ok(originalApproval, 'Resubmitting retains the previous approval date');
+    await local.query('update public.driver_vehicles set registered_at=null where driver_id=$1',[account.id]);
+    await local.exec(schema);
+    assert.equal(String((await local.query('select registered_at from public.driver_vehicles where driver_id=$1',[account.id])).rows[0].registered_at),String(originalApproval));
+
+  } finally {await local.close();}
 });

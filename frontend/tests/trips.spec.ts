@@ -1,4 +1,4 @@
-import { test, expect, session, seedSession, activeAccount, fixtureTrip, mockServices } from './support/fixtures';
+import { test, expect, session, seedSession, activeAccount, fixtureTrip, expectPopup, mockServices } from './support/fixtures';
 
 test.beforeEach(mockServices);
 
@@ -15,7 +15,8 @@ for (const role of ['patient', 'coordinator']) test(`${role} trip list shows pic
   await expect(list.locator('article').first().locator('.trip-status-badge')).toHaveText('Unfilled');
   await expect(list.locator('article').first()).not.toContainText('Arrival by');
   await expect(list.locator('article').nth(1)).not.toContainText('Earliest return pickup');
-  await expect(list.locator('article').nth(1)).not.toContainText('13:15');
+  await expect(list.locator('article').nth(1).locator('.trip-mobile-timing')).toHaveText('Earliest pickup 13:15');
+  await expect(list.locator('article').nth(1)).not.toContainText('Pickup at 13:15');
   await expect(page.getByText('Needs review', { exact: true })).toHaveCount(0);
   await expect(list.locator('article').nth(1)).not.toContainText('Arrival by');
   await expect(page.getByRole('button', { name: 'Next', exact: true })).toBeEnabled();
@@ -24,6 +25,7 @@ for (const role of ['patient', 'coordinator']) test(`${role} trip list shows pic
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await list.locator('article').nth(1).getByRole('button', { name: 'View trip details', exact: true }).click();
   const returnDetails = page.getByRole('dialog', { name: 'Trip details', exact: true });
+  await expectPopup(returnDetails);
   await expect(returnDetails).not.toContainText('timings need review');
   await expect(returnDetails).toContainText('Earliest return pickup');
   await expect(returnDetails).toContainText('13:15');
@@ -55,6 +57,7 @@ test('coordinator generates unfilled trips and preserves dates after a stale sch
   await page.goto('/dashboard/schedules');
   await page.getByRole('button', { name: 'Generate Trips', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: 'Generate Trips', exact: true });
+  await expectPopup(dialog);
   await expect(dialog).toContainText('Test Patient');
   expect(await dialog.evaluate(element => element.getBoundingClientRect().bottom <= innerHeight)).toBe(true);
   await dialog.getByLabel('From date', { exact: true }).fill('2026-10-21');

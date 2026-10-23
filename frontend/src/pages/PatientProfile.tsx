@@ -74,7 +74,7 @@ export default function PatientProfile({ notify, onSessionExpired, onProfileReso
   }
   const form = !loading && !error && draft && profile;
   return <section className="dashboard-trips patients-panel page-panel" aria-labelledby="patient-profile-title">
-    <PageHeading id="patient-profile-title" title="Account Details" description={profile ? <span className="profile-id">Patient ID: {profile.id}</span> : undefined} />
+    <PageHeading id="patient-profile-title" title="Account Details" eyebrow="Account Management" description={profile ? <span className="profile-id">Patient ID: {profile.id}</span> : undefined} />
     {loading ? <div className="account-loading patients-loading" role="status" aria-label="Loading profile"><span className="account-spinner" aria-hidden="true" /><span>Loading...</span></div>
       : error ? <div className="dashboard-data-status patients-status"><div><h3 role="alert">{error}</h3></div><button type="button" onClick={() => setAttempt(value => value + 1)}>Try again</button></div>
       : form ? <form ref={profileForm} className={`patient-profile-form${editing ? ' patient-editing' : ''}`} aria-label="Patient profile" aria-busy={saving} onSubmit={save}
