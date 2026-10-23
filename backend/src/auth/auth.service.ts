@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, Logger, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 import { SupabaseService } from '../supabase.module';
+import { driverInput } from '../profiles/personal-input';
 import { patientInput } from '../profiles/patient-input';
 import type { UserRole } from '../types';
 
@@ -51,8 +52,12 @@ export class AuthService {
     if (input.role === 'patient') {
       profile = patientInput(input.profile, false);
       if (!('postal_code' in profile)) throw new BadRequestException('Complete the patient address.');
-    } else if ('profile' in input) throw new BadRequestException('Patient details require the patient role.');
-    const result = input.role === 'patient'
+    } else if (input.role === 'driver') {
+      profile = driverInput(input.profile);
+    } else if ('profile' in input) throw new BadRequestException('Personal details require the patient or driver role.');
+    const result = input.role === 'driver'
+      ? await this.database.forUser(token).rpc('register_driver_account', { requested_name: input.displayName.trim(), details: profile })
+      : input.role === 'patient'
       ? await this.database.forUser(token).rpc('register_patient_account', { requested_name: input.displayName.trim(), details: profile })
       : await this.database.forUser(token).rpc('register_account', { requested_role: input.role, requested_name: input.displayName.trim() });
     this.checkDatabaseError(result.error);

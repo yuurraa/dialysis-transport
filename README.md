@@ -42,12 +42,12 @@ Sign-in uses Google through Supabase Auth; enable the Google provider and apply 
 
 ## Testing scope
 
-The Playwright suite contains 45 browser tests grouped by feature in `frontend/tests/`:
+The Playwright suite contains 46 browser tests grouped by feature in `frontend/tests/`:
 
 | Spec | Tests | Scope |
 | --- | ---: | --- |
 | `auth.spec.ts` | 8 | Google PKCE/callback, logout, rejected/expired sessions, inactive accounts and sign-out races |
-| `registration.spec.ts` | 4 | Patient signup, validation/Back, cancellation, retry and an already-registered Google identity |
+| `registration.spec.ts` | 5 | Patient/Driver personal signup, validation/Back, cancellation, retry and an already-registered Google identity |
 | `dashboard.spec.ts` | 8 | Protected routes, role navigation, mobile menu focus/dismissal and account details |
 | `patients.spec.ts` | 4 | Permitted coordinator edits, search/sorting/pagination, failures and version conflicts |
 | `account.spec.ts` | 3 | In-place patient editing, cancellation, save failures, inactive profiles and version conflicts |

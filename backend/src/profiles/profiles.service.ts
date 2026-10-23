@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, NotFoundException, NotImplementedException, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 import { AuthService } from '../auth/auth.service';
 import { SupabaseService } from '../supabase.module';
+import { driverInput } from './personal-input';
 import { patientInput } from './patient-input';
 import type { PatientScope } from '../types';
 
@@ -9,7 +10,7 @@ import type { PatientScope } from '../types';
 export class ProfilesService {
   constructor(@Inject(AuthService) private readonly auth: AuthService, @Inject(SupabaseService) private readonly database: SupabaseService) {}
 
-  private async requireRole(header: string | undefined, role: 'coordinator' | 'patient') {
+  private async requireRole(header: string | undefined, role: 'coordinator' | 'patient' | 'driver') {
     const token = header?.match(/^Bearer (\S+)$/i)?.[1];
     if (!token) throw new UnauthorizedException('Sign-in required.');
     const { account } = await this.auth.verifyIdentity(token);
@@ -17,16 +18,30 @@ export class ProfilesService {
     return { client: this.database.forUser(token), account };
   }
 
+  async ownDriver(header?: string) {
+    const { client, account } = await this.requireRole(header, 'driver');
+    const result = await client.from('drivers').select('account_id,full_name,phone,birth_date,gender').eq('account_id', account.id).maybeSingle();
+    this.checkError(result.error);
+    return { driver: result.data };
+  }
+
+  async completeOwnDriver(header: string | undefined, body: unknown) {
+    const { client } = await this.requireRole(header, 'driver');
+    const result = await client.rpc('save_my_driver', { details: driverInput(body) });
+    this.checkError(result.error);
+    return result.data;
+  }
+
   async ownPatient(header?: string) {
     const { client, account } = await this.requireRole(header, 'patient');
-    const result = await client.from('patients').select('id,full_name,phone,pickup_address,mobility,assistance_required,status,created_at,unit_no,postal_code,notes,version,account_id').eq('account_id', account.id).maybeSingle();
+    const result = await client.from('patients').select('id,birth_date,gender,full_name,phone,pickup_address,mobility,assistance_required,status,created_at,unit_no,postal_code,notes,version,account_id').eq('account_id', account.id).maybeSingle();
     this.checkError(result.error);
     return { patient: result.data };
   }
 
   async saveOwnPatient(header: string | undefined, body: unknown) {
     const { client } = await this.requireRole(header, 'patient');
-    if (!body || typeof body !== 'object' || Array.isArray(body)) throw new BadRequestException('Invalid patient details.');
+    if (!body || typeof body !== 'object' || Array.isArray(body)) throw new BadRequestException('Invalid profile details.');
     const { version, ...input } = body as Record<string, unknown>;
     if (!Number.isSafeInteger(version) || (version as number) < 1) throw new BadRequestException('Patient version is required.');
     const details = { ...patientInput(input, false), version };
@@ -44,7 +59,7 @@ export class ProfilesService {
       || !['asc', 'desc'].includes(direction) || (typeof status !== 'string' || (status !== 'all' && (status.split(',').length > 2 || status.split(',').some(value => !['active', 'inactive'].includes(value)))))
       || (typeof mobility !== 'string' || (mobility !== 'all' && (mobility.split(',').length > 3 || mobility.split(',').some(value => !['ambulant', 'walking-aid', 'wheelchair'].includes(value)))))) throw new BadRequestException('Invalid search or sort.');
     const pageSize = 10;
-    let query = client.from('patients').select('id,full_name,phone,pickup_address,mobility,assistance_required,status,created_at,unit_no,postal_code,notes,version', { count: 'exact' });
+    let query = client.from('patients').select('id,birth_date,gender,full_name,phone,pickup_address,mobility,assistance_required,status,created_at,unit_no,postal_code,notes,version', { count: 'exact' });
     const term = search.trim();
     if (term) {
       // Quote the entire PostgREST value and escape literal SQL LIKE characters.
@@ -73,17 +88,17 @@ export class ProfilesService {
     const data = { version: input.version, ...('status' in input ? { status: input.status } : {}), ...('notes' in input ? { notes: (input.notes as string).trim() } : {}) };
     const result = await client.rpc('save_patient', { target: id, details: data });
     this.checkError(result.error);
-    if (!result.data) throw new NotFoundException('Patient not found.');
+    if (!result.data) throw new NotFoundException('Profile not found.');
     return result.data;
   }
 
   private checkError(error: { code?: string } | null) {
     if (!error) return;
-    if (error.code === '40001') throw new ConflictException('This patient was changed by someone else. Reload before saving.');
-    if (error.code === 'P0002') throw new NotFoundException('Patient not found.');
-    if (error.code === '42501') throw new ForbiddenException('Patient access denied.');
-    if (error.code === '23514' || error.code === '22P02' || error.code === '22023' || error.code === '23502') throw new BadRequestException('Invalid patient details.');
-    throw new ServiceUnavailableException('Patient service is unavailable. Please try again.');
+    if (error.code === '40001') throw new ConflictException('This profile was changed by someone else. Reload before saving.');
+    if (error.code === 'P0002') throw new NotFoundException('Profile not found.');
+    if (error.code === '42501') throw new ForbiddenException('Profile access denied.');
+    if (error.code === '23514' || error.code === '22P02' || error.code === '22023' || error.code === '23502') throw new BadRequestException('Invalid profile details.');
+    throw new ServiceUnavailableException('Profile service is unavailable. Please try again.');
   }
 
   /** Require coordinator access and return only permitted fields. */

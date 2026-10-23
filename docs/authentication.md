@@ -5,8 +5,8 @@ Supabase manages Google identities and sessions. The application stores each acc
 ## Account flow
 
 1. **Continue with Google** verifies the user's identity.
-2. All active accounts open `/dashboard/trips` in the shared role-specific workspace. New users enter **Username → Role → Next** and continue signup inside the same landing-page card. Patients supply transport details before **Sign Up**; other roles review their account details before submitting.
-3. Only the final submission creates an active account. Patient signup creates the account and its owned transport profile in one transaction; invalid details create neither record.
+2. All active accounts open `/dashboard/trips` in the shared role-specific workspace. New users enter **Username → Role → Next** and continue signup inside the same landing-page card. Patients supply personal and transport details before **Sign Up**; Drivers supply personal details; Caregivers review their account details before submitting. Patient and Driver personal details include full name, contact number, date of birth and gender (including “Prefer not to say”).
+3. Only the final submission creates an active account. Patient and Driver signup each create the account and its owned profile in one transaction; invalid details create neither record. Date of birth must be a real date from 1 January 1900 through today in Singapore.
 
 Coordinator accounts are provisioned directly in Supabase. Public signup cannot assign coordinator access, change an existing role or reactivate an inactive account. Sign-out appears after an application account exists. During signup, Cancel clears the session on this device and returns to the Google sign-in card without creating an application account or showing a sign-out toast.
 
@@ -14,15 +14,17 @@ The signup Email field is disabled and follows the verified Google identity. Its
 
 A user can appear in Supabase **Authentication → Users** before submitting the signup form. Their `accounts` row is created when final signup succeeds; Next and Back do not write database records. The username uses the `display_name` column; identity and email establish account uniqueness.
 
-Account creation does not verify drivers for trip assignment or grant caregivers access to patients. Those require operational profiles and explicit caregiver–patient links. Transport features remain under development.
+Driver signup collects personal information only; it does not register a vehicle or verify drivers for trip assignment or grant caregivers access to patients. Those require operational profiles and explicit caregiver–patient links. Transport features remain under development.
 
 Session and account checks show a centred spinner with matching-size 'Loading...' text to its right. If the backend is unavailable, sign-in waits behind the spinner and its health check retries every 30 seconds or when the window regains focus. If the account service is unavailable, the spinner remains and the lookup retries automatically every five seconds after a failed response. Account requests time out after 15 seconds so a hung connection can enter the retry cycle. Temporary Supabase Auth failures return 503 and preserve the local session; rejected credentials still return 401. Account access stays blocked until verification succeeds. After ten seconds of continuous loading, a toast says “This is taking us longer than expected.”. While loading continues, the reminder repeats ten seconds after each toast finishes closing. Recovery dismisses the reminder and stops the cycle.
 
 ## Coordinator dashboard
 
-All active roles use `/dashboard/trips` for Trips and `/dashboard/account` for My Account. Coordinators additionally have `/dashboard/patients`. `/dashboard` and unknown dashboard paths redirect to Trips; there is no Overview page. Account and role verification still gate all content, and incomplete patients finish signup on the landing page. Only Transport Coordinators see the generic Account details section (username, email, role and status). Patients see their owned transport profile, locked until Edit profile; patients, drivers and caregivers do not see the generic Account details section.
+All active roles use `/dashboard/trips` for Trips and `/dashboard/account` for My Account. Coordinators additionally have `/dashboard/patients`. `/dashboard` and unknown dashboard paths redirect to Trips; there is no Overview page. Account and role verification still gate all content, and incomplete Patients or Drivers finish personal signup on the landing page. Only Transport Coordinators see the generic Account details section (username, email, role and status). Patients see their owned transport profile, locked until Edit profile; Drivers see their saved personal details as read-only; patients, drivers and caregivers do not see the generic Account details section.
 
 The shared responsive header, Menu drawer, account dropdown and blurred loading backdrop apply to every role. Refresh, bookmarks and browser history are supported. Trip services remain unimplemented, so trip data is explicitly unavailable rather than fabricated. Caregiver access to patient data still requires an explicit link, and driver verification remains separate from account creation.
+
+Existing Patient records retain NULL birth dates and gender after applying the schema; no personal information is fabricated. Populate mock records manually in Supabase or complete both fields when editing My Account. Existing Driver accounts without a `drivers` row complete their personal details on the landing page before entering the dashboard. Account active/inactive status retains its login meaning. Driver Trips remains the existing unavailable placeholder; vehicle registration, coordinator approval and new driver/coordinator tabs are deferred.
 
 ## Google provider setup
 
@@ -74,7 +76,9 @@ Keep generated ID and timestamp defaults. For an email already registered, edit 
 | Endpoint | Purpose |
 | --- | --- |
 | `GET /api/auth/me` | Verify the Google session and return the application account, or NULL for a new user |
-| `POST /api/auth/register` | Create an account using `displayName` (username) and a public `role` |
+| `POST /api/auth/register` | Create an account using `displayName`, public `role` and a required `profile` for Patients/Drivers |
+| `GET /api/profiles/driver` | Read the active Driver’s own personal profile |
+| `PATCH /api/profiles/driver` | Complete a missing personal profile for an existing active Driver; cannot overwrite an existing profile |
 
 The backend validates tokens with Supabase and uses the caller's JWT for database requests. Permissions come from database records, never user-editable metadata. Future transport endpoints must enforce current account status, role, patient links and assigned-trip scope.
 

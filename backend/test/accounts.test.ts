@@ -8,7 +8,7 @@ import { AuthService } from '../src/auth/auth.service';
 import { SupabaseService } from '../src/supabase.module';
 
 const account = { id: '11111111-1111-4111-8111-111111111111', auth_user_id: 'user', email: 'person@example.test', display_name: 'Test Person', role: 'patient', status: 'active' };
-const profile = { full_name: 'Test Patient', phone: '+65 81234567', pickup_address: 'Test street', postal_code: '560123', mobility: 'ambulant', assistance_required: false };
+const profile = { full_name: 'Test Patient', birth_date: '1990-04-12', gender: 'female', phone: '+65 81234567', pickup_address: 'Test street', postal_code: '560123', mobility: 'ambulant', assistance_required: false };
 let current: typeof account | null = null;
 let dbFailure = false;
 let authFailure: number | undefined | null = null;
@@ -18,9 +18,9 @@ const gateway = {
     rpc: async (name: string, args?: Record<string, unknown>) => {
       if (dbFailure) return { data: null, error: { code: 'XX000', message: 'PRIVATE_DATABASE_DETAIL' } };
       if (name === 'current_account') return { data: current, error: null };
-      if (name === 'register_account' || name === 'register_patient_account') {
+      if (name === 'register_account' || name === 'register_patient_account' || name === 'register_driver_account') {
         if (current) return { data: null, error: { code: '23505' } };
-        current = { ...account, role: name === 'register_patient_account' ? 'patient' : String(args?.requested_role), display_name: String(args?.requested_name) };
+        current = { ...account, role: name === 'register_patient_account' ? 'patient' : name === 'register_driver_account' ? 'driver' : String(args?.requested_role), display_name: String(args?.requested_name) };
       }
       return { data: current, error: null };
     },
@@ -59,7 +59,7 @@ test('registers an active account without an approval step and reloads it from t
   assert.equal(result.status, 201);
   assert.equal(result.body.status, 'active');
   assert.equal((await request('/me')).body.account.role, 'patient');
-  assert.equal((await request('/register', 'POST', { role: 'driver', displayName: 'Test' })).status, 409);
+  assert.equal((await request('/register', 'POST', { role: 'patient', displayName: 'Test', profile })).status, 409);
 });
 test('the removed approval endpoints are unavailable for every role', async () => {
   for (const role of ['coordinator', 'patient', 'driver', 'caregiver']) {
@@ -96,4 +96,27 @@ test('patient signup requires validated profile details while other roles cannot
     assert.equal((await request('/register', 'POST', body)).status, 400);
     assert.equal(current, null);
   }
+});
+
+test('signup rejects missing or impossible birth dates and missing gender', async () => {
+  current = null;
+  for (const details of [{ ...profile, birth_date: undefined }, { ...profile, birth_date: '2020-02-30' }, { ...profile, birth_date: '2999-01-01' }, { ...profile, gender: '' }]) {
+    assert.equal((await request('/register', 'POST', { role: 'patient', displayName: 'Patient', profile: details })).status, 400);
+    assert.equal(current, null);
+  }
+});
+
+test('driver signup requires personal details and creates an account without vehicle information', async () => {
+  current = null;
+  assert.equal((await request('/register', 'POST', { role: 'driver', displayName: 'Driver' })).status, 400);
+  const details = { full_name: 'Fixture Driver', phone: '+65 81234567', birth_date: '1990-04-12', gender: 'prefer-not-to-say' };
+  for (const extra of [{ status: 'approved' }, { vehicle: {} }, { birth_date: '2020-02-30' }, { gender: '' }]) {
+    assert.equal((await request('/register', 'POST', { role: 'driver', displayName: 'Driver', profile: { ...details, ...extra } })).status, 400);
+    assert.equal(current, null);
+  }
+  const result = await request('/register', 'POST', { role: 'driver', displayName: 'Driver', profile: details });
+  assert.equal(result.status, 201);
+  assert.equal(result.body.role, 'driver');
+  assert.equal(result.body.status, 'active');
+  current = null;
 });

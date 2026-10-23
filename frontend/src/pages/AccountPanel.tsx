@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { ApiError, apiGet, apiRequest } from '../lib/api';
 import type { SignupDraft } from '../lib/googleAccountSelection';
+import { PersonalFields, emptyPersonal } from '../components/PersonalFields';
 import { PatientFields, patientDraft } from './PatientsPage';
 
 export interface Account {
@@ -37,9 +38,10 @@ export default function AccountPanel({ email, onSignOut, onCancel, onLoadingChan
   const [role, setRole] = useState(initialDraft?.role ?? '');
   const generation = useRef(0);
   const [step, setStep] = useState<'account' | 'details'>('account');
+  const [driverProfile, setDriverProfile] = useState({ ...emptyPersonal });
   const [profile, setProfile] = useState(() => patientDraft());
   const heading = useRef<HTMLHeadingElement>(null);
-  const incompletePatient = account?.role === 'patient' && account.status === 'active' && account.profile_complete !== true;
+  const incompleteProfile = ['patient', 'driver'].includes(account?.role ?? '') && account?.status === 'active' && account.profile_complete !== true;
   useEffect(() => { if (step === 'details') heading.current?.focus(); }, [step]);
 
   useEffect(() => {
@@ -77,20 +79,20 @@ export default function AccountPanel({ email, onSignOut, onCancel, onLoadingChan
   async function register(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (saving || signingOut) return;
-    if (!incompletePatient && step === 'account') { setError(''); setStep('details'); return; }
+    if (!incompleteProfile && step === 'account') { setError(''); setStep('details'); return; }
     const version = generation.current;
     setSaving(true);
     setError('');
     try {
       const { status: unused, ...details } = profile;
       let result: Account;
-      if (incompletePatient) {
-        await apiRequest('/profiles/patient', 'PATCH', details);
+      if (incompleteProfile) {
+        await apiRequest(account?.role === 'driver' ? '/profiles/driver' : '/profiles/patient', 'PATCH', account?.role === 'driver' ? driverProfile : details);
         const current = await apiGet<{ account: Account | null }>('/auth/me');
         if (!current.account?.profile_complete) throw new Error('Profile completion could not be confirmed.');
         result = current.account;
       } else {
-        result = await apiRequest<Account>('/auth/register', 'POST', { displayName: username.trim(), role, ...(role === 'patient' ? { profile: details } : {}) });
+        result = await apiRequest<Account>('/auth/register', 'POST', { displayName: username.trim(), role, ...(role === 'patient' ? { profile: details } : role === 'driver' ? { profile: driverProfile } : {}) });
       }
       if (generation.current === version) setAccount(result);
     } catch (error) {
@@ -104,7 +106,7 @@ export default function AccountPanel({ email, onSignOut, onCancel, onLoadingChan
         if (generation.current !== version) return;
         if (current.account) {
           setAccount(current.account);
-          if (current.account.role !== 'patient' || current.account.profile_complete === true) return;
+          if (!['patient', 'driver'].includes(current.account.role) || current.account.profile_complete === true) return;
         }
       } catch (lookupError) {
         if (lookupError instanceof ApiError && lookupError.status === 401) {
@@ -125,15 +127,15 @@ export default function AccountPanel({ email, onSignOut, onCancel, onLoadingChan
     return () => window.clearTimeout(retry);
   }, [phase]);
 
-  if (phase !== 'ready' || (account?.status === 'active' && (account.role !== 'patient' || account.profile_complete === true))) return <div className="account-loading" role="status" aria-label={phase === 'error' ? 'Reconnecting to account service' : 'Loading account'}><span className="account-spinner" aria-hidden="true" /><span>Loading...</span></div>;
+  if (phase !== 'ready' || (account?.status === 'active' && (!['patient', 'driver'].includes(account.role) || account.profile_complete === true))) return <div className="account-loading" role="status" aria-label={phase === 'error' ? 'Reconnecting to account service' : 'Loading account'}><span className="account-spinner" aria-hidden="true" /><span>Loading...</span></div>;
 
-  if (!account || incompletePatient) return <div className="space-y-5" aria-busy={saving}>
+  if (!account || incompleteProfile) return <div className="space-y-5" aria-busy={saving}>
     <div>
-      <h2 className="text-xl font-semibold" ref={heading} tabIndex={-1}>{incompletePatient ? 'Finish creating your account' : step === 'details' ? 'Complete your details' : 'Create your account'}</h2>
-      <p className="mt-2 text-slate-600">{step === 'account' && !incompletePatient ? 'Choose a username and your role.' : incompletePatient || role === 'patient' ? 'Add your contact and pickup details.' : 'Review your account details before signing up.'}</p>
+      <h2 className="text-xl font-semibold" ref={heading} tabIndex={-1}>{incompleteProfile ? 'Finish creating your account' : step === 'details' ? 'Complete your details' : 'Create your account'}</h2>
+      <p className="mt-2 text-slate-600">{step === 'account' && !incompleteProfile ? 'Choose a username and your role.' : role === 'driver' || account?.role === 'driver' ? 'Add your personal and contact details.' : incompleteProfile || role === 'patient' ? 'Add your personal, contact and pickup details.' : 'Review your account details before signing up.'}</p>
     </div>
-    <form onSubmit={register} className={`signup-form${step === 'details' || incompletePatient ? ' signup-profile' : ''}`}>
-      {step === 'account' && !incompletePatient ? <>
+    <form onSubmit={register} className={`signup-form${step === 'details' || incompleteProfile ? ' signup-profile' : ''}`}>
+      {step === 'account' && !incompleteProfile ? <>
       <div>
         <label htmlFor="signup-email" className="block font-medium">Email</label>
         <div className="signup-email-row mt-1">
@@ -154,12 +156,12 @@ export default function AccountPanel({ email, onSignOut, onCancel, onLoadingChan
           <option value="">Choose a role</option><option value="patient">Patient</option><option value="caregiver">Caregiver</option><option value="driver">Driver</option>
         </select>
       </label>
-      </> : role === 'patient' || incompletePatient ? <PatientFields draft={profile} onChange={setProfile} disabled={saving || signingOut} />
+      </> : role === 'driver' || account?.role === 'driver' ? <fieldset className="patient-form-fields" disabled={saving || signingOut} aria-label="Driver details"><PersonalFields prefix="driver" draft={driverProfile} onChange={setDriverProfile} /></fieldset> : role === 'patient' || incompleteProfile ? <PatientFields draft={profile} onChange={setProfile} disabled={saving || signingOut} />
         : <dl className="signup-review"><div><dt>Email</dt><dd>{email}</dd></div><div><dt>Username</dt><dd>{username}</dd></div><div><dt>Role</dt><dd>{roleNames[role as keyof typeof roleNames]}</dd></div></dl>}
       {error && <p role="alert">{error}</p>}
       <div className="signup-actions">
-        <button className="w-full rounded-lg bg-sky-800 p-3 font-semibold text-white disabled:opacity-50" disabled={saving || signingOut || (!incompletePatient && (!username.trim() || !role))} type="submit">{saving ? 'Saving…' : incompletePatient ? 'Finish creating account' : step === 'account' ? 'Next' : 'Sign Up'}</button>
-        {step === 'details' && !incompletePatient && <button type="button" className={`${button} w-full`} disabled={saving || signingOut} onClick={() => { setError(''); setStep('account'); }}>Back</button>}
+        <button className="w-full rounded-lg bg-sky-800 p-3 font-semibold text-white disabled:opacity-50" disabled={saving || signingOut || (!incompleteProfile && (!username.trim() || !role))} type="submit">{saving ? 'Saving…' : incompleteProfile ? 'Finish creating account' : step === 'account' ? 'Next' : 'Sign Up'}</button>
+        {step === 'details' && !incompleteProfile && <button type="button" className={`${button} w-full`} disabled={saving || signingOut} onClick={() => { setError(''); setStep('account'); }}>Back</button>}
         <button type="button" className={`${button} w-full`} onClick={onCancel} disabled={saving || signingOut}>{signingOut ? 'Cancelling…' : 'Cancel'}</button>
       </div>
     </form>

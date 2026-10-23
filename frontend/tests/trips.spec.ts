@@ -2,11 +2,11 @@ import { test, expect, session, seedSession, activeAccount, fixtureTrip, mockSer
 
 test.beforeEach(mockServices);
 
-for (const role of ['patient', 'coordinator']) test(`${role} trip list shows pickup requirements, review flags and journey details`, async ({ page }) => {
+for (const role of ['patient', 'coordinator']) test(`${role} trip list shows pickup requirements and journey details without review labels`, async ({ page }) => {
   await seedSession(page);
   await page.setViewportSize({ width: 390, height: 844 });
   await page.route('**/api/auth/me', route => route.fulfill({ json: { account: { ...activeAccount, role } } }));
-  await page.route('**/api/trips?*', route => route.fulfill({ json: { trips: Array.from({ length: 10 }, (_, index) => ({ ...fixtureTrip, id: `trip-${index}`, ...(index === 1 ? { direction: 'return', arrival_by: null, pickup_not_before: '2026-10-20T13:15:00+08:00', review_required: true } : {}) })), total: 26, page: 1, pageSize: 10, counts: { unfilled: 26, 'at-risk': 0, 'on-track': 0, resolved: 0 }, next_trip: fixtureTrip } }));
+  await page.route('**/api/trips?*', route => route.fulfill({ json: { trips: Array.from({ length: 10 }, (_, index) => ({ ...fixtureTrip, id: `trip-${index}`, ...(index === 1 ? { direction: 'return', arrival_by: null, pickup_not_before: '2026-10-20T13:15:00+08:00', review_required: true } : {}) })), total: 26, page: 1, pageSize: 10, counts: { unfilled: 26, 'at-risk': 0, 'on-track': 0, resolved: 0 }, next_trip: { ...fixtureTrip, review_required: true } } }));
   await page.goto('/dashboard/trips');
   const list = page.getByRole('region', { name: 'Trip list', exact: true });
   await expect(list).toBeVisible();
@@ -16,7 +16,7 @@ for (const role of ['patient', 'coordinator']) test(`${role} trip list shows pic
   await expect(list.locator('article').first()).not.toContainText('Arrival by');
   await expect(list.locator('article').nth(1)).not.toContainText('Earliest return pickup');
   await expect(list.locator('article').nth(1)).not.toContainText('13:15');
-  await expect(list.locator('article').nth(1)).toContainText('Needs review');
+  await expect(page.getByText('Needs review', { exact: true })).toHaveCount(0);
   await expect(list.locator('article').nth(1)).not.toContainText('Arrival by');
   await expect(page.getByRole('button', { name: 'Next', exact: true })).toBeEnabled();
   expect(await list.evaluate(element => element.scrollHeight <= element.clientHeight + 1)).toBe(true);
@@ -24,6 +24,7 @@ for (const role of ['patient', 'coordinator']) test(`${role} trip list shows pic
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await list.locator('article').nth(1).getByRole('button', { name: 'View trip details', exact: true }).click();
   const returnDetails = page.getByRole('dialog', { name: 'Trip details', exact: true });
+  await expect(returnDetails).not.toContainText('timings need review');
   await expect(returnDetails).toContainText('Earliest return pickup');
   await expect(returnDetails).toContainText('13:15');
   await returnDetails.getByRole('button', { name: /^Close / }).click();

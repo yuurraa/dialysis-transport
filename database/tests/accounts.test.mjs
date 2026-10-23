@@ -32,7 +32,7 @@ const coordinator = '22222222-2222-4222-8222-222222222222';
 const driver = '33333333-3333-4333-8333-333333333333';
 const emailOnly = '66666666-6666-4666-8666-666666666666';
 const stranger = '44444444-4444-4444-8444-444444444444';
-const signupDetails = { full_name: 'Test Patient', phone: '+65 81234567', pickup_address: 'Test street', postal_code: '560123', mobility: 'ambulant', assistance_required: false };
+const signupDetails = { full_name: 'Test Patient', birth_date: '1990-04-12', gender: 'female', phone: '+65 81234567', pickup_address: 'Test street', postal_code: '560123', mobility: 'ambulant', assistance_required: false };
 before(async () => {
   db = await databaseWithAuth();
   await db.exec(schema);
@@ -84,7 +84,7 @@ test('preconfigured coordinator links by verified email once, without letting re
   await assert.rejects(asUser(coordinator, "select public.register_account('patient', 'Changed')"), /already registered/);
 });
 test('each public role registers directly as active; coordinator role never comes from signup', async () => {
-  const [{ account }] = await asUser(driver, "select public.register_account('driver', 'Test Driver') as account");
+  const [{ account }] = await asUser(driver, "select public.register_driver_account('Test Driver', $1::jsonb) as account", [JSON.stringify({full_name:'Test Driver',phone:'81234567',birth_date:'1990-04-12',gender:'male'})]);
   assert.equal(account.role, 'driver');
   assert.equal(account.status, 'active');
   await db.query("update auth.users set email_confirmed_at = now() where id = $1", [stranger]);
@@ -233,7 +233,7 @@ test('patient-owned profiles are unique, private, shared with coordinators and c
         const result = await local.query(sql, args); await local.exec('commit'); return result.rows;
       } catch (e) { await local.exec('rollback'); throw e; }
     }
-    const details = { full_name: 'Test Patient', phone: '81234567', pickup_address: 'Test address', mobility: 'wheelchair', assistance_required: true };
+    const details = { full_name: 'Test Patient', birth_date: '1990-04-12', gender: 'female', phone: '81234567', pickup_address: 'Test address', mobility: 'wheelchair', assistance_required: true };
     const save = (id, body = details) => act(id, 'select public.save_my_patient($1::jsonb) as patient', [JSON.stringify(body)]);
     const [{ patient: record }] = await save(patient);
     assert.equal(record.status, 'active');
@@ -296,8 +296,8 @@ test('patient registration creates account and profile atomically and rejects in
         await local.exec('commit'); return result.rows[0].account;
       } catch (error) { await local.exec('rollback'); throw error; }
     }
-    const details = { full_name: 'Test Patient', phone: '+65 81234567', pickup_address: 'Test street', unit_no: '', postal_code: '560123', notes: '', mobility: 'ambulant', assistance_required: false };
-    for (const body of [null, {}, { ...details, notes: 'x'.repeat(1001) }, { ...details, postal_code: '123' }, { ...details, status: 'active' }]) {
+    const details = { full_name: 'Test Patient', birth_date: '1990-04-12', gender: 'female', phone: '+65 81234567', pickup_address: 'Test street', unit_no: '', postal_code: '560123', notes: '', mobility: 'ambulant', assistance_required: false };
+    for (const body of [null, {}, { ...details, birth_date: undefined }, { ...details, birth_date: '2020-02-30' }, { ...details, birth_date: '2999-01-01' }, { ...details, gender: null }, { ...details, notes: 'x'.repeat(1001) }, { ...details, postal_code: '123' }, { ...details, status: 'active' }]) {
       await assert.rejects(register(body));
       assert.equal((await local.query('select count(*)::int as count from public.accounts')).rows[0].count, 0);
       assert.equal((await local.query('select count(*)::int as count from public.patients')).rows[0].count, 0);
@@ -937,4 +937,39 @@ test('trip search precedes pagination and coordinator deletion preserves history
     await local.exec(schema);
     assert.equal((await list()).total,25);
   }finally{await local.close();}
+});
+
+test('driver personal signup is atomic, owns its profile and preserves the existing login boundary', async () => {
+  const local = await databaseWithAuth();
+  try {
+    await local.exec(schema);
+    async function act(who, sql, params = []) {
+      await local.exec('begin; set local role authenticated;');
+      try {
+        await local.query("select set_config('request.jwt.claim.sub',$1,true)",[who]);
+        const result = await local.query(sql,params);
+        await local.exec('commit'); return result.rows;
+      } catch (error) { await local.exec('rollback'); throw error; }
+    }
+    const personal = { full_name: 'Fixture Driver', phone: '+65 81234567', birth_date: '1990-04-12', gender: 'prefer-not-to-say' };
+    const register = details => act(driver,"select public.register_driver_account('Driver',$1::jsonb) as account",[JSON.stringify(details)]);
+    await assert.rejects(act(driver,"select public.register_account('driver','Driver')"), /details.*required/i);
+    for (const details of [{}, {...personal,birth_date:'2999-01-01'}, {...personal,birth_date:'2020-02-30'}, {...personal,gender:null}, {...personal,status:'approved'}]) {
+      await assert.rejects(register(details));
+      assert.equal((await local.query('select count(*)::integer as total from public.accounts')).rows[0].total,0);
+    }
+    const [{ account }] = await register(personal);
+    assert.equal(account.profile_complete,true);
+    assert.equal(account.status,'active');
+    assert.equal(account.full_name,personal.full_name);
+    assert.equal((await act(driver,'select * from public.drivers')).length,1);
+    assert.deepEqual(await act(patient,'select * from public.drivers'),[]);
+    await assert.rejects(act(driver,"update public.drivers set full_name='Other'"),/permission denied/);
+    await assert.rejects(act(driver,'select public.save_my_driver($1::jsonb)',[JSON.stringify(personal)]),/already exists/);
+    await local.exec(schema);
+    assert.equal((await act(driver,'select public.current_account() as account'))[0].account.profile_complete,true);
+    await local.query("update public.accounts set status='inactive' where id=$1",[account.id]);
+    assert.deepEqual(await act(driver,'select * from public.drivers'),[]);
+    await assert.rejects(act(driver,'select public.save_my_driver($1::jsonb)',[JSON.stringify(personal)]),/Driver access/);
+  } finally { await local.close(); }
 });

@@ -3,7 +3,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { ApiError, apiGet, apiRequest } from '../lib/api';
 import { PatientFields, patientDraft, type Patient } from './PatientsPage';
 
-type Details = Omit<Patient, 'id' | 'version'>;
+type Details = ReturnType<typeof patientDraft>;
 
 
 /** Ownership is derived on the server; the browser cannot select another patient's record. */

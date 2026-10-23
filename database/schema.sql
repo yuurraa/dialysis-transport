@@ -63,14 +63,14 @@ declare account public.accounts; verified text;
 begin
   verified := private.verified_email();
   select * into account from public.accounts where auth_user_id = (select auth.uid());
-  if found then return to_jsonb(account) || jsonb_build_object('profile_complete', account.role <> 'patient' or exists(select 1 from public.patients where account_id = account.id), 'full_name', case when account.role = 'patient' then (select full_name from public.patients where account_id = account.id) else null end); end if;
+  if found then return to_jsonb(account) || jsonb_build_object('profile_complete', case account.role when 'patient' then exists(select 1 from public.patients where account_id = account.id) when 'driver' then exists(select 1 from public.drivers where account_id = account.id) else true end, 'full_name', case when account.role = 'patient' then (select full_name from public.patients where account_id = account.id) when account.role = 'driver' then (select full_name from public.drivers where account_id = account.id) else null end); end if;
   -- An administrator can preconfigure coordinator emails before their first Google login.
   update public.accounts set auth_user_id = (select auth.uid())
     where email = verified and auth_user_id is null returning * into account;
-  if found then return to_jsonb(account) || jsonb_build_object('profile_complete', account.role <> 'patient' or exists(select 1 from public.patients where account_id = account.id), 'full_name', case when account.role = 'patient' then (select full_name from public.patients where account_id = account.id) else null end); end if;
+  if found then return to_jsonb(account) || jsonb_build_object('profile_complete', case account.role when 'patient' then exists(select 1 from public.patients where account_id = account.id) when 'driver' then exists(select 1 from public.drivers where account_id = account.id) else true end, 'full_name', case when account.role = 'patient' then (select full_name from public.patients where account_id = account.id) when account.role = 'driver' then (select full_name from public.drivers where account_id = account.id) else null end); end if;
   -- Another first-login request may have linked the same user while UPDATE waited.
   select * into account from public.accounts where auth_user_id = (select auth.uid());
-  if found then return to_jsonb(account) || jsonb_build_object('profile_complete', account.role <> 'patient' or exists(select 1 from public.patients where account_id = account.id), 'full_name', case when account.role = 'patient' then (select full_name from public.patients where account_id = account.id) else null end); end if;
+  if found then return to_jsonb(account) || jsonb_build_object('profile_complete', case account.role when 'patient' then exists(select 1 from public.patients where account_id = account.id) when 'driver' then exists(select 1 from public.drivers where account_id = account.id) else true end, 'full_name', case when account.role = 'patient' then (select full_name from public.patients where account_id = account.id) when account.role = 'driver' then (select full_name from public.drivers where account_id = account.id) else null end); end if;
   return null;
 end;
 $$;
@@ -87,7 +87,7 @@ begin
   if private.current_account() is not null then
     raise exception 'Account already registered.' using errcode = '23505';
   end if;
-  if requested_role = 'patient' then raise exception 'Patient details are required.' using errcode = '22023'; end if;
+  if requested_role in ('patient','driver') then raise exception 'Personal details are required.' using errcode = '22023'; end if;
   insert into public.accounts(auth_user_id, email, display_name, role, status)
     values ((select auth.uid()), verified, btrim(requested_name), requested_role, 'active')
     returning * into account;
@@ -119,6 +119,31 @@ create table if not exists public.patients (
   status text not null default 'active' check (status in ('active', 'inactive')),
   created_at timestamptz not null default now()
 );
+-- Nullable additions preserve legacy/mock records without inventing personal data.
+alter table public.patients add column if not exists birth_date date check (birth_date between date '1900-01-01' and (now() at time zone 'Asia/Singapore')::date);
+alter table public.patients add column if not exists gender text check (gender in ('female','male','other','prefer-not-to-say'));
+
+-- Shared server-side validation also protects direct RPC calls.
+create or replace function private.validate_personal_details(details jsonb) returns void
+language plpgsql set search_path = '' as $$
+declare born date;
+begin
+  if details is null or jsonb_typeof(details) <> 'object'
+    or coalesce(jsonb_typeof(details->'full_name'),'') <> 'string' or length(btrim(details->>'full_name')) not between 1 and 100
+    or coalesce(jsonb_typeof(details->'phone'),'') <> 'string' or details->>'phone' !~ '^(\+?[0-9][0-9 ()-]{5,24})$'
+    or coalesce(jsonb_typeof(details->'birth_date'),'') <> 'string' or coalesce(details->>'birth_date','') !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+    or coalesce(jsonb_typeof(details->'gender'),'') <> 'string' or details->>'gender' not in ('female','male','other','prefer-not-to-say') then
+    raise exception 'Invalid personal details.' using errcode='22023';
+  end if;
+  begin born := (details->>'birth_date')::date;
+  exception when datetime_field_overflow or invalid_datetime_format then
+    raise exception 'Invalid birth date.' using errcode='22023'; end;
+  if born < date '1900-01-01' or born > (now() at time zone 'Asia/Singapore')::date then
+    raise exception 'Invalid birth date.' using errcode='22023';
+  end if;
+end;
+$$;
+revoke all on function private.validate_personal_details(jsonb) from public, anon, authenticated;
 -- Structured address additions preserve the original address as the street field.
 alter table public.patients add column if not exists unit_no text not null default '' check (length(unit_no) <= 20);
 alter table public.patients add column if not exists postal_code text not null default '' check (postal_code = '' or postal_code ~ '^[0-9]{6}$');
@@ -192,7 +217,7 @@ begin
   if details is null or jsonb_typeof(details) <> 'object' then
     raise exception 'Invalid patient details.' using errcode = '22023';
   end if;
-  if details - array['full_name','phone','pickup_address','mobility','assistance_required','unit_no','postal_code','notes','version'] <> '{}'::jsonb
+  if details - array['birth_date','gender','full_name','phone','pickup_address','mobility','assistance_required','unit_no','postal_code','notes','version'] <> '{}'::jsonb
     or coalesce(jsonb_typeof(details->'full_name'), '') <> 'string'
     or coalesce(jsonb_typeof(details->'phone'), '') <> 'string'
     or coalesce(jsonb_typeof(details->'pickup_address'), '') <> 'string'
@@ -203,6 +228,7 @@ begin
     or (details ? 'notes' and jsonb_typeof(details->'notes') <> 'string') then
     raise exception 'Invalid patient details.' using errcode = '22023';
   end if;
+  perform private.validate_personal_details(details);
   candidate := jsonb_populate_record(null::public.patients, details);
   -- Lock the account as well, serializing simultaneous first profile creations.
   perform 1 from public.accounts where id=owner_id for update;
@@ -216,9 +242,9 @@ begin
   elsif details ? 'version' then
     raise exception 'Patient profile has changed. Reload before saving.' using errcode = '40001';
   end if;
-  insert into public.patients(account_id, full_name, phone, pickup_address, mobility, assistance_required, unit_no, postal_code, notes)
-    values (owner_id, btrim(candidate.full_name), btrim(candidate.phone), btrim(candidate.pickup_address), candidate.mobility, candidate.assistance_required, coalesce(btrim(candidate.unit_no), ''), coalesce(btrim(candidate.postal_code), ''), coalesce(btrim(candidate.notes), ''))
-    on conflict (account_id) do update set full_name = excluded.full_name, phone = excluded.phone,
+  insert into public.patients(account_id, birth_date, gender, full_name, phone, pickup_address, mobility, assistance_required, unit_no, postal_code, notes)
+    values (owner_id, candidate.birth_date, candidate.gender, btrim(candidate.full_name), btrim(candidate.phone), btrim(candidate.pickup_address), candidate.mobility, candidate.assistance_required, coalesce(btrim(candidate.unit_no), ''), coalesce(btrim(candidate.postal_code), ''), coalesce(btrim(candidate.notes), ''))
+    on conflict (account_id) do update set birth_date = excluded.birth_date, gender = excluded.gender, full_name = excluded.full_name, phone = excluded.phone,
       pickup_address = excluded.pickup_address, mobility = excluded.mobility, assistance_required = excluded.assistance_required,
       unit_no = case when details ? 'unit_no' then excluded.unit_no else public.patients.unit_no end,
       postal_code = case when details ? 'postal_code' then excluded.postal_code else public.patients.postal_code end,
@@ -260,6 +286,74 @@ create or replace function public.register_patient_account(requested_name text, 
 language sql security invoker set search_path = '' as $$ select private.register_patient_account(requested_name, details); $$;
 revoke all on function private.register_patient_account(text,jsonb), public.register_patient_account(text,jsonb) from public, anon;
 grant execute on function private.register_patient_account(text,jsonb), public.register_patient_account(text,jsonb) to authenticated;
+
+-- Driver personal signup only. Vehicle registration and approval are a later milestone.
+create table if not exists public.drivers (
+  account_id uuid primary key references public.accounts(id) on delete restrict,
+  full_name text not null check (length(btrim(full_name)) between 1 and 100),
+  phone text not null check (phone ~ '^\+?[0-9][0-9 ()-]{5,24}$'),
+  birth_date date not null check (birth_date between date '1900-01-01' and (now() at time zone 'Asia/Singapore')::date),
+  gender text not null check (gender in ('female','male','other','prefer-not-to-say')),
+  created_at timestamptz not null default now()
+);
+alter table public.drivers enable row level security;
+revoke all on public.drivers from public, anon, authenticated;
+grant select on public.drivers to authenticated;
+create or replace function private.driver_account_id() returns uuid
+language sql stable security definer set search_path = '' as $$
+  select id from public.accounts where auth_user_id=(select auth.uid()) and role='driver' and status='active';
+$$;
+revoke all on function private.driver_account_id() from public, anon;
+grant execute on function private.driver_account_id() to authenticated;
+drop policy if exists drivers_read on public.drivers;
+create policy drivers_read on public.drivers for select to authenticated
+  using (account_id=(select private.driver_account_id()));
+
+-- Used for signup and completion of legacy driver accounts; personal details are not approval.
+create or replace function private.save_my_driver(details jsonb) returns jsonb
+language plpgsql security definer set search_path = '' as $$
+declare owner_id uuid; saved public.drivers;
+begin
+  owner_id := private.driver_account_id();
+  if owner_id is null then raise exception 'Driver access required.' using errcode='42501'; end if;
+  perform private.verified_email();
+  perform private.validate_personal_details(details);
+  if details - array['full_name','phone','birth_date','gender'] <> '{}'::jsonb then
+    raise exception 'Invalid driver details.' using errcode='22023'; end if;
+  perform 1 from public.accounts where id=owner_id and status='active' and role='driver' for update;
+  if not found then raise exception 'Driver access required.' using errcode='42501'; end if;
+  insert into public.drivers(account_id,full_name,phone,birth_date,gender)
+    values (owner_id,btrim(details->>'full_name'),btrim(details->>'phone'),(details->>'birth_date')::date,details->>'gender')
+    on conflict (account_id) do nothing returning * into saved;
+  if not found then raise exception 'Driver profile already exists. Reload before continuing.' using errcode='40001'; end if;
+  return to_jsonb(saved);
+end;
+$$;
+create or replace function public.save_my_driver(details jsonb) returns jsonb
+language sql security invoker set search_path = '' as $$ select private.save_my_driver(details); $$;
+
+create or replace function private.register_driver_account(requested_name text, details jsonb) returns jsonb
+language plpgsql security definer set search_path = '' as $$
+declare verified text;
+begin
+  verified := private.verified_email();
+  if private.current_account() is not null then raise exception 'Account already registered.' using errcode='23505'; end if;
+  if requested_name is null or length(btrim(requested_name)) not between 1 and 100 then
+    raise exception 'Invalid registration details.' using errcode='22023'; end if;
+  insert into public.accounts(auth_user_id,email,display_name,role,status)
+    values ((select auth.uid()),verified,btrim(requested_name),'driver','active');
+  perform private.save_my_driver(details);
+  return private.current_account();
+exception when unique_violation then raise exception 'Account already registered.' using errcode='23505';
+end;
+$$;
+create or replace function public.register_driver_account(requested_name text, details jsonb) returns jsonb
+language sql security invoker set search_path = '' as $$ select private.register_driver_account(requested_name,details); $$;
+
+revoke all on function private.save_my_driver(jsonb),public.save_my_driver(jsonb),
+  private.register_driver_account(text,jsonb),public.register_driver_account(text,jsonb) from public, anon;
+grant execute on function private.save_my_driver(jsonb),public.save_my_driver(jsonb),
+  private.register_driver_account(text,jsonb),public.register_driver_account(text,jsonb) to authenticated;
 
 -- Treatment requirements are separate from operational Trips and pickup times.
 create table if not exists public.dialysis_centres (

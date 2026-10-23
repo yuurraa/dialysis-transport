@@ -2,6 +2,7 @@ import { PageHeading } from '../components/DashboardUI';
 import ThemeControl from '../components/ThemeControl';
 import TreatmentSchedules from './TreatmentSchedules';
 import { useCallback, useEffect, useRef, useState, type MouseEvent } from 'react';
+import DriverProfile from './DriverProfile';
 import PatientProfile from './PatientProfile';
 import PatientsPage from './PatientsPage';
 import TripsPage from './TripsPage';
@@ -156,7 +157,7 @@ export default function Dashboard({ account, avatarUrl, path, onNavigate, onSign
 
     <div className="dashboard-workspace">
     <main className="dashboard-main" id="dashboard-main" tabIndex={-1}>
-      {schedulesPage ? <TreatmentSchedules coordinator={account.role === 'coordinator'} notify={notify} onSessionExpired={onSessionExpired} /> : patientsPage ? <PatientsPage notify={notify} onSessionExpired={onSessionExpired} /> : accountPage ? <>{!patient && <section className="dashboard-trips" aria-labelledby={account.role === 'coordinator' ? 'account-details-title' : 'role-profile-title'}><PageHeading id={account.role === 'coordinator' ? 'account-details-title' : 'role-profile-title'} title="Account Details" description={<span className="profile-id">{roleNames[account.role]} ID: {account.id}</span>} />{account.role === 'coordinator' && <fieldset className="patient-form-fields coordinator-account-fields" disabled aria-label="Coordinator account details">
+      {schedulesPage ? <TreatmentSchedules coordinator={account.role === 'coordinator'} notify={notify} onSessionExpired={onSessionExpired} /> : patientsPage ? <PatientsPage notify={notify} onSessionExpired={onSessionExpired} /> : accountPage && account.role === 'driver' ? <DriverProfile onSessionExpired={onSessionExpired} /> : accountPage ? <>{!patient && <section className="dashboard-trips" aria-labelledby={account.role === 'coordinator' ? 'account-details-title' : 'role-profile-title'}><PageHeading id={account.role === 'coordinator' ? 'account-details-title' : 'role-profile-title'} title="Account Details" description={<span className="profile-id">{roleNames[account.role]} ID: {account.id}</span>} />{account.role === 'coordinator' && <fieldset className="patient-form-fields coordinator-account-fields" disabled aria-label="Coordinator account details">
         <div className="patient-field"><label htmlFor="coordinator-username">Username</label><input id="coordinator-username" value={account.display_name} readOnly autoComplete="username" /></div>
         <div className="patient-field"><label htmlFor="coordinator-email">Email</label><input id="coordinator-email" type="email" value={account.email} readOnly autoComplete="email" /></div>
         <div className="patient-field"><label htmlFor="coordinator-role">Role</label><input id="coordinator-role" value={roleNames[account.role]} readOnly /></div>

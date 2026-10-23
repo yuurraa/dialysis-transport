@@ -6,6 +6,16 @@ import { ProfilesService } from './profiles.service';
 export class ProfilesController {
   constructor(@Inject(ProfilesService) private readonly service: ProfilesService) {}
 
+  @Get('driver')
+  ownDriver(@Headers('authorization') header?: string) {
+    return this.service.ownDriver(header);
+  }
+
+  @Patch('driver')
+  completeOwnDriver(@Headers('authorization') header: string | undefined, @Body() body: unknown) {
+    return this.service.completeOwnDriver(header, body);
+  }
+
   @Get('patient')
   ownPatient(@Headers('authorization') header?: string) {
     return this.service.ownPatient(header);

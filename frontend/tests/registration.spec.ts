@@ -101,6 +101,8 @@ test('patient signup stays in the landing box until final submission and Back pr
     const body = route.request().postDataJSON();
     expect(body.profile.postal_code).toBe('560123');
     expect(body.profile.phone).toBe('+65 81234567');
+    expect(body.profile.birth_date).toBe('1990-04-12');
+    expect(body.profile.gender).toBe('female');
     expect(body.profile.status).toBeUndefined();
     registered = true;
     return route.fulfill({ status: 201, json: { ...activeAccount, profile_complete: true } });
@@ -131,4 +133,38 @@ test('patient signup stays in the landing box until final submission and Back pr
   await submitSignup(page);
   await expect(page).toHaveURL(/\/dashboard\/trips$/);
   expect(submissions).toBe(1);
+});
+
+test('driver signup collects personal details, preserves Back state and retains existing dashboard navigation', async ({ page }) => {
+  await seedSession(page);
+  const profile = { full_name: 'Fixture Driver', phone: '+65 81234567', birth_date: '1990-04-12', gender: 'prefer-not-to-say' };
+  let registrations = 0;
+  await page.route('**/api/auth/register', route => {
+    registrations++;
+    expect(route.request().postDataJSON()).toEqual({ displayName: 'testdriver', role: 'driver', profile });
+    return route.fulfill({ status: 201, json: { ...activeAccount, role: 'driver', full_name: profile.full_name } });
+  });
+  await page.route('**/api/profiles/driver', route => route.fulfill({ json: { driver: profile } }));
+  await page.goto('/');
+  await page.getByLabel('Username').fill('testdriver');
+  await chooseOption(page.getByLabel('Role'), 'driver');
+  await page.getByRole('button', { name: 'Next', exact: true }).click();
+  await page.getByLabel('Full name', { exact: true }).fill(profile.full_name);
+  await page.getByLabel('Contact number', { exact: true }).fill(profile.phone);
+  await page.getByLabel('Date of birth', { exact: true }).fill(profile.birth_date);
+  await chooseOption(page.getByLabel('Gender', { exact: true }), profile.gender);
+  expect(registrations).toBe(0);
+  await expect(page.getByLabel('Street', { exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Back', exact: true }).click();
+  await page.getByRole('button', { name: 'Next', exact: true }).click();
+  await expect(page.getByLabel('Full name', { exact: true })).toHaveValue(profile.full_name);
+  await expect(page.getByLabel('Date of birth', { exact: true })).toHaveValue(profile.birth_date);
+  await submitSignup(page);
+  await expect(page).toHaveURL(/\/dashboard\/trips$/);
+  await expect(page.getByRole('link', { name: 'Register Vehicle', exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Account', exact: true }).click();
+  await page.getByRole('link', { name: 'My Account', exact: true }).click();
+  await expect(page.getByLabel('Full name', { exact: true })).toHaveValue(profile.full_name);
+  await expect(page.getByLabel('Full name', { exact: true })).toBeDisabled();
+  expect(registrations).toBe(1);
 });

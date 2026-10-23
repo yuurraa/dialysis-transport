@@ -49,7 +49,7 @@ export default function LoginPage() {
   }, [navigate]);
   const account = resolvedAccount?.userId === user?.id ? resolvedAccount?.account : null;
   const restoringAccount = checking || Boolean(user && resolvedAccount?.userId !== user.id);
-  const dashboardAccess = Boolean(user && account && (account.role !== 'patient' || account.profile_complete === true) && account.status === 'active');
+  const dashboardAccess = Boolean(user && account && (!['patient', 'driver'].includes(account.role) || account.profile_complete === true) && account.status === 'active');
   useEffect(() => {
     if (checking) return;
     if (dashboardAccess && account?.role === 'patient' && path === '/dashboard/profile') { navigate('/dashboard/account', true); return; }
@@ -231,7 +231,7 @@ export default function LoginPage() {
 
   return (
     <>
-      {dashboardAccess && account && !checking ? <Dashboard key={`${account.id}:${account.role}`} account={account} avatarUrl={typeof user?.user_metadata.avatar_url === 'string' ? user.user_metadata.avatar_url : typeof user?.user_metadata.picture === 'string' ? user.user_metadata.picture : undefined} path={path} onNavigate={navigate} onSignOut={() => void signOut()} signingOut={busy === 'signout'} notify={notify} onSessionExpired={expireSession} onPatientProfileMissing={onPatientProfileMissing} /> : <PageLayout restoring={restoringAccount} accountCreation={Boolean(user && !restoringAccount && (!account || (account.role === 'patient' && account.status === 'active' && account.profile_complete !== true)))}>
+      {dashboardAccess && account && !checking ? <Dashboard key={`${account.id}:${account.role}`} account={account} avatarUrl={typeof user?.user_metadata.avatar_url === 'string' ? user.user_metadata.avatar_url : typeof user?.user_metadata.picture === 'string' ? user.user_metadata.picture : undefined} path={path} onNavigate={navigate} onSignOut={() => void signOut()} signingOut={busy === 'signout'} notify={notify} onSessionExpired={expireSession} onPatientProfileMissing={onPatientProfileMissing} /> : <PageLayout restoring={restoringAccount} accountCreation={Boolean(user && !restoringAccount && (!account || (['patient', 'driver'].includes(account.role) && account.status === 'active' && account.profile_complete !== true)))}>
       <section className={`entry-card ${user ? 'entry-card-account' : ''}`} aria-busy={checking || Boolean(busy)} aria-label={user ? 'Your account' : 'Sign in'}>
         {checking || (!user && supabase && !backendReady) ? <div className="account-loading" role="status" aria-label={checking ? 'Checking sign-in' : 'Connecting to service'}><span className="account-spinner" aria-hidden="true" /><span>Loading...</span></div> : user ? (
           <AccountPanel key={user.id} email={user.email} onSignOut={() => void signOut()} onCancel={() => void signOut(true)} onSessionExpired={expireSession} signingOut={busy === 'signout'} onAccountResolved={onAccountResolved} onLoadingChange={setAccountLoading} onChangeGoogleAccount={changeGoogleAccount} initialDraft={signupDraft} />

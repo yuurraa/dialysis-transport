@@ -20,11 +20,11 @@ let filters = '';
 let equalities: Array<[string, unknown]> = [];
 let orders: Array<[string, boolean]> = [];
 let bounds: number[] = [];
-const record = { id, version: 1, full_name: 'Test Patient', phone: '81234567', pickup_address: 'Test address', mobility: 'wheelchair', assistance_required: true, status: 'active' };
+const record = { id, version: 1, full_name: 'Test Patient', birth_date: '1990-04-12', gender: 'female', phone: '81234567', pickup_address: 'Test address', mobility: 'wheelchair', assistance_required: true, status: 'active' };
 const gateway = { forUser: () => ({
   auth: { getUser: async (token: string) => token === 'invalid' ? { data: { user: null }, error: { status: 401 } } : { data: { user: { id, email_confirmed_at: '2026-01-01', identities: [{ provider: 'google' }] } }, error: null } },
   rpc: async (name: string, args?: { details: unknown }) => {
-    if (name === 'save_my_patient' || name === 'save_patient') { writes++; saved = args?.details; return { data: { ...record, ...(saved as object), account_id: id }, error: conflict ? { code: '40001' } : missing ? { code: 'P0002' } : null }; }
+    if (name === 'save_my_patient' || name === 'save_patient' || name === 'save_my_driver') { writes++; saved = args?.details; return { data: { ...record, ...(saved as object), account_id: id }, error: conflict ? { code: '40001' } : missing ? { code: 'P0002' } : null }; }
     return { data: { id, role, status }, error: null };
   },
   from: () => {
@@ -163,4 +163,28 @@ test('patient filters validate and constrain the query before pagination', async
   assert.deepEqual(equalities, [['status', ['active', 'inactive']], ['mobility', ['walking-aid', 'wheelchair']]]);
   assert.deepEqual(bounds, [0, 9]);
   for (const query of ['status=unknown', 'mobility=unknown', 'status=active&status=inactive', 'status=active,unknown', 'status=active,', 'status=', 'mobility=all,wheelchair', 'mobility=wheelchair,unknown', 'mobility=']) assert.equal((await request(`?${query}`)).status, 400);
+});
+
+
+test('driver personal profiles require their active driver account and reject privilege fields', async () => {
+  const personal = { full_name: 'Fixture Driver', phone: '+65 81234567', birth_date: '1990-04-12', gender: 'male' };
+  async function driverRequest(method = 'GET', body?: unknown) {
+    return fetch(`${origin}/api/profiles/driver`, { method, headers: { Authorization: 'Bearer valid', 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
+  }
+  for (const other of ['patient', 'caregiver', 'coordinator']) {
+    role = other;
+    assert.equal((await driverRequest()).status, 403);
+    assert.equal((await driverRequest('PATCH', personal)).status, 403);
+  }
+  role = 'driver'; status = 'inactive';
+  assert.equal((await driverRequest()).status, 403);
+  status = 'active';
+  assert.equal((await driverRequest()).status, 200);
+  assert.deepEqual(equalities, [['account_id', id]]);
+  for (const extra of [{ status: 'approved' }, { account_id: id }, { birth_date: '2999-01-01' }]) {
+    assert.equal((await driverRequest('PATCH', { ...personal, ...extra })).status, 400);
+  }
+  assert.equal((await driverRequest('PATCH', personal)).status, 200);
+  assert.deepEqual(saved, personal);
+  role = 'coordinator';
 });

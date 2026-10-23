@@ -1,10 +1,13 @@
 import { InfoButton, Overlay, PageHeading, ListToolbar, ListPagination, ChoiceGroup, SortOverlay, ListError, sortSummary } from '../components/DashboardUI';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { PersonalFields } from '../components/PersonalFields';
 import { ApiError, apiGet, apiRequest } from '../lib/api';
 
 export interface Patient {
   id: string;
   version: number;
+  birth_date?: string | null;
+  gender?: string | null;
   full_name: string;
   phone: string;
   pickup_address: string;
@@ -15,10 +18,10 @@ export interface Patient {
   assistance_required: boolean;
   status: 'active' | 'inactive';
 }
-type PatientInput = Omit<Patient, 'id' | 'version'>;
+type PatientInput = Omit<Patient, 'id' | 'version'> & { birth_date: string; gender: string };
 interface PatientList { patients: Patient[]; total: number; page: number; pageSize: number }
 export function patientDraft(patient?: Patient | null): PatientInput {
-  return { full_name: patient?.full_name ?? '', phone: patient?.phone ?? '', pickup_address: patient?.pickup_address ?? '', unit_no: patient?.unit_no ?? '', postal_code: patient?.postal_code ?? '', notes: patient?.notes ?? '', mobility: patient?.mobility ?? 'ambulant', assistance_required: patient?.assistance_required ?? false, status: patient?.status ?? 'active' };
+  return { birth_date: patient?.birth_date ?? '', gender: patient?.gender ?? '', full_name: patient?.full_name ?? '', phone: patient?.phone ?? '', pickup_address: patient?.pickup_address ?? '', unit_no: patient?.unit_no ?? '', postal_code: patient?.postal_code ?? '', notes: patient?.notes ?? '', mobility: patient?.mobility ?? 'ambulant', assistance_required: patient?.assistance_required ?? false, status: patient?.status ?? 'active' };
 }
 const patientColumns = [{ key: 'id', label: 'Patient ID' }, { key: 'full_name', label: 'Name' }, { key: 'phone', label: 'Contact' }, { key: 'mobility', label: 'Mobility' }, { key: 'status', label: 'Status' }] as const;
 const patientSortOptions = [{ value: 'created_at', label: 'Created date', ascending: 'Oldest first', descending: 'Newest first' }, ...patientColumns.map(column => ({ value: column.key, label: column.label,
@@ -179,8 +182,7 @@ export function PatientFields({ draft, onChange, disabled = false, showStatus = 
 }) {
   return (
       <fieldset className="patient-form-fields" disabled={disabled} aria-label="Patient details">
-        <div className="patient-field"><label className="patient-required" htmlFor="patient-full-name">Full name</label><input id="patient-full-name" disabled={personalDetailsReadOnly} required maxLength={100} value={draft.full_name} onChange={event => onChange({ ...draft, full_name: event.target.value })} autoComplete="off" /></div>
-        <div className="patient-field"><label className="patient-required" htmlFor="patient-phone">Contact number</label><input id="patient-phone" disabled={personalDetailsReadOnly} type="tel" required maxLength={17} pattern={String.raw`(?:[0-9]{8}|\+65 [0-9]{8}|\+(?!65 )[1-9][0-9]{0,2} [0-9]{6,14})`} title="Enter 8 digits, or a country code and number, e.g. +65 81234567." placeholder="e.g. +65 81234567" value={draft.phone} onChange={event => onChange({ ...draft, phone: event.target.value })} autoComplete="tel" /></div>
+        <PersonalFields prefix="patient" draft={draft} disabled={personalDetailsReadOnly} onChange={personal => onChange({ ...draft, ...personal })} />
         <div className="patient-field patient-form-wide"><label className="patient-required" htmlFor="patient-address">Street</label><input id="patient-address" disabled={personalDetailsReadOnly} required maxLength={300} value={draft.pickup_address} onChange={event => onChange({ ...draft, pickup_address: event.target.value })} autoComplete="off" /></div>
         <div className="patient-field"><label htmlFor="patient-unit">Unit no.</label><input id="patient-unit" disabled={personalDetailsReadOnly} maxLength={20} placeholder="e.g. #05-12 (optional)" value={draft.unit_no} onChange={event => onChange({ ...draft, unit_no: event.target.value })} autoComplete="off" /></div>
         <div className="patient-field"><label className="patient-required" htmlFor="patient-postal">Postal code</label><input id="patient-postal" disabled={personalDetailsReadOnly} required inputMode="numeric" pattern="[0-9]{6}" maxLength={6} autoComplete="off" value={draft.postal_code} onChange={event => onChange({ ...draft, postal_code: event.target.value })} /></div>

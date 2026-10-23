@@ -5,7 +5,7 @@ import { ApiError, apiGet, apiRequest } from '../lib/api';
 interface Trip {
   id: string; version: number; patient_id: string; patient_name: string; source_schedule_id: string; session_date: string;
   direction: 'outbound' | 'return'; origin: string; destination: string; treatment_start: string; treatment_end: string;
-  arrival_by: string | null; pickup_not_before: string | null; pickup_at: string | null; review_required: boolean; status: string;
+  arrival_by: string | null; pickup_not_before: string | null; pickup_at: string | null; status: string;
 }
 interface TripsData { trips: Trip[]; total: number; page: number; pageSize: number; counts: Record<string, number>; next_trip: Trip | null }
 const categories = [{ key: 'unfilled', label: 'Unfilled' }, { key: 'at-risk', label: 'At-Risk' }, { key: 'on-track', label: 'On-Track' }, { key: 'resolved', label: 'Resolved' }];
@@ -57,7 +57,7 @@ function JourneyDetails({ trip }: { trip: Trip }) {
     <dl className="trip-detail-timings"><div><dt>Treatment</dt><dd>{tripTime(trip.treatment_start)} - {tripTime(trip.treatment_end)}</dd></div>
       {trip.arrival_by && <div><dt>Arrival by</dt><dd>{tripTime(trip.arrival_by)}</dd></div>}
       {trip.pickup_not_before && <div><dt>Earliest return pickup</dt><dd>{tripTime(trip.pickup_not_before)}</dd></div>}
-    </dl>{trip.review_required && <p className="trip-detail-review">Treatment requirements changed; timings need review.</p>}</div>;
+    </dl></div>;
 
 }
 
@@ -144,7 +144,7 @@ export default function TripsPage({ coordinator, onSessionExpired }: { coordinat
   const pending = loading || search.trim() !== filters.search;
   return <div className="trips-workspace">
     {!coordinator && <section className="dashboard-trips patient-next-pickup trip-next-summary" aria-labelledby="patient-pickup-title"><h2 id="patient-pickup-title">Next pickup</h2>
-      {next ? <><div className="trip-next-reading"><strong>{tripDate(next.treatment_start)} · {next.direction === 'outbound' ? 'Outbound' : 'Return'}</strong><span className={next.pickup_at ? 'trip-next-confirmed' : 'trip-next-note'}>{next.pickup_at ? `Pickup at ${tripTime(next.pickup_at)}` : 'Pickup time to be confirmed'}</span>{next.review_required && <span className="dashboard-access trip-review-badge">Needs review</span>}</div><InfoButton label="View details" onClick={() => setDetails(next)} /></> : <p className="patient-overview-note">{loading ? 'Loading pickup details…' : error ? 'Your pickup details are currently unavailable.' : 'Your next journey will appear once transport is generated.'}</p>}
+      {next ? <><div className="trip-next-reading"><strong>{tripDate(next.treatment_start)} · {next.direction === 'outbound' ? 'Outbound' : 'Return'}</strong><span className={next.pickup_at ? 'trip-next-confirmed' : 'trip-next-note'}>{next.pickup_at ? `Pickup at ${tripTime(next.pickup_at)}` : 'Pickup time to be confirmed'}</span></div><InfoButton label="View details" onClick={() => setDetails(next)} /></> : <p className="patient-overview-note">{loading ? 'Loading pickup details…' : error ? 'Your pickup details are currently unavailable.' : 'Your next journey will appear once transport is generated.'}</p>}
     </section>}
     <section className="dashboard-trips page-panel trips-panel" aria-labelledby="trips-title" aria-busy={loading}>
       <PageHeading id="trips-title" title={coordinator ? selected ? `${selected.label} trips` : filters.from === singaporeToday() && filters.until === filters.from ? "Today's trips" : 'Trip List' : 'Your rides'} eyebrow={coordinator ? 'Trip management' : 'Upcoming transport'} level={2}
@@ -155,7 +155,6 @@ export default function TripsPage({ coordinator, onSessionExpired }: { coordinat
             <h3 className="trip-record-title"><span>{tripDate(trip.treatment_start)}</span><span className="trip-direction-status"><span>{trip.direction === 'outbound' ? 'Outbound' : 'Return'}</span><TripStatus status={trip.status} /></span></h3>
             {coordinator && <p className="trip-patient-identity">{trip.patient_name}</p>}
             <MobileTripTiming trip={trip} />
-            {trip.review_required && <div className="trip-record-status"><span className="dashboard-access trip-review-badge">Needs review</span></div>}
           </div>
           <div className="trip-route">
             <div className="trip-stop"><div className="trip-stop-heading"><strong>From:</strong></div><p><RouteAddress address={trip.origin} /></p></div>

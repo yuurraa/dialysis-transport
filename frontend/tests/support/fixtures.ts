@@ -47,9 +47,10 @@ export async function seedSession(page: Page, expired = false) {
 async function advanceSignup(page: Page) {
   const role = await page.getByLabel('Role').inputValue();
   await page.getByRole('button', { name: 'Next', exact: true }).click();
-  if (role === 'patient') {
+  if (role === 'patient' || role === 'driver') {
     await page.getByLabel('Full name', { exact: true }).fill('Test Patient');
     await page.getByLabel('Contact number', { exact: true }).fill('+65 81234567');
+    if (role === 'driver') return;
     await page.getByLabel('Street', { exact: true }).fill('Test street');
     await page.getByLabel('Postal code', { exact: true }).fill('560123');
   }
@@ -57,6 +58,10 @@ async function advanceSignup(page: Page) {
 
 export async function submitSignup(page: Page) {
   if (await page.getByRole('button', { name: 'Next', exact: true }).isVisible()) await advanceSignup(page);
+  const birthDate = page.getByLabel('Date of birth', { exact: true });
+  if (await birthDate.count() && !(await birthDate.inputValue())) await birthDate.fill('1990-04-12');
+  const gender = page.getByLabel('Gender', { exact: true });
+  if (await gender.count() && !(await gender.inputValue())) await chooseOption(gender, 'female');
   await page.getByRole('button', { name: 'Sign Up', exact: true }).click();
 }
 
@@ -76,7 +81,7 @@ export async function expectHeaderContext(page: Page) {
 // API/Auth boundaries use fixtures; React runs unchanged and unexpected Auth traffic is denied.
 export async function mockServices({ page }: { page: Page }) {
   await page.route('**/api/trips?*', route => route.fulfill({ status: 503, json: {} }));
-  await page.route('**/api/profiles/patient', route => route.fulfill({ json: { patient: { id: session.user.id, full_name: 'Test Patient', phone: '+65 81234567', pickup_address: 'Test street', unit_no: '', postal_code: '560123', notes: '', mobility: 'ambulant', assistance_required: false, status: 'active' } } }));
+  await page.route('**/api/profiles/patient', route => route.fulfill({ json: { patient: { id: session.user.id, full_name: 'Test Patient', birth_date: '1990-04-12', gender: 'female', phone: '+65 81234567', pickup_address: 'Test street', unit_no: '', postal_code: '560123', notes: '', mobility: 'ambulant', assistance_required: false, status: 'active' } } }));
   await page.route('**/api/auth/me', route => route.fulfill({ json: { id: session.user.id, email: session.user.email, account: null } }));
   await page.route('**/api/health', route => route.fulfill({ json: { status: 'ok' } }));
   // Unhandled fixture-host traffic is denied, never sent to the real shared project.

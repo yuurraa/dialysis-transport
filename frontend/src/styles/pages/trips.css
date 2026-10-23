@@ -349,16 +349,6 @@
   overflow-wrap: anywhere;
 }
 
-.trip-detail-review {
-  margin: 0;
-  padding: 12px 16px;
-  border-left: 3px solid var(--ui-warning);
-  background: var(--ui-warning-surface);
-  color: var(--ui-warning);
-  font-size: .875rem;
-  line-height: 1.6;
-}
-
 @media (max-width: 480px) {
   .trip-detail-timings {
     grid-template-columns: minmax(0, 1fr);
@@ -411,12 +401,6 @@
   .patient-overview-top {
     grid-template-columns: minmax(0, 1fr);
   }
-}
-
-.dashboard-access.trip-review-badge {
-  color: var(--ui-warning);
-  background: var(--ui-warning-surface);
-  border-color: var(--ui-warning);
 }
 
 .trip-key-times, .trip-next-reading, .trip-detail-timings, .patient-pickup-time {
@@ -481,10 +465,6 @@
 
 .trip-next-reading strong {
   font-size: 1.25rem;
-}
-
-.trip-detail-review {
-  border-radius: 4px;
 }
 
 @media (max-width: 760px) {
@@ -576,13 +556,6 @@
     grid-column: 2;
     grid-row: 1 / span 2;
   }
-}
-
-.dashboard-access.trip-review-badge {
-  padding: 4px 8px;
-  border: 0;
-  border-left: 3px solid var(--ui-warning);
-  border-radius: 0;
 }
 
 .trip-next-summary {
@@ -999,12 +972,6 @@
     line-height: 1.5;
     padding: 3px 8px;
     border-radius: 5px;
-  }
-
-  .trips-panel .trip-review-badge {
-    font-size: 1rem;
-    line-height: 24px;
-    padding-block: 0;
   }
 
   .trips-panel .trip-record-heading .trip-patient-identity {

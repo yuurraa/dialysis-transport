@@ -10,7 +10,7 @@ test('patient profile failures preserve input and inactive profiles stay read-on
   await page.route('**/api/profiles/patient', route => {
     if (route.request().method() === 'PATCH') { saves++; return route.fulfill({ status: 503, json: { message: 'Unavailable' } }); }
     if (mode === 'unavailable') return route.fulfill({ status: 503, json: { message: 'Unavailable' } });
-    return route.fulfill({ json: { patient: { id: session.user.id, full_name: 'Test Patient', phone: '81234567', pickup_address: 'Test address', mobility: 'ambulant', assistance_required: false, status: mode === 'inactive' ? 'inactive' : 'active' } } });
+    return route.fulfill({ json: { patient: { id: session.user.id, full_name: 'Test Patient', birth_date: '1990-04-12', gender: 'female', phone: '81234567', pickup_address: 'Test address', mobility: 'ambulant', assistance_required: false, status: mode === 'inactive' ? 'inactive' : 'active' } } });
   });
   await page.goto('/dashboard/account');
   await expect(page.getByRole('alert')).toContainText('Your profile could not be loaded.');
@@ -36,7 +36,7 @@ test('patient profile failures preserve input and inactive profiles stay read-on
 test("patient profile conflicts preserve the draft until the latest details are reloaded", async ({ page }) => {
   await seedSession(page);
   await page.route('**/api/auth/me', route => route.fulfill({ json: { account: { ...activeAccount, role: "patient", profile_complete: true } } }));
-  let patient = { id: '11111111-1111-4111-8111-111111111111', version: 3, full_name: 'Fixture Patient', phone: '+65 81234567', pickup_address: 'Fixture street', unit_no: '', postal_code: '560123', notes: 'Original notes', mobility: 'ambulant', assistance_required: false, status: 'active' };
+  let patient = { id: '11111111-1111-4111-8111-111111111111', version: 3, full_name: 'Fixture Patient', birth_date: '1990-04-12', gender: 'female', phone: '+65 81234567', pickup_address: 'Fixture street', unit_no: '', postal_code: '560123', notes: 'Original notes', mobility: 'ambulant', assistance_required: false, status: 'active' };
   await page.route('**/api/profiles/patient**', route => {
     if (route.request().method() === 'GET')
       return route.fulfill({ json: { patient } });
@@ -62,7 +62,7 @@ test("patient edits their profile in place, discards drafts and saves once", asy
   await page.route('**/api/auth/me', route => route.fulfill({ json: { account: activeAccount } }));
   let saves = 0;
   let releaseSave: (() => void) | undefined;
-  const patient = { id: session.user.id, version: 1, full_name: 'Fixture Patient', phone: '+65 81234567', pickup_address: 'Fixture Street', unit_no: '', postal_code: '560123', notes: '', mobility: 'ambulant', assistance_required: false, status: 'active' };
+  const patient = { id: session.user.id, version: 1, full_name: 'Fixture Patient', birth_date: '1990-04-12', gender: 'female', phone: '+65 81234567', pickup_address: 'Fixture Street', unit_no: '', postal_code: '560123', notes: '', mobility: 'ambulant', assistance_required: false, status: 'active' };
   await page.route('**/api/profiles/patient', async (route) => {
     if (route.request().method() === 'GET')
       return route.fulfill({ json: { patient } });

@@ -5,7 +5,7 @@ test.beforeEach(mockServices);
 test('coordinator reads patient details but persists only Status and Notes', async ({ page }) => {
   await seedSession(page);
   await page.route('**/api/auth/me', route => route.fulfill({ json: { account: { ...activeAccount, role: 'coordinator' } } }));
-  let patient = { id: session.user.id, full_name: 'Test Patient', phone: '+65 81234567', pickup_address: 'Test pickup address', postal_code: '560123', unit_no: '#05-12', notes: '', mobility: 'wheelchair', assistance_required: true, status: 'active' };
+  let patient = { id: session.user.id, full_name: 'Test Patient', birth_date: '1990-04-12', gender: 'female', phone: '+65 81234567', pickup_address: 'Test pickup address', postal_code: '560123', unit_no: '#05-12', notes: '', mobility: 'wheelchair', assistance_required: true, status: 'active' };
   let writes = 0;
   await page.route('**/api/profiles/patients**', async route => {
     if (route.request().method() === 'GET') return route.fulfill({ json: { patients: [patient], total: 1, page: 1, pageSize: 10 } });
@@ -59,7 +59,7 @@ test('patient list retries failed loads and preserves edits after a failed save'
   await page.route('**/api/auth/me', route => route.fulfill({ json: { account: { ...activeAccount, role: 'coordinator' } } }));
   let available = false;
   await page.route('**/api/profiles/patients**', route => route.fulfill(available && route.request().method() === 'GET'
-    ? { json: { patients: [{ id: session.user.id, full_name: 'Test Patient', phone: '+65 81234567', pickup_address: 'Test address', postal_code: '560123', unit_no: '', notes: '', mobility: 'ambulant', assistance_required: false, status: 'active' }], total: 1, page: 1, pageSize: 10 } }
+    ? { json: { patients: [{ id: session.user.id, full_name: 'Test Patient', birth_date: '1990-04-12', gender: 'female', phone: '+65 81234567', pickup_address: 'Test address', postal_code: '560123', unit_no: '', notes: '', mobility: 'ambulant', assistance_required: false, status: 'active' }], total: 1, page: 1, pageSize: 10 } }
     : { status: 503, json: { message: 'Unavailable' } }));
   await page.goto('/dashboard/patients');
   await expect(page.getByRole('alert')).toContainText('Patients could not be loaded');
@@ -134,7 +134,7 @@ test('patient search and sorting reset pagination and handle empty results', asy
 test("coordinator patient edits preserve the draft after a version conflict", async ({ page }) => {
   await seedSession(page);
   await page.route('**/api/auth/me', route => route.fulfill({ json: { account: { ...activeAccount, role: "coordinator", profile_complete: true } } }));
-  let patient = { id: '11111111-1111-4111-8111-111111111111', version: 3, full_name: 'Fixture Patient', phone: '+65 81234567', pickup_address: 'Fixture street', unit_no: '', postal_code: '560123', notes: 'Original notes', mobility: 'ambulant', assistance_required: false, status: 'active' };
+  let patient = { id: '11111111-1111-4111-8111-111111111111', version: 3, full_name: 'Fixture Patient', birth_date: '1990-04-12', gender: 'female', phone: '+65 81234567', pickup_address: 'Fixture street', unit_no: '', postal_code: '560123', notes: 'Original notes', mobility: 'ambulant', assistance_required: false, status: 'active' };
   await page.route('**/api/profiles/patient**', route => {
     if (route.request().method() === 'GET')
       return route.fulfill({ json: { patients: [patient], total: 1, page: 1, pageSize: 10 } });
