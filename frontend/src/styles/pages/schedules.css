@@ -686,3 +686,13 @@
   .treatment-summary-coordinator > .treatment-session { grid-column: 1 / -1; grid-row: 3; margin-top: 6px; }
   .treatment-summary-coordinator > .treatment-location { grid-column: 1 / -1; grid-row: 4; }
 }
+
+.generation-automatic { margin: 16px 0; }
+.generation-auto-toggle { display: flex; align-items: center; justify-content: flex-start; gap: 8px; min-height: 44px; font-size: .875rem; font-weight: 600; cursor: pointer; }
+.generation-auto-toggle input { width: 20px; height: 20px; min-height: 20px; margin: 0; accent-color: var(--ui-accent); }
+.generation-automatic .treatment-hint { margin: 4px 0 0; }
+.generation-auto-error { color: var(--ui-danger); font-size: .8125rem; margin: 8px 0 0; }
+
+.generation-auto-row { display: flex; align-items: center; gap: 12px; min-height: 44px; }
+
+.dashboard-dialog .generation-auto-row .generation-auto-save { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 20px; width: 20px; height: 20px; min-width: 20px; min-height: 20px; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--ui-accent); }

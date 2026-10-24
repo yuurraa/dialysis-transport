@@ -61,9 +61,9 @@
 
 /* The live marker is visual only and never intercepts slot selection. */
 .availability-today .availability-day-heading { background: color-mix(in srgb, var(--ui-accent) 18%, var(--ui-surface)); color: var(--ui-text); font-weight: 700; gap: 6px; }
-.availability-now-marker { position: absolute; left: 68px; right: 0; height: 0; z-index: 2; pointer-events: none; }
-.availability-now-line { position: absolute; left: 0; right: 0; top: -1px; border-top: 2px solid var(--ui-accent); }
-.availability-now-marker::before, .availability-now-marker::after { content: ''; position: absolute; top: -6px; border-top: 6px solid transparent; border-bottom: 6px solid transparent; }
+.availability-now-marker { position: absolute; left: 68px; right: 0; height: 2px; transform: translateY(-1px); z-index: 2; pointer-events: none; }
+.availability-now-line { position: absolute; left: 0; right: 0; top: 0; border-top: 2px solid var(--ui-accent); }
+.availability-now-marker::before, .availability-now-marker::after { content: ''; position: absolute; top: -5px; border-top: 6px solid transparent; border-bottom: 6px solid transparent; }
 .availability-now-marker::before { left: 0; border-left: 8px solid var(--ui-accent); }
 .availability-now-marker::after { right: 0; border-right: 8px solid var(--ui-accent); }
 

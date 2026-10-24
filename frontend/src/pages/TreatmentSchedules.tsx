@@ -7,7 +7,8 @@ import { addDays, singaporeToday } from './TripsPage';
 interface Centre { id: string; name: string; address: string; postal_code: string }
 interface Details { kind: 'recurring' | 'single'; centre_id: string; days: number[]; start_time: string; end_time: string; effective_from: string; effective_to: string }
 interface TripCoverage { generated_ranges?: { from_date: string; until_date: string }[]; status: 'not_generated' | 'partial' | 'generated' | 'none' | 'unavailable'; through: string | null; window_start?: string; window_end?: string; expected_sessions?: number; generated_sessions?: number }
-interface Schedule extends Omit<Details, 'kind'> { trip_generation?: TripCoverage; kind?: 'recurring' | 'single'; id: string; version: number; patient_id: string; patients: { full_name: string }; replaces_schedule_id?: string | null; replaces_date?: string | null }
+interface AutoGeneration { enabled: boolean; version: number; last_run_at?: string | null; last_error?: string | null }
+interface Schedule extends Omit<Details, 'kind'> { auto_generation?: AutoGeneration; trip_generation?: TripCoverage; kind?: 'recurring' | 'single'; id: string; version: number; patient_id: string; patients: { full_name: string }; replaces_schedule_id?: string | null; replaces_date?: string | null }
 interface Data { centres: Centre[]; schedules: Schedule[]; context: Schedule[]; total: number; page: number; pageSize: number }
 const scheduleIcon = <span className="dashboard-data-status-icon" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="5" width="16" height="16" rx="3" /><path d="M8 3v4m8-4v4M4 11h16m-10 4 4 4m0-4-4 4" /></svg></span>;
 const scheduleSortOptions = [{ value: 'effective_from', label: 'Start date', ascending: 'Earliest first', descending: 'Latest first' }, { value: 'start_time', label: 'Treatment time', ascending: 'Earliest time first', descending: 'Latest time first' }, { value: 'patient_name', label: 'Patient name' }, { value: 'centre_name', label: 'Dialysis centre' }, { value: 'kind', label: 'Schedule type', ascending: 'Recurring → Rescheduled → Single Session', descending: 'Single Session → Rescheduled → Recurring' }];
@@ -46,8 +47,11 @@ export default function TreatmentSchedules({ coordinator, notify, onSessionExpir
   const [generatingSchedule, setGeneratingSchedule] = useState<Schedule | null>(null);
   const [generationDates, setGenerationDates] = useState({ from: '', until: '' });
   const [generating, setGenerating] = useState(false);
+  const [savingAutoGeneration, setSavingAutoGeneration] = useState(false);
+  const quietReload = useRef(false);
   const [generationError, setGenerationError] = useState('');
   const [generationConflict, setGenerationConflict] = useState(false);
+  const [autoGenerationDraft, setAutoGenerationDraft] = useState(false);
   const [filters, setFilters] = useState({ page: 1, search: '', kind: 'all', centre: 'all', sort: 'effective_from', order: 'asc' });
   const [sorting, setSorting] = useState(false);
   const [filterDraft, setFilterDraft] = useState<{ kind: string; centre: string } | null>(null);
@@ -115,9 +119,12 @@ export default function TreatmentSchedules({ coordinator, notify, onSessionExpir
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
   useEffect(() => {
     let active = true;
-    setLoading(true); setError('');
-    apiGet<Data>(`/schedules?${new URLSearchParams({...filters,page:String(filters.page)})}`).then(result => { if (active) setData(result); })
-      .catch(reason => { if (active) { if (reason instanceof ApiError && reason.status === 401) onSessionExpired(); setError('Treatment schedules could not be loaded. Please try again.'); } })
+    const quiet = quietReload.current;
+    quietReload.current = false;
+    if (!quiet) setLoading(true);
+    setError('');
+    apiGet<Data>(`/schedules?${new URLSearchParams({...filters,page:String(filters.page)})}`).then(result => { if (active) { setData(result); setGeneratingSchedule(current => current ? result.schedules.find(schedule => schedule.id === current.id) ?? current : null); } })
+      .catch(reason => { if (active) { if (reason instanceof ApiError && reason.status === 401) onSessionExpired(); if (quiet) { setGenerationError('Setting saved, but trip coverage could not be refreshed. Reload schedules to try again.'); setGenerationConflict(true); } else setError('Treatment schedules could not be loaded. Please try again.'); } })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [reload, onSessionExpired, filters]);
@@ -177,28 +184,53 @@ export default function TreatmentSchedules({ coordinator, notify, onSessionExpir
   function openGeneration(schedule: Schedule) {
     const from = schedule.effective_from > singaporeToday() ? schedule.effective_from : singaporeToday();
     setGeneratingSchedule(schedule); setGenerationError(''); setGenerationConflict(false);
-    const until = schedule.kind === 'single' ? from : schedule.effective_to >= from && schedule.effective_to < addDays(from, 30) ? schedule.effective_to : addDays(from, 30);
+    setAutoGenerationDraft(schedule.auto_generation?.enabled ?? false);
+    const until = schedule.kind === 'single' ? from : schedule.effective_to >= from && schedule.effective_to < addDays(from, 29) ? schedule.effective_to : addDays(from, 29);
     setGenerationDates({ from, until });
   }
   async function reloadGeneration() {
-    if (!generatingSchedule || generating) return;
+    if (!generatingSchedule || generating || savingAutoGeneration) return;
     setGenerating(true);
     try {
       const result = await apiGet<Data>(`/schedules?${new URLSearchParams({ ...filters, page: String(filters.page) })}`);
       if (!alive.current) return;
       setData(result);
       const latest = [...result.schedules, ...(result.context ?? [])].find(schedule => schedule.id === generatingSchedule.id);
-      if (!latest) { setGenerationError('This schedule is no longer available. Cancel and choose another schedule.'); return; }
-      setGeneratingSchedule(latest); setGenerationConflict(false); setGenerationError('');
+      if (!latest) { setGenerationError('This schedule is no longer available. Close and choose another schedule.'); return; }
+      setGeneratingSchedule(latest); setAutoGenerationDraft(latest.auto_generation?.enabled ?? false); setGenerationConflict(false); setGenerationError('');
     } catch (reason) {
       if (!alive.current) return;
       if (reason instanceof ApiError && reason.status === 401) onSessionExpired();
       setGenerationError('Schedules could not be reloaded. Please try again.');
     } finally { if (alive.current) setGenerating(false); }
   }
+  async function saveAutoGeneration() {
+    if (!generatingSchedule || generating || savingAutoGeneration || generationConflict) return;
+    const enabled = autoGenerationDraft;
+    setSavingAutoGeneration(true); setGenerationError('');
+    try {
+      const setting = await apiRequest<AutoGeneration>(`/schedules/${generatingSchedule.id}/auto-generation`, 'PATCH', {
+        enabled, version: generatingSchedule.version, setting_version: generatingSchedule.auto_generation?.version ?? 0,
+      });
+      if (!alive.current) return;
+      setGeneratingSchedule(current => current && ({ ...current, auto_generation: setting }));
+      setAutoGenerationDraft(setting.enabled);
+      setData(current => current && ({ ...current, schedules: current.schedules.map(schedule =>
+        schedule.id === generatingSchedule.id || schedule.replaces_schedule_id === generatingSchedule.id ? { ...schedule, auto_generation: setting } : schedule) }));
+      quietReload.current = true;
+      setReload(value => value + 1);
+      notify(enabled ? 'Automatic trip generation enabled.' : 'Automatic trip generation disabled. Existing trips kept.');
+    } catch (reason) {
+      if (!alive.current) return;
+      if (reason instanceof ApiError && reason.status === 401) onSessionExpired();
+      if (reason instanceof ApiError && [404, 409].includes(reason.status)) {
+        setGenerationConflict(true); setGenerationError('This schedule or setting changed. Reload schedules before trying again.');
+      } else setGenerationError('Automatic generation could not be updated. Please try again.');
+    } finally { if (alive.current) setSavingAutoGeneration(false); }
+  }
   async function generateTrips(event: FormEvent) {
     event.preventDefault();
-    if (!generatingSchedule || generating || generationConflict) return;
+    if (!generatingSchedule || generating || savingAutoGeneration || generationConflict) return;
     const { from, until } = generationDates;
     if (!supportedDate(from) || !supportedDate(until) || from < singaporeToday() || until < from || until > addDays(from, 89)) { setGenerationError('Choose dates from today within a maximum of 90 days.'); return; }
     setGenerating(true); setGenerationError('');
@@ -254,13 +286,20 @@ export default function TreatmentSchedules({ coordinator, notify, onSessionExpir
         {viewingSchedule.replaces_date && <div><dt>Rescheduled from</dt><dd>{formatDate(viewingSchedule.replaces_date)}</dd></div>}
       </dl>
     </Overlay>}
-    {generatingSchedule && coordinator && <Overlay title="Generate Trips" description="Create outbound and return trips." className="trip-generation-dialog" busy={generating} onClose={() => setGeneratingSchedule(null)} onSubmit={generateTrips} noValidate error={generationError} onDismissError={() => setGenerationError('')}
-      footer={<><button className="patient-primary" type={generationConflict ? 'button' : 'submit'} disabled={generating} onClick={generationConflict ? () => void reloadGeneration() : undefined}>{generating ? 'Loading…' : generationConflict ? 'Reload schedules' : 'Generate Trips'}</button><button type="button" disabled={generating} onClick={() => setGeneratingSchedule(null)}>Cancel</button></>}>
+    {generatingSchedule && coordinator && <Overlay title="Generate Trips" description="Create outbound and return trips." className="trip-generation-dialog" busy={generating || savingAutoGeneration} onClose={() => setGeneratingSchedule(null)} onSubmit={generateTrips} noValidate error={generationError} onDismissError={() => setGenerationError('')}
+      footer={<><button className="patient-primary" type={generationConflict ? 'button' : 'submit'} disabled={generating || savingAutoGeneration} onClick={generationConflict ? () => void reloadGeneration() : undefined}>{generating ? 'Loading…' : generationConflict ? 'Reload schedules' : 'Generate Trips'}</button><button type="button" disabled={generating || savingAutoGeneration} onClick={() => setGeneratingSchedule(null)}>Close</button></>}>
       <section className="generation-summary" aria-label="Treatment schedule">
         <div className="generation-patient"><h3>{generatingSchedule.patients.full_name}</h3><span className={`generation-kind generation-kind-${generatingSchedule.replaces_schedule_id ? 'rescheduled' : generatingSchedule.kind ?? 'recurring'}`}>{generatingSchedule.replaces_schedule_id ? 'Rescheduled' : generatingSchedule.kind === 'single' ? 'Single Session' : 'Recurring'}</span></div>
         <p className="generation-patient-id">Patient ID: {generatingSchedule.patient_id}</p>
         <p className="generation-session">{generatingSchedule.kind === 'single' ? formatDayDate(generatingSchedule.effective_from) : `Every ${generatingSchedule.days.map(day => weekdays[day-1]).join(', ')}`} · {generatingSchedule.start_time.slice(0,5)}–{generatingSchedule.end_time.slice(0,5)}</p>
         <dl><div><dt>Dialysis centre</dt><dd>{data?.centres.find(centre => centre.id === generatingSchedule.centre_id)?.name}</dd></div></dl>
+      </section>
+      <section className="generation-automatic" aria-label="Automatic trip generation">
+        {generatingSchedule.replaces_schedule_id ? <p className="treatment-hint">Automatic generation is managed by the original recurring schedule.</p>
+          : <div className="generation-auto-row"><label className="generation-auto-toggle"><span>Auto-generate trips</span><input type="checkbox" role="switch" checked={autoGenerationDraft} disabled={generating || savingAutoGeneration || generationConflict} onChange={event => setAutoGenerationDraft(event.target.checked)} /></label>
+            {autoGenerationDraft !== (generatingSchedule.auto_generation?.enabled ?? false) && <button className="generation-auto-save" type="button" aria-label="Save" title="Save automatic generation setting" aria-busy={savingAutoGeneration} disabled={generating || savingAutoGeneration || generationConflict} onClick={() => void saveAutoGeneration()}><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h12l4 4v12a2 2 0 0 1-2 2Z" /><path d="M7 3v6h10V3M7 21v-8h10v8" /></svg></button>}
+          </div>}
+        {generatingSchedule.auto_generation?.last_error && <p className="generation-auto-error" role="status">The last automatic run failed. Switch off and on to retry.</p>}
       </section>
       <GeneratedCoverage coverage={generatingSchedule.trip_generation} />
       <fieldset className="patient-form-fields trip-generation-dates" disabled={generating}><div className="patient-field"><label htmlFor="generation-from">From date</label><input id="generation-from" type="date" min={singaporeToday()} max={generationDates.until} value={generationDates.from} onChange={event => setGenerationDates(current => ({ ...current, from: event.target.value }))} /></div><div className="patient-field"><label htmlFor="generation-until">Until date</label><input id="generation-until" type="date" min={generationDates.from} max={supportedDate(generationDates.from) ? addDays(generationDates.from, 89) : undefined} value={generationDates.until} onChange={event => setGenerationDates(current => ({ ...current, until: event.target.value }))} /></div></fieldset>

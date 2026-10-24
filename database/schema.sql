@@ -802,6 +802,35 @@ drop policy if exists treatment_update on public.treatment_schedules;
 create policy treatment_update on public.treatment_schedules for update to authenticated
   using (private.owns_active_patient(patient_id)) with check (private.owns_active_patient(patient_id));
 
+-- Generation preferences are coordinator-owned, separate from patient treatment versions.
+create table if not exists public.treatment_trip_generation (
+  schedule_id uuid primary key references public.treatment_schedules(id) on delete cascade,
+  enabled boolean not null default false,
+  version integer not null default 1 check (version>0),
+  enabled_by uuid not null references public.accounts(id) on delete restrict,
+  updated_at timestamptz not null default now(),
+  last_run_at timestamptz,
+  last_error text
+);
+alter table public.treatment_trip_generation enable row level security;
+revoke all on public.treatment_trip_generation from public,anon,authenticated;
+grant select on public.treatment_trip_generation to authenticated;
+drop policy if exists treatment_generation_read on public.treatment_trip_generation;
+create policy treatment_generation_read on public.treatment_trip_generation for select to authenticated
+  using (private.is_coordinator());
+create or replace function private.treatment_auto_generation(target uuid) returns jsonb
+language plpgsql stable security invoker set search_path='' as $$
+declare result jsonb;
+begin
+  if not private.is_coordinator() then raise exception 'Coordinator access required.' using errcode='42501'; end if;
+  select jsonb_build_object('enabled',g.enabled,'version',g.version,'last_run_at',g.last_run_at,'last_error',g.last_error)
+    into result from public.treatment_trip_generation g where g.schedule_id=target;
+  return coalesce(result,jsonb_build_object('enabled',false,'version',0,'last_run_at',null,'last_error',null));
+end;
+$$;
+revoke all on function private.treatment_auto_generation(uuid) from public,anon;
+grant execute on function private.treatment_auto_generation(uuid) to authenticated;
+
 -- Lock before the statement touches any schedule rows, including direct Data API
 -- updates. Saves and deletion therefore always acquire Patient -> Schedule locks.
 create or replace function private.lock_treatment_patient() returns trigger
@@ -995,7 +1024,7 @@ begin
   ), parents as (select id from page union select replaces_schedule_id from page where replaces_schedule_id is not null)
   select jsonb_build_object(
     'centres',(select coalesce(jsonb_agg(to_jsonb(c) order by name,id),'[]'::jsonb) from public.dialysis_centres c),
-    'schedules',(select coalesce(jsonb_agg((to_jsonb(p)-'centre_name'-'list_order') || case when private.is_coordinator() then jsonb_build_object('trip_generation',private.treatment_trip_coverage(p.id)) else '{}'::jsonb end order by list_order),'[]'::jsonb) from page p),
+    'schedules',(select coalesce(jsonb_agg((to_jsonb(p)-'centre_name'-'list_order') || case when private.is_coordinator() then jsonb_build_object('trip_generation',private.treatment_trip_coverage(p.id),'auto_generation',private.treatment_auto_generation(coalesce(p.replaces_schedule_id,p.id))) else '{}'::jsonb end order by list_order),'[]'::jsonb) from page p),
     'context',(select coalesce(jsonb_agg(to_jsonb(s)-'centre_name' order by effective_from,id),'[]'::jsonb) from visible s where s.id in (select id from parents) or s.replaces_schedule_id in (select id from parents)),
     'total',(select count(*) from matched),'page',page_no,'pageSize',10) into result;
   return result;
@@ -1104,14 +1133,13 @@ create trigger treatment_trip_review after insert or update or delete on public.
 drop trigger if exists patient_trip_review on public.patients;
 create trigger patient_trip_review after update on public.patients for each row execute function private.flag_trip_review();
 
-create or replace function private.generate_treatment_trips(target uuid,from_date date,until_date date,expected_version integer) returns jsonb
+create or replace function private.generate_treatment_trips_internal(target uuid,from_date date,until_date date,expected_version integer,actor uuid,restore_deleted boolean) returns jsonb
 language plpgsql security definer set search_path = '' as $$
 declare chosen public.treatment_schedules; person public.patients; old_trip public.trips; saved public.trips;
-  session record; leg text; actor uuid; source_root uuid; key text; origin_text text; destination_text text;
+  session record; leg text; source_root uuid; key text; origin_text text; destination_text text;
   session_start timestamptz; session_end timestamptz; due timestamptz; ready timestamptz;
   inserted integer:=0; refreshed integer:=0; unchanged integer:=0; skipped integer:=0;
 begin
-  if not private.is_coordinator() then raise exception 'Coordinator access required.' using errcode='42501'; end if;
   if from_date is null or until_date is null or not isfinite(from_date) or not isfinite(until_date)
     or from_date<(now() at time zone 'Asia/Singapore')::date or until_date>date '9999-12-31'
     or until_date<from_date or until_date-from_date>89 or expected_version is null or expected_version<1 then
@@ -1124,7 +1152,13 @@ begin
   select * into chosen from public.treatment_schedules where id=target for update;
   if not found then raise exception 'Treatment schedule not found.' using errcode='P0002'; end if;
   if chosen.version<>expected_version then raise exception 'Treatment schedule changed. Reload before generating Trips.' using errcode='40001'; end if;
-  select id into actor from public.accounts where auth_user_id=(select auth.uid());
+  if not restore_deleted then
+    perform 1 from public.treatment_trip_generation where schedule_id=chosen.id and enabled for update;
+    if not found then return jsonb_build_object('created',0,'updated',0,'unchanged',0,'skipped',0,'total',0); end if;
+    if not exists(select 1 from public.accounts a where a.id=person.account_id and a.role='patient' and a.status='active') then
+      raise exception 'An active Patient account is required.' using errcode='42501';
+    end if;
+  end if;
   for session in
     with sources as (
       select s.*,c.name as centre_name,c.address as centre_address,c.postal_code as centre_postal
@@ -1153,6 +1187,7 @@ begin
       due := case when leg='outbound' then session_start-interval '15 minutes' end;
       ready := case when leg='return' then session_end+interval '15 minutes' end;
       select * into old_trip from public.trips where root_schedule_id=source_root and occurrence_key=key and direction=leg for update;
+      if found and old_trip.deleted_at is not null and not restore_deleted then skipped:=skipped+1; continue; end if;
       if found and old_trip.deleted_at is null and not old_trip.review_required and old_trip.source_version=session.version and old_trip.patient_version=person.version
         and old_trip.source_schedule_id=session.id and old_trip.session_date=session.actual_date and old_trip.origin=origin_text and old_trip.destination=destination_text
         and old_trip.treatment_start=session_start and old_trip.treatment_end=session_end then
@@ -1177,6 +1212,16 @@ begin
     end loop;
   end loop;
   return jsonb_build_object('created',inserted,'updated',refreshed,'unchanged',unchanged,'skipped',skipped,'total',inserted+refreshed+unchanged+skipped);
+end;
+$$;
+revoke all on function private.generate_treatment_trips_internal(uuid,date,date,integer,uuid,boolean) from public,anon,authenticated;
+create or replace function private.generate_treatment_trips(target uuid,from_date date,until_date date,expected_version integer) returns jsonb
+language plpgsql security definer set search_path='' as $$
+declare actor uuid;
+begin
+  if not private.is_coordinator() then raise exception 'Coordinator access required.' using errcode='42501'; end if;
+  select id into actor from public.accounts where auth_user_id=(select auth.uid());
+  return private.generate_treatment_trips_internal(target,from_date,until_date,expected_version,actor,true);
 end;
 $$;
 create or replace function public.generate_treatment_trips(target uuid,from_date date,until_date date,expected_version integer) returns jsonb
@@ -1325,6 +1370,88 @@ create or replace function public.list_trips(page_no integer,from_date date,unti
 language sql stable security invoker set search_path = '' as $$ select private.list_trips(page_no,from_date,until_date,status_filter,search_text,direction_filter,sort_by,sort_order); $$;
 revoke all on function private.list_trips(integer,date,date,text,text,text,text,text),public.list_trips(integer,date,date,text,text,text,text,text) from public,anon;
 grant execute on function private.list_trips(integer,date,date,text,text,text,text,text),public.list_trips(integer,date,date,text,text,text,text,text) to authenticated;
+
+-- Enable fills immediately; turning off never removes existing journeys.
+create or replace function private.set_treatment_auto_generation(target uuid,enabled boolean,expected_version integer,expected_setting_version integer) returns jsonb
+language plpgsql security definer set search_path='' as $$
+declare chosen public.treatment_schedules; person public.patients; setting public.treatment_trip_generation;
+  actor uuid; today date:=(now() at time zone 'Asia/Singapore')::date;
+begin
+  if not private.is_coordinator() then raise exception 'Coordinator access required.' using errcode='42501'; end if;
+  if enabled is null or expected_version is null or expected_version<1 or expected_setting_version is null or expected_setting_version<0 then
+    raise exception 'A boolean setting and valid versions are required.' using errcode='22023';
+  end if;
+  select * into chosen from public.treatment_schedules where id=target;
+  if not found then raise exception 'Treatment schedule not found.' using errcode='P0002'; end if;
+  select * into person from public.patients where id=chosen.patient_id for update;
+  select * into chosen from public.treatment_schedules where id=target for update;
+  if not found then raise exception 'Treatment schedule not found.' using errcode='P0002'; end if;
+  if chosen.version<>expected_version then raise exception 'Schedule changed.' using errcode='40001'; end if;
+  if chosen.replaces_schedule_id is not null then raise exception 'Manage automatic generation on the original recurring schedule.' using errcode='22023'; end if;
+  select * into setting from public.treatment_trip_generation where schedule_id=target for update;
+  if coalesce(setting.version,0)<>expected_setting_version then raise exception 'Generation setting changed.' using errcode='40001'; end if;
+  select id into actor from public.accounts where auth_user_id=(select auth.uid());
+  insert into public.treatment_trip_generation(schedule_id,enabled,enabled_by)
+    values(target,enabled,actor)
+    on conflict(schedule_id) do update set enabled=excluded.enabled,enabled_by=excluded.enabled_by,
+      version=public.treatment_trip_generation.version+1,updated_at=now(),last_error=null;
+  if enabled then
+    perform private.generate_treatment_trips_internal(target,today,least(today+29,date '9999-12-31'),chosen.version,actor,false);
+    update public.treatment_trip_generation set last_run_at=now(),last_error=null where schedule_id=target;
+  end if;
+  return (select jsonb_build_object('enabled',g.enabled,'version',g.version,'last_run_at',g.last_run_at,'last_error',g.last_error)
+    from public.treatment_trip_generation g where g.schedule_id=target);
+end;
+$$;
+create or replace function public.set_treatment_auto_generation(target uuid,enabled boolean,expected_version integer,expected_setting_version integer) returns jsonb
+language sql security invoker set search_path='' as $$ select private.set_treatment_auto_generation(target,enabled,expected_version,expected_setting_version); $$;
+revoke all on function private.set_treatment_auto_generation(uuid,boolean,integer,integer),public.set_treatment_auto_generation(uuid,boolean,integer,integer) from public,anon;
+grant execute on function private.set_treatment_auto_generation(uuid,boolean,integer,integer),public.set_treatment_auto_generation(uuid,boolean,integer,integer) to authenticated;
+
+-- Database-owner job only: no browser token, service key or HTTP endpoint is involved.
+create or replace function private.run_automatic_trip_generation() returns jsonb
+language plpgsql security definer set search_path='' as $$
+declare item record; today date:=(now() at time zone 'Asia/Singapore')::date;
+  processed integer:=0; failed integer:=0;
+begin
+  for item in select s.id,s.version,p.id as patient_id,g.enabled_by from public.treatment_trip_generation g
+    join public.treatment_schedules s on s.id=g.schedule_id
+    join public.patients p on p.id=s.patient_id
+    join public.accounts a on a.id=p.account_id
+    where g.enabled and p.status='active' and a.role='patient' and a.status='active'
+      and exists(select 1 from public.treatment_schedules upcoming
+        where (upcoming.id=s.id or upcoming.replaces_schedule_id=s.id)
+          and upcoming.effective_to>=today and upcoming.effective_from<=least(today+29,date '9999-12-31'))
+    order by p.id,s.id
+  loop
+    begin
+      perform private.generate_treatment_trips_internal(item.id,today,least(today+29,date '9999-12-31'),item.version,item.enabled_by,false);
+      update public.treatment_trip_generation set last_run_at=now(),last_error=null where schedule_id=item.id and enabled;
+      processed:=processed+1;
+    exception when others then
+      -- The failed subtransaction released its locks; reacquire Patient before Setting.
+      perform 1 from public.patients where id=item.patient_id for update;
+      -- Isolate a bad schedule so the remaining patients are still processed.
+      update public.treatment_trip_generation set last_error='Automatic generation failed ('||sqlstate||').' where schedule_id=item.id and enabled;
+      failed:=failed+1;
+    end;
+  end loop;
+  return jsonb_build_object('processed',processed,'failed',failed);
+end;
+$$;
+revoke all on function private.run_automatic_trip_generation() from public,anon,authenticated;
+
+-- Enable Supabase Cron in Integrations, then reapply this schema to register the job.
+-- A stable job name makes reapplication idempotent. 16:05 UTC = 00:05 Singapore.
+do $$
+begin
+  if exists(select 1 from pg_extension where extname='pg_cron') then
+    perform cron.schedule('dialysis-automatic-trips','5 16 * * *','select private.run_automatic_trip_generation();');
+  else
+    raise notice 'Enable pg_cron and reapply schema.sql to activate the daily trip refill.';
+  end if;
+end;
+$$;
 
 notify pgrst, 'reload schema';
 commit;

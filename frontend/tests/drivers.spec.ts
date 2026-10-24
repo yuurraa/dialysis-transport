@@ -222,8 +222,9 @@ test('availability gates unapproved drivers and preserves a draft after a confli
   await expect(page.getByRole('button',{name:'Reload latest availability',exact:true})).toBeVisible();
   await expect(monday).toHaveAttribute('aria-pressed','false');
   await expect(page.getByRole('button',{name:'Save availability',exact:true})).toBeDisabled();
+  const readsBeforeReload = reads;
   await page.getByRole('button',{name:'Reload latest availability',exact:true}).click();
-  await expect(monday).toHaveAttribute('aria-pressed','true');expect(reads).toBe(3);
+  await expect(monday).toHaveAttribute('aria-pressed','true');expect(reads).toBe(readsBeforeReload + 1);
 });
 
 test('mobile availability selects a day before editing, saves ranges and preserves cancelled changes', async ({ page }) => {
@@ -422,7 +423,10 @@ test('coordinator inspects driver availability in a read-only popup with retry, 
   await expect(dialog.getByRole('region',{name:'Monday',exact:true})).toContainText('08:00–10:00');
   await dialog.getByRole('button',{name:'Close Weekly Availability',exact:true}).click();
   await expect(button).toBeFocused();
+  const readsBeforeReopen = reads;
   empty=true;await button.click();
-  await expect(dialog.getByText('No availability set.',{exact:true})).toBeVisible();expect(reads).toBe(3);
+  await expect(dialog.getByText('No availability set.',{exact:true})).toBeVisible();
+  // StrictMode remounts a new popup twice in development; a normal mount reads once.
+  expect([1, 2]).toContain(reads - readsBeforeReopen);
   await page.keyboard.press('Escape');await expect(dialog).toBeHidden();await expect(button).toBeFocused();
 });

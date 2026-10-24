@@ -79,7 +79,7 @@ test('coordinator generates unfilled trips and preserves dates after a stale sch
   await page.route('**/api/schedules?*', route => route.fulfill({ json: { centres: [centre], schedules: [{ id: fixtureTrip.source_schedule_id, version, patient_id: session.user.id, patients: { full_name: 'Test Patient' }, kind: 'recurring', centre_id: centre.id, days: [2], start_time: '09:00', end_time: '13:00', effective_from: '2026-10-20', effective_to: '2026-12-31' }], context: [], total: 1, page: 1, pageSize: 10 } }));
   await page.route('**/api/trips/generate', route => {
     const body = route.request().postDataJSON();
-    expect(body).toEqual({ schedule_id: fixtureTrip.source_schedule_id, version: body.version, from_date: '2026-10-21', until_date: '2026-11-19' });
+    expect(body).toEqual({ schedule_id: fixtureTrip.source_schedule_id, version: body.version, from_date: '2026-10-21', until_date: '2026-11-18' });
     if (body.version === 1) { version = 2; return route.fulfill({ status: 409, json: {} }); }
     return route.fulfill({ json: { created: 8, updated: 0, unchanged: 2, total: 10 } });
   });

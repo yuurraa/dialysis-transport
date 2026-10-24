@@ -1,4 +1,4 @@
-import { Toast } from './Toast';
+import { Toast, ToastRegion, releaseDialogToasts } from './Toast';
 import { useId, useLayoutEffect, useRef, useState, type FormEventHandler, type ReactNode, type Ref } from 'react';
 
 export function InfoButton({ label, onClick, disabled, buttonRef }: {
@@ -38,6 +38,7 @@ export function Overlay({ title, description, children, footer, onClose, onSubmi
     heading.current?.focus();
     document.body.style.overflow = 'hidden';
     return () => {
+      releaseDialogToasts(element);
       if (element.open) element.close();
       document.body.style.overflow = previousOverflow;
       if (opener?.isConnected) opener.focus();
@@ -61,7 +62,7 @@ export function Overlay({ title, description, children, footer, onClose, onSubmi
       const bounds = event.currentTarget.getBoundingClientRect();
       if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) onClose();
     }}>
-    {error && <div className="toast-region"><Toast key={error} message={error} urgent onDismiss={() => onDismissError?.()} /></div>}
+    {error && <ToastRegion><Toast key={error} message={error} urgent onDismiss={() => onDismissError?.()} /></ToastRegion>}
     <header className="overlay-header"><div><h2 id={titleId} ref={heading} tabIndex={-1}>{title}</h2>{description && <p id={descriptionId} className="page-description">{description}</p>}</div>
     </header>
     {onSubmit ? <form className="overlay-content patient-form" onSubmit={onSubmit} noValidate={noValidate}>{content}</form> : <div className="overlay-content">{content}</div>}

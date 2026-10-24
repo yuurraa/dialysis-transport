@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { ApiError, apiGet, apiRequest } from '../lib/api';
 import { ListError, PageHeading } from '../components/DashboardUI';
 import { PersonalFields, type PersonalDetails } from '../components/PersonalFields';
-import { Toast } from '../components/Toast';
+import { Toast, ToastRegion } from '../components/Toast';
 
 type Driver = PersonalDetails & { version: number };
 /** Personal account edits are independent of vehicle registration and approval. */
@@ -75,6 +75,6 @@ export default function DriverProfile({ notify, onSessionExpired }: { notify: (m
           </div></div>
         </form>
       : <p role="status">Your driver details are unavailable. Sign in again to finish creating your account.</p>}
-    {saveError && <div className="toast-region"><Toast key={saveError} message={saveError} urgent onDismiss={() => setSaveError('')} /></div>}
+    {saveError && <ToastRegion><Toast key={saveError} message={saveError} urgent onDismiss={() => setSaveError('')} /></ToastRegion>}
   </section>;
 }

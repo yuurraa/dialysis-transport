@@ -1185,3 +1185,93 @@ test('driver availability is approved-owner-only, versioned and validates weekly
 
   } finally {await local.close();}
 });
+
+test('automatic trip generation is coordinator-controlled, rolling, idempotent and preserves deletions', async () => {
+  const local = await databaseWithAuth();
+  try {
+    await local.exec(schema);
+    await local.exec(`insert into public.accounts(auth_user_id,email,display_name,role) values
+      ('${patient}','patient@example.test','Fixture Patient','patient'),('${coordinator}','coordinator@example.test','Coordinator','coordinator'),('${driver}','driver@example.test','Driver','driver');
+      insert into public.patients(account_id,full_name,phone,pickup_address,mobility) select id,'Fixture Patient','81234567','Fixture street','ambulant' from public.accounts where role='patient';`);
+    const own = async (who, sql, params = []) => {
+      await local.exec('begin; set local role authenticated;');
+      try { await local.query("select set_config('request.jwt.claim.sub',$1,true)", [who]); const result = await local.query(sql,params); await local.exec('commit'); return result.rows; }
+      catch (error) { await local.exec('rollback'); throw error; }
+    };
+    const dates = (await local.query(`select ((now() at time zone 'Asia/Singapore')::date+1)::text as first,
+      ((now() at time zone 'Asia/Singapore')::date+36)::text as last,
+      extract(isodow from (now() at time zone 'Asia/Singapore')::date+1)::integer as day`)).rows[0];
+    const ids = (await own(patient,'select p.id as patient,c.id as centre from public.patients p cross join public.dialysis_centres c limit 1'))[0];
+    const [source] = await own(patient,`insert into public.treatment_schedules(patient_id,centre_id,days,start_time,end_time,effective_from,effective_to)
+      values($1,$2,array[$3::integer],'09:00','13:00',$4,$5) returning *`,[ids.patient,ids.centre,dates.day,dates.first,dates.last]);
+    const setting = async (who, enabled, version) => (await own(who,'select public.set_treatment_auto_generation($1,$2,$3,$4) as result',[source.id,enabled,source.version,version]))[0].result;
+    const listed = async () => (await own(coordinator,'select public.list_treatments() as result'))[0].result.schedules.find(row => row.id === source.id);
+    assert.deepEqual((await listed()).auto_generation,{enabled:false,version:0,last_run_at:null,last_error:null});
+    await local.query('select private.run_automatic_trip_generation()');
+    assert.equal((await local.query('select count(*)::integer as n from public.trips')).rows[0].n,0);
+    for (const who of [patient,driver]) await assert.rejects(setting(who,true,0),/Coordinator|denied/i);
+    await assert.rejects(own(patient,'insert into public.treatment_trip_generation(schedule_id,enabled,enabled_by) select $1,true,id from public.accounts where role=\'coordinator\'',[source.id]),/permission/i);
+    await assert.rejects(own(coordinator,'select private.run_automatic_trip_generation()'),/permission/i);
+    await assert.rejects(own(coordinator,'select private.generate_treatment_trips_internal($1,$2,$3,1,null,true)',[source.id,dates.first,dates.last]),/permission/i);
+    const on = await setting(coordinator,true,0);
+    assert.equal(on.enabled,true); assert.equal(on.version,1); assert.ok(on.last_run_at);
+    const count = async () => (await local.query('select count(*)::integer as n from public.trips where deleted_at is null')).rows[0].n;
+    assert.equal(await count(),10,'Inclusive today through day 29 includes five weekly sessions, excluding day 36.');
+    assert.equal((await local.query(`select count(*)::integer as n from public.trips where session_date>(now() at time zone 'Asia/Singapore')::date+29`)).rows[0].n,0);
+    assert.equal((await listed()).version,source.version,'Preference changes must not stale the treatment snapshot.');
+    await assert.rejects(setting(coordinator,false,0),/changed/i);
+    await local.query('select private.run_automatic_trip_generation()');
+    assert.equal(await count(),10);
+    assert.equal((await local.query('select count(*)::integer as n from public.trip_history')).rows[0].n,10);
+    const trip = (await own(coordinator,'select * from public.trips order by id limit 1'))[0];
+    await own(coordinator,'select public.delete_trip($1,$2)',[trip.id,trip.version]);
+    await local.query('select private.run_automatic_trip_generation()');
+    assert.equal(await count(),9,'Automatic runs preserve deliberate deletions.');
+    const disabled = await setting(coordinator,false,1);
+    assert.equal(disabled.version,2); assert.equal(await count(),9);
+    assert.equal((await local.query('select private.run_automatic_trip_generation() as result')).rows[0].result.processed,0);
+    await setting(coordinator,true,2);
+    assert.equal(await count(),9,'Enabling also preserves deleted trips.');
+    await own(coordinator,'select public.generate_treatment_trips($1,$2,$2,$3)',[source.id,trip.session_date,source.version]);
+    assert.equal(await count(),10,'Explicit manual generation can restore deleted trips.');
+    await local.query("update public.accounts set status='inactive' where auth_user_id=$1",[patient]);
+    assert.equal((await local.query('select private.run_automatic_trip_generation() as result')).rows[0].result.processed,0);
+    await local.query("update public.accounts set status='active' where auth_user_id=$1",[patient]);
+    await local.exec(schema);
+    assert.equal((await listed()).auto_generation.enabled,true,'Schema reapplication preserves the opted-in setting.');
+    assert.equal(await count(),10);
+    // An occurrence originally outside the window but moved into it inherits the root setting.
+    const [replacement] = await own(patient,`insert into public.treatment_schedules(patient_id,centre_id,kind,days,start_time,end_time,effective_from,effective_to,replaces_schedule_id,replaces_date)
+      select $1,$2,'single',array[extract(isodow from day)::integer],'09:00','13:00',day,day,$3,$4::date
+      from (select (now() at time zone 'Asia/Singapore')::date+16 as day) d returning *`,[ids.patient,ids.centre,source.id,dates.last]);
+    const replacementView = (await own(coordinator,'select public.list_treatments() as result'))[0].result.schedules.find(row => row.id === replacement.id);
+    assert.equal(replacementView.auto_generation.enabled,true);
+    await assert.rejects(own(coordinator,'select public.set_treatment_auto_generation($1,false,$2,0)',[replacement.id,replacement.version]),/original recurring/i);
+    await local.query('select private.run_automatic_trip_generation()');
+    assert.equal((await local.query('select count(*)::integer as n from public.trips where source_schedule_id=$1',[replacement.id])).rows[0].n,2);
+    assert.equal(await count(),12);
+    const [other] = await own(patient,`insert into public.treatment_schedules(patient_id,centre_id,kind,days,start_time,end_time,effective_from,effective_to)
+      select $1,$2,'single',array[extract(isodow from day)::integer],'15:00','16:00',day,day
+      from (select (now() at time zone 'Asia/Singapore')::date+2 as day) d returning *`,[ids.patient,ids.centre]);
+    await own(coordinator,'select public.set_treatment_auto_generation($1,true,$2,0)',[other.id,other.version]);
+    // A failed source rolls back independently; a second opted-in schedule still runs.
+    await local.query('update public.trips set review_required=true where source_schedule_id=$1',[source.id]);
+    await local.exec(`create function public.fixture_fail_trip_refresh() returns trigger language plpgsql as $$ begin
+      if new.source_schedule_id='${source.id}'::uuid then raise exception 'fixture refresh failure'; end if; return new; end; $$;
+      create trigger fixture_fail_trip_refresh before update on public.trips for each row execute function public.fixture_fail_trip_refresh();`);
+    const outcome = (await local.query('select private.run_automatic_trip_generation() as result')).rows[0].result;
+    assert.equal(outcome.failed,1); assert.equal(outcome.processed,1);
+    assert.ok((await listed()).auto_generation.last_error);
+    await local.exec('drop trigger fixture_fail_trip_refresh on public.trips; drop function public.fixture_fail_trip_refresh();');
+    await local.query('select private.run_automatic_trip_generation()');
+    assert.equal((await listed()).auto_generation.last_error,null);
+    await local.query("update public.patients set status='inactive' where id=$1",[ids.patient]);
+    assert.equal((await local.query('select private.run_automatic_trip_generation() as result')).rows[0].result.processed,0);
+    await local.query("update public.patients set status='active' where id=$1",[ids.patient]);
+    const latestSource = (await own(patient,'select version from public.treatment_schedules where id=$1',[source.id]))[0];
+    const beforeDelete = await count();
+    await own(patient,'select public.delete_my_treatment($1,$2)',[source.id,latestSource.version]);
+    assert.equal((await local.query('select count(*)::integer as n from public.treatment_trip_generation where schedule_id=$1',[source.id])).rows[0].n,0);
+    assert.equal(await count(),beforeDelete,'Deleting a treatment removes its setting, not its existing trips.');
+  } finally { await local.close(); }
+});

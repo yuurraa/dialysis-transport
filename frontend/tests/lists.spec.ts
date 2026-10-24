@@ -70,7 +70,7 @@ for (const kind of ['patients', 'schedules', 'trips']) test(`list toolbar ${kind
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   const row = page.locator(kind === 'patients' ? '.patients-table tbody tr' : kind === 'schedules' ? '.treatment-record' : '.trip-record').last();
   await row.scrollIntoViewIfNeeded();
-  const info = row.locator('.list-info-control');
+  const info = row.getByRole('button', { name: kind === 'patients' ? 'View Fixture Patient' : kind === 'schedules' ? 'View schedule details' : 'View trip details', exact: true });
   await info.click();
   await expect(page.getByRole('dialog').locator('.overlay-header button')).toHaveCount(0);
   await page.getByRole('dialog').getByRole('button', { name: /^Close / }).click();

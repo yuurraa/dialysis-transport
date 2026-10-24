@@ -17,6 +17,9 @@ export class SchedulingController {
   @Delete(':id')
   remove(@Headers('authorization') header: string | undefined, @Param('id') id: string, @Body() body: unknown) { return this.service.deleteTreatment(header, id, body); }
 
+  @Patch(':id/auto-generation')
+  autoGeneration(@Headers('authorization') header: string | undefined, @Param('id') id: string, @Body() body: unknown) { return this.service.setAutoGeneration(header, id, body); }
+
   @Patch(':id')
   update(@Headers('authorization') header: string | undefined, @Body() body: unknown, @Param('id') id: string) { return this.service.saveTreatment(header, body, id); }
 }

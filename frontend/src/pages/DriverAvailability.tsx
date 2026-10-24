@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { ListError, Overlay, PageHeading } from '../components/DashboardUI';
-import { Toast } from '../components/Toast';
+import { Toast, ToastRegion } from '../components/Toast';
 import { ApiError, apiGet, apiRequest } from '../lib/api';
 
 import WeeklyAvailabilityView, { availabilityDays as days, availabilityTime as time, availabilityDayRanges as dayRanges, useAvailabilityClock, type TimeRange } from '../components/WeeklyAvailabilityView';
@@ -134,6 +134,6 @@ export default function DriverAvailability({ notify, onSessionExpired, onViewVeh
         <button type="button" disabled={saving || conflict} onClick={addRange}>Add time range</button>
       </div>
     </Overlay>}
-    {error && <div className="toast-region"><Toast key={error} message={error} urgent onDismiss={() => setError('')} /></div>}
+    {error && <ToastRegion><Toast key={error} message={error} urgent onDismiss={() => setError('')} /></ToastRegion>}
   </section>;
 }

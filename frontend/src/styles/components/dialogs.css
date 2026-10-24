@@ -282,7 +282,3 @@
     border: 1px solid var(--ui-border);
   }
 }
-
-.patient-dialog .overlay-footer > button {
-  min-width: 140px;
-}

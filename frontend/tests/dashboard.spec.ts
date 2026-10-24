@@ -62,7 +62,7 @@ test('mobile navigation traps focus, supports dismissal and opens protected page
   await expect(drawer.getByRole('button', { name: 'Close navigation' })).toBeFocused();
   await page.keyboard.press('Escape');
   await expect(drawer).toBeHidden();
-  await expect(drawer).toHaveAttribute('data-exit-was-open', 'true');
+  await expect(page.locator('.dashboard-drawer')).toHaveAttribute('data-exit-was-open', 'true');
   await expect(toggle).toBeFocused();
   expect(await page.evaluate(() => document.body.style.overflow)).toBe('');
   await toggle.click();

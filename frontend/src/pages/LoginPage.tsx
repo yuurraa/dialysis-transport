@@ -1,4 +1,4 @@
-import { Toast } from '../components/Toast';
+import { Toast, ToastRegion } from '../components/Toast';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { User } from '@supabase/supabase-js';
 import AccountPanel, { type Account } from './AccountPanel';
@@ -257,9 +257,9 @@ export default function LoginPage() {
         <p role="status" aria-live="polite" className="entry-message">{message}</p>
       </section>
       </PageLayout>}
-      <div className="toast-region" role="status" aria-live="polite" aria-atomic="true">
+      <ToastRegion announce>
         {toast && <Toast key={toast.id} message={toast.message} closing={toastClosing} onDismiss={() => setToast(null)} />}
-    </div>
+    </ToastRegion>
     </>
   );
 }

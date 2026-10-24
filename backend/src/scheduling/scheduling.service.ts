@@ -46,6 +46,21 @@ export class SchedulingService {
     return value as number;
   }
 
+  /** Coordinator-only preference; generation and version checks are atomic in PostgreSQL. */
+  async setAutoGeneration(header: string | undefined, id: string, body: unknown) {
+    const { client, account } = await this.access(header);
+    if (account.role !== 'coordinator') throw new ForbiddenException('Treatment access denied.');
+    if (!/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(id) || !body || typeof body !== 'object' || Array.isArray(body)
+      || Object.keys(body).some(key => !['enabled', 'version', 'setting_version'].includes(key))) throw new BadRequestException('Invalid generation setting.');
+    const { enabled, setting_version } = body as Record<string, unknown>;
+    const version = this.version(body);
+    if (typeof enabled !== 'boolean' || !Number.isSafeInteger(setting_version) || (setting_version as number) < 0 || (setting_version as number) > 2147483647) throw new BadRequestException('Invalid generation setting.');
+    const result = await client.rpc('set_treatment_auto_generation', { target: id, enabled, expected_version: version, expected_setting_version: setting_version });
+    if (result.error?.code === 'P0002') throw new NotFoundException('Treatment schedule not found.');
+    this.check(result.error);
+    return result.data;
+  }
+
   async saveTreatment(header: string | undefined, body: unknown, id?: string) {
     const { client, account } = await this.access(header, true);
     const version = id ? this.version(body) : undefined;

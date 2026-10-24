@@ -53,6 +53,7 @@ test('schedule HTTP routes use /api/schedules for reads and writes', async () =>
   const calls: unknown[]=[];
   @Module({controllers:[SchedulingController],providers:[{provide:SchedulingService,useValue:{
     deleteTreatment: async (header: string,id: string)=>{calls.push({header,id});return {id};},
+    setAutoGeneration: async (header: string,id: string,body: unknown)=>{calls.push({header,id,body});return {enabled:true,version:1};},
     treatments: async (header: string)=>{calls.push(header);return {centres:[],schedules:[]};},
     saveTreatment: async (header: string,body: unknown,id?: string)=>{calls.push({header,body,id});return {id:id ?? 'new'};},
   }}]}) class TestModule {}
@@ -67,7 +68,8 @@ test('schedule HTTP routes use /api/schedules for reads and writes', async () =>
     assert.equal((await fetch(`${origin}/api/schedules/${details.centre_id}`,{method:'PATCH',headers,body:JSON.stringify(details)})).status,200);
     assert.equal((await fetch(`${origin}/api/scheduling/treatments`,{headers})).status,404);
     assert.equal((await fetch(`${origin}/api/schedules/${details.centre_id}`,{method:'DELETE',headers})).status,200);
-    assert.equal(calls.length,4);
+    assert.equal((await fetch(`${origin}/api/schedules/${details.centre_id}/auto-generation`,{method:'PATCH',headers,body:JSON.stringify({enabled:true,version:1,setting_version:0})})).status,200);
+    assert.equal(calls.length,5);
     assert.equal(calls[0],'Bearer fixture');
   } finally {await app.close();}
 });
@@ -261,7 +263,11 @@ test('list services forward validated sort and filter choices', async () => {
   await schedules.treatments('Bearer fixture', '2', '', 'recurring', 'all', 'start_time', 'desc');
   assert.deepEqual(calls.pop(), ['list_treatments', { search_text: '', page_no: 2, kind_filter: 'recurring', centre_filter: 'all', sort_by: 'start_time', sort_order: 'desc' }]);
   await trips.listTrips('Bearer fixture', '2', '2026-10-21', '2026-11-20', 'all', '', 'return', 'patient_name', 'desc');
-  assert.deepEqual(calls.pop(), ['list_trips', { page_no: 2, from_date: '2026-10-21', until_date: null, status_filter: 'all', search_text: '', direction_filter: 'return', sort_by: 'patient_name', sort_order: 'desc' }]);
+  assert.deepEqual(calls.pop(), ['list_trips', { page_no: 2, from_date: '2026-10-21', until_date: '2026-11-20', status_filter: 'all', search_text: '', direction_filter: 'return', sort_by: 'patient_name', sort_order: 'desc' }]);
+  for (const until of [undefined, '']) {
+    await trips.listTrips('Bearer fixture', '2', '2026-10-21', until, 'all', '', 'return', 'patient_name', 'desc');
+    assert.deepEqual(calls.pop(), ['list_trips', { page_no: 2, from_date: '2026-10-21', until_date: null, status_filter: 'all', search_text: '', direction_filter: 'return', sort_by: 'patient_name', sort_order: 'desc' }]);
+  }
   await schedules.treatments('Bearer fixture', '1', '', 'recurring,rescheduled');
   assert.equal((calls.pop() as [string, { kind_filter: string }])[1].kind_filter, 'recurring,rescheduled');
   await trips.listTrips('Bearer fixture', '1', '2026-10-21', '2026-10-21', 'all', '', 'outbound,return');
@@ -271,4 +277,20 @@ test('list services forward validated sort and filter choices', async () => {
   await assert.rejects(schedules.treatments('Bearer fixture', '1', '', 'unknown'), /Invalid/);
   await assert.rejects(schedules.treatments('Bearer fixture', '1', '', 'all', 'invalid'), /Invalid/);
   await assert.rejects(trips.listTrips('Bearer fixture', '1', '2026-10-21', '2026-10-21', 'all', '', 'all', 'notes'), /Invalid/);
+});
+
+test('auto-generation settings require an active coordinator and versioned boolean input', async () => {
+  let role = 'coordinator'; let status = 'active'; let error: { code: string } | null = null;
+  const calls: unknown[] = [];
+  const service = new SchedulingService(
+    { verifyIdentity: async () => ({ account: { id: 'coordinator', role, status } }) } as unknown as AuthService,
+    { forUser: () => ({ rpc: async (name: string, args: unknown) => { calls.push({ name, args }); return { data: { enabled: true, version: 1 }, error }; } }) } as unknown as SupabaseService);
+  const id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const input = { enabled: true, version: 1, setting_version: 0 };
+  assert.deepEqual(await service.setAutoGeneration('Bearer fixture', id, input), { enabled: true, version: 1 });
+  assert.deepEqual(calls[0], { name: 'set_treatment_auto_generation', args: { target: id, enabled: true, expected_version: 1, expected_setting_version: 0 } });
+  for (const body of [null, {}, { ...input, enabled: 'true' }, { ...input, setting_version: -1 }, { ...input, actor: id }]) await assert.rejects(service.setAutoGeneration('Bearer fixture', id, body));
+  for (const other of ['patient', 'driver', 'caregiver']) { role = other; await assert.rejects(service.setAutoGeneration('Bearer fixture', id, input), /access denied/i); }
+  role = 'coordinator'; status = 'inactive'; await assert.rejects(service.setAutoGeneration('Bearer fixture', id, input), /access denied/i);
+  status = 'active'; error = { code: '40001' }; await assert.rejects(service.setAutoGeneration('Bearer fixture', id, input), /changed/i);
 });

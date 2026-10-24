@@ -312,7 +312,7 @@ test('coordinator schedule rows show trip coverage and refresh it after generati
   await expect(partial.getByText('4 Jan 2027 – 25 Jan 2027',{exact:true})).toBeVisible();
   await expect(partial.getByText('8 Feb 2027',{exact:true})).toBeVisible();
   await expect(partial.getByText('Up to 90 days. Includes rescheduled sessions.',{exact:true})).toHaveCount(0);
-  await partial.getByRole('button',{name:'Cancel',exact:true}).click();
+  await partial.getByRole('button',{name:'Close',exact:true}).click();
   await expect(page.getByText('No upcoming sessions',{exact:true})).toBeVisible();
   await page.getByRole('button',{name:'Generate Trips',exact:true}).first().click();
   const dialog=page.getByRole('dialog',{name:'Generate Trips',exact:true});
@@ -321,4 +321,106 @@ test('coordinator schedule rows show trip coverage and refresh it after generati
   role='patient';await page.reload();
   await expect(page.getByRole('heading',{name:'Treatment Schedules',exact:true})).toBeVisible();
   await expect(page.locator('.treatment-generation')).toHaveCount(0);
+});
+
+test('coordinator opts into automatic generation per schedule and reloads stale settings', async ({ page }) => {
+  await page.clock.install({ time: new Date('2026-10-24T04:00:00Z') });
+  await page.clock.pauseAt(new Date('2026-10-24T04:00:01Z'));
+  await seedSession(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.route('**/api/auth/me', route => route.fulfill({ json: { account: { ...activeAccount, role: 'coordinator' } } }));
+  const centre = { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', name: 'Fixture Centre', address: 'Fixture road', postal_code: '560123' };
+  let setting = { enabled: false, version: 0 }; let stale = true;
+  let holdRefresh = false; let releaseRefresh: (() => void) | undefined;
+  const schedule = { id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', version: 1, patient_id: session.user.id, patients: { full_name: 'Fixture Patient' }, kind: 'recurring', days: [1], start_time: '09:00', end_time: '13:00', centre_id: centre.id, effective_from: '2027-01-04', effective_to: '2027-03-29' };
+  await page.route('**/api/schedules?*', async route => {
+    if (holdRefresh) await new Promise<void>(resolve => { releaseRefresh = resolve; });
+    return route.fulfill({ json: { centres: [centre], schedules: [{ ...schedule, auto_generation: setting }], context: [], total: 1, page: 1, pageSize: 10 } });
+  });
+  await page.route('**/api/schedules/*/auto-generation', route => {
+    expect(route.request().method()).toBe('PATCH');
+    const input = route.request().postDataJSON();
+    expect(input.version).toBe(1);
+    expect(input.setting_version).toBe(setting.version);
+    if (stale) { stale = false; return route.fulfill({ status: 409, json: { message: 'Setting changed.' } }); }
+    setting = { enabled: input.enabled, version: setting.version + 1 };
+    return route.fulfill({ json: setting });
+  });
+  await page.goto('/dashboard/schedules');
+  await page.getByRole('button', { name: 'Generate Trips', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Generate Trips', exact: true });
+  await expectPopup(dialog);
+  const toggle = dialog.getByRole('switch', { name: 'Auto-generate trips', exact: true });
+  await expect(toggle).not.toBeChecked();
+  await expect(dialog.getByRole('button', { name: 'Save', exact: true })).toHaveCount(0);
+  await toggle.click();
+  await expect(dialog.getByRole('button', { name: 'Save', exact: true })).toBeVisible();
+  expect(setting.enabled).toBe(false);
+  await page.keyboard.press('Escape');
+  await expect(dialog).toBeHidden();
+  await page.getByRole('button', { name: 'Generate Trips', exact: true }).click();
+  await expect(toggle).not.toBeChecked();
+  await toggle.click();
+  await dialog.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(dialog.getByRole('alert')).toContainText('Reload schedules');
+  await expect(toggle).toBeChecked();
+  await dialog.getByRole('button', { name: 'Reload schedules', exact: true }).click();
+  const originalRecord = (await page.locator('.treatment-record').first().elementHandle())!;
+  const originalDateInput = (await dialog.getByLabel('From date', { exact: true }).elementHandle())!;
+  const originalDate = await dialog.getByLabel('From date', { exact: true }).inputValue();
+  holdRefresh = true;
+  await toggle.click();
+  await dialog.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(toggle).toBeChecked();
+  await expect(dialog.getByRole('button', { name: 'Save', exact: true })).toHaveCount(0);
+  await expect(dialog.getByText('Off · Generate trips manually.', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('Automatic trip generation enabled.', { exact: true })).toBeVisible();
+  expect(await originalRecord.evaluate(element => element.isConnected)).toBe(true);
+  expect(await originalDateInput.evaluate(element => element.isConnected)).toBe(true);
+  await expect(dialog.getByLabel('From date', { exact: true })).toBeEnabled();
+  await expect(dialog.getByLabel('From date', { exact: true })).toHaveValue(originalDate);
+  await expect(dialog.getByRole('button', { name: 'Generate Trips', exact: true })).toBeEnabled();
+  await expect(page.locator('.treatment-panel > .account-loading')).toHaveCount(0);
+  await expect.poll(() => Boolean(releaseRefresh)).toBe(true);
+  holdRefresh = false;
+  releaseRefresh!();
+
+  await toggle.click();
+  await dialog.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(toggle).not.toBeChecked();
+  await expect(page.getByText('Automatic trip generation disabled. Existing trips kept.', { exact: true })).toBeVisible();
+  const toast = dialog.locator('.auth-toast').filter({ hasText: 'Automatic trip generation disabled.' });
+  await expect(toast).toBeVisible();
+  await page.clock.fastForward(1000);
+  expect(await toast.evaluate(element => {
+    const rect = element.getBoundingClientRect();
+    return element.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2));
+  })).toBe(true);
+  const node = (await toast.elementHandle())!;
+  const beforeClose = (await toast.boundingBox())!;
+
+  await page.keyboard.press('Escape');
+  await expect(dialog).toBeHidden();
+  expect(await node.evaluate(element => element.isConnected && element.closest('dialog') === null)).toBe(true);
+  const afterClose = (await page.locator('.auth-toast').filter({ hasText: 'Automatic trip generation disabled.' }).boundingBox())!;
+  expect(Math.abs(beforeClose.y - afterClose.y)).toBeLessThan(1);
+  expect(afterClose.height).toBe(beforeClose.height);
+  const progressTime = () => node.evaluate(element => new DOMMatrix(getComputedStyle(element.querySelector('.toast-progress')!).transform).a);
+  const elapsedProgress = await progressTime();
+  expect(elapsedProgress).toBeGreaterThan(0.25);
+  await page.getByRole('button', { name: 'Generate Trips', exact: true }).click();
+  expect(await progressTime()).toBeGreaterThanOrEqual(elapsedProgress);
+  // Exercise the animation-preserving fallback used by older browsers as well.
+  await page.evaluate(() => Reflect.set(Element.prototype, 'moveBefore', undefined));
+  await page.keyboard.press('Escape');
+  await expect(dialog).toBeHidden();
+  expect(await progressTime()).toBeGreaterThanOrEqual(elapsedProgress);
+  await page.getByRole('button', { name: 'Generate Trips', exact: true }).click();
+  expect(await progressTime()).toBeGreaterThanOrEqual(elapsedProgress);
+  expect(await node.evaluate(element => element.getAnimations().every(animation => animation.currentTime === null || Number(animation.currentTime) >= 240))).toBe(true);
+  await page.clock.fastForward(2100);
+  await page.clock.fastForward(200);
+  await expect(page.getByText('Automatic trip generation disabled. Existing trips kept.', { exact: true })).toHaveCount(0);
+
+
 });
