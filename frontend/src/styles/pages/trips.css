@@ -849,7 +849,7 @@
   flex-basis: 100%;
 }
 
-.trip-direction-status {
+.trip-date-status, .trip-direction-status {
   display: inline-flex;
   flex-wrap: wrap;
   align-items: center;
@@ -1040,3 +1040,11 @@
     scroll-margin-bottom: calc(var(--list-pagination-height, 68px) + 16px);
   }
 }
+
+/* Align status badges independently of the formatted date length. */
+.trip-date-status {
+  display: grid;
+  grid-template-columns: 11ch max-content;
+  justify-content: start;
+}
+.trip-date-status > span:first-child { white-space: nowrap; font-variant-numeric: tabular-nums; }

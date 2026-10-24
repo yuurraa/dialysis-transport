@@ -97,8 +97,10 @@ Sign-out clears the current device's application session. It does not sign the u
 
 References: [Supabase Google login](https://supabase.com/docs/guides/auth/social-login/auth-google), [database functions](https://supabase.com/docs/guides/database/functions), [row security](https://supabase.com/docs/guides/database/postgres/row-level-security).
 
-Driver Availability requires an active account and approved vehicle. Before first approval only Register Vehicle appears in navigation; direct Availability access shows an approval-required state. Weekly slots are owner-only, versioned and saved atomically; vehicle resubmission suspends access until approval returns without deleting the schedule. See [Driver availability](development.md#driver-availability).
+Driver Availability requires an active account and approved vehicle. Before first approval only Register Vehicle appears in navigation; direct Availability access shows an approval-required state. Weekly slots are editable only by their owner, versioned and saved atomically; vehicle resubmission suspends access until approval returns without deleting the schedule. See [Driver availability](development.md#driver-availability).
 
 My Vehicle shows licence and car details, status, submission date and the current registration date. Registered on shows a dash after resubmission until approval returns. The persisted `registered_at` timestamp retains the previous approval through Pending review or Rejected edits, so My Vehicle remains visible after refresh. Reapproval updates this date. Rides completed and ratings are outside this vehicle page.
 
 All Account Details headings include the shared Account Management subheader. Drivers edit name, phone, birth date and gender through Edit profile → Save profile/Cancel. Owner updates send the profile version, preserve drafts on failure and use the shared viewport toast for errors. Login status, identity, role and vehicle approval are unchanged by personal edits.
+
+Active Coordinators can read driver availability through the Driver List schedule icon and `GET /api/drivers/:id/availability`. This permission does not grant writes. The read-only popup can show saved schedules for inactive or unapproved Drivers with an eligibility note; future assignment must still enforce current eligibility.

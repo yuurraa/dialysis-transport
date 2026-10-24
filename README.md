@@ -42,7 +42,7 @@ Sign-in uses Google through Supabase Auth; enable the Google provider and apply 
 
 ## Testing scope
 
-The Playwright suite contains 54 browser tests grouped by feature in `frontend/tests/`:
+The Playwright suite contains 55 browser tests grouped by feature in `frontend/tests/`:
 
 | Spec | Tests | Scope |
 | --- | ---: | --- |
@@ -52,7 +52,7 @@ The Playwright suite contains 54 browser tests grouped by feature in `frontend/t
 | `patients.spec.ts` | 4 | Permitted coordinator edits, search/sorting/pagination, failures and version conflicts |
 | `account.spec.ts` | 3 | In-place patient editing, cancellation, save failures, inactive profiles and version conflicts |
 | `schedules.spec.ts` | 9 | Recurring/single sessions, rescheduling, deletion, search, load/save failures and stale versions |
-| `drivers.spec.ts` | 8 | Vehicle submission/retry, coordinator review and Status edits; approved-driver weekly availability, stale saves, mobile time-range editing, My Vehicle navigation through reapproval and personal-profile editing |
+| `drivers.spec.ts` | 9 | Vehicle submission/retry, coordinator review and Status edits; approved-driver weekly availability, stale saves, mobile time-range editing, My Vehicle navigation through reapproval and personal-profile editing and coordinator read-only availability popups |
 | `trips.spec.ts` | 6 | Role-specific journeys, pickup requirements, filters, generation and deletion recovery |
 | `lists.spec.ts` | 3 | Search/filter/sort wiring across the three lists and mobile toolbar usability |
 

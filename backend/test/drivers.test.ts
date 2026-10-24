@@ -109,3 +109,17 @@ test('availability reports approval, stale versions and service failures without
   }
   failure=null;
 });
+
+
+test('coordinators read an individual driver availability with role and target validation',async () => {
+  calls=[];failure=null;status='active';
+  for(const token of [null,'invalid']) assert.equal((await request(`/${id}/availability`,'GET',undefined,token)).status,401);
+  for(const other of ['driver','patient','caregiver']) {role=other;assert.equal((await request(`/${id}/availability`)).status,403);}
+  role='coordinator';status='inactive';assert.equal((await request(`/${id}/availability`)).status,403);status='active';
+  assert.equal((await request('/invalid/availability')).status,400);assert.equal(calls.length,0);
+  assert.equal((await request(`/${id}/availability`)).status,200);
+  assert.deepEqual(calls[0],{name:'get_driver_availability',args:{target:id}});
+  failure='P0002';assert.equal((await request(`/${id}/availability`)).status,404);
+  failure='42501';assert.equal((await request(`/${id}/availability`)).status,403);
+  failure='XX000';const result=await request(`/${id}/availability`);assert.equal(result.status,503);assert.doesNotMatch(JSON.stringify(result.body),/PRIVATE_DETAIL/);failure=null;
+});

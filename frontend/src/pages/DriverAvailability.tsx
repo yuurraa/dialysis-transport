@@ -1,25 +1,10 @@
-import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ListError, Overlay, PageHeading } from '../components/DashboardUI';
 import { Toast } from '../components/Toast';
 import { ApiError, apiGet, apiRequest } from '../lib/api';
 
-const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
-const time = (slot: number) => `${String(Math.floor(slot / 2)).padStart(2, '0')}:${slot % 2 ? '30' : '00'}`;
-function singaporeClock() {
-  const local = new Date(Date.now() + 8 * 60 * 60 * 1000);
-  return { day: (local.getUTCDay() + 6) % 7, minutes: local.getUTCHours() * 60 + local.getUTCMinutes() };
-}
-interface TimeRange { start: number; end: number }
-function dayRanges(slots: Set<number>, day: number): TimeRange[] {
-  const ranges: TimeRange[] = [];
-  for (let slot = 0; slot < 48; slot++) {
-    if (!slots.has(day * 48 + slot)) continue;
-    const start = slot;
-    while (slot + 1 < 48 && slots.has(day * 48 + slot + 1)) slot++;
-    ranges.push({ start, end: slot + 1 });
-  }
-  return ranges;
-}
+import WeeklyAvailabilityView, { availabilityDays as days, availabilityTime as time, availabilityDayRanges as dayRanges, useAvailabilityClock, type TimeRange } from '../components/WeeklyAvailabilityView';
+
 interface Availability { weekly_slots: number[]; version: number }
 const empty: Availability = { weekly_slots: [], version: 0 };
 function message(reason: unknown) {
@@ -33,13 +18,7 @@ function message(reason: unknown) {
 
 /** Weekly slots use Singapore time, with midnight ending the selected day. */
 export default function DriverAvailability({ notify, onSessionExpired, onViewVehicle, vehicleRegistered }: { notify: (text: string) => void; onSessionExpired: () => void; onViewVehicle: () => void; vehicleRegistered: boolean }) {
-  const [clock, setClock] = useState(singaporeClock);
-  useEffect(() => {
-    const update = () => setClock(singaporeClock());
-    const timer = window.setInterval(update, 15000);
-    document.addEventListener('visibilitychange', update);
-    return () => { window.clearInterval(timer); document.removeEventListener('visibilitychange', update); };
-  }, []);
+  const clock = useAvailabilityClock();
   const [saved, setSaved] = useState<Availability>(empty);
   const [draft, setDraft] = useState<Availability>(empty);
   const [eligible, setEligible] = useState(false);
@@ -52,7 +31,7 @@ export default function DriverAvailability({ notify, onSessionExpired, onViewVeh
   const [reload, setReload] = useState(0);
   const [mobile, setMobile] = useState(() => window.matchMedia('(max-width: 760px)').matches);
   const [choosingDay, setChoosingDay] = useState(false);
-  const [chosenDay, setChosenDay] = useState(() => singaporeClock().day);
+  const [chosenDay, setChosenDay] = useState(() => clock.day);
   useEffect(() => {
     const media = window.matchMedia('(max-width: 760px)');
     const update = () => setMobile(media.matches);
@@ -62,10 +41,7 @@ export default function DriverAvailability({ notify, onSessionExpired, onViewVeh
   const [rangeEditor, setRangeEditor] = useState<{ day: number; ranges: (TimeRange & { id: number })[] } | null>(null);
   const [rangeError, setRangeError] = useState('');
   const rangeId = useRef(0);
-  const [focusSlot, setFocusSlot] = useState(() => singaporeClock().day * 48 + 10);
   const alive = useRef(false);
-  const grid = useRef<HTMLDivElement>(null);
-  const drag = useRef<{ start: number; base: Set<number>; available: boolean } | null>(null);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
   useEffect(() => {
     let active = true;
@@ -82,47 +58,7 @@ export default function DriverAvailability({ notify, onSessionExpired, onViewVeh
     return () => { active = false; };
   }, [reload, onSessionExpired]);
   const selected = new Set(draft.weekly_slots);
-  const start = 10;
   const editable = editing && !saving && !conflict;
-  function toggle(slot: number) {
-    setDraft(current => {
-      const next = new Set(current.weekly_slots);
-      if (next.has(slot)) next.delete(slot); else next.add(slot);
-      return { ...current, weekly_slots: [...next].sort((a, b) => a - b) };
-    });
-  }
-  function paint(end: number) {
-    const state = drag.current;
-    if (!state) return;
-    const next = new Set(state.base);
-    for (let day = Math.min(Math.floor(state.start / 48), Math.floor(end / 48)); day <= Math.max(Math.floor(state.start / 48), Math.floor(end / 48)); day++) {
-      for (let slot = Math.min(state.start % 48, end % 48); slot <= Math.max(state.start % 48, end % 48); slot++) {
-        if (state.available) next.add(day * 48 + slot); else next.delete(day * 48 + slot);
-      }
-    }
-    setDraft(current => ({ ...current, weekly_slots: [...next].sort((a, b) => a - b) }));
-  }
-  function pointerDown(event: PointerEvent<HTMLButtonElement>, slot: number) {
-    if (!editable || event.pointerType !== 'mouse' || event.button !== 0) return;
-    event.preventDefault(); event.currentTarget.focus();
-    drag.current = { start: slot, base: selected, available: !selected.has(slot) };
-    grid.current?.setPointerCapture(event.pointerId); paint(slot);
-  }
-  function move(event: PointerEvent<HTMLDivElement>) {
-    if (!drag.current) return;
-    const cell = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>('[data-availability-slot]');
-    if (cell && grid.current?.contains(cell)) paint(Number(cell.dataset.availabilitySlot));
-  }
-  function keyDown(event: KeyboardEvent<HTMLButtonElement>, key: number) {
-    const offsets: Partial<Record<string, number>> = { ArrowUp: -1, ArrowDown: 1, ArrowLeft: -48, ArrowRight: 48 };
-    const offset = offsets[event.key];
-    if (offset === undefined) return;
-    event.preventDefault();
-    const next = key + offset;
-    if (next < 0 || next > 335 || next % 48 < start || (Math.abs(offset) === 1 && Math.floor(next / 48) !== Math.floor(key / 48))) return;
-    setFocusSlot(next);
-    requestAnimationFrame(() => grid.current?.querySelector<HTMLButtonElement>(`[data-availability-slot="${next}"]`)?.focus());
-  }
   function openDay(day: number) {
     setRangeError(''); setChoosingDay(false); setEditing(true);
     setRangeEditor({ day, ranges: dayRanges(selected, day).map(range => ({ ...range, id: rangeId.current++ })) });
@@ -177,19 +113,7 @@ export default function DriverAvailability({ notify, onSessionExpired, onViewVeh
         </section>
       : <div className={`patient-profile-form${editing ? ' patient-editing' : ''}`} aria-busy={saving}>
         <div className="panel-scroll availability-content">
-          <div className="availability-mobile-days" role="region" aria-label="Weekly availability by day">
-            {days.map((day, dayIndex) => { const ranges = dayRanges(selected, dayIndex); return <section className="availability-mobile-day" key={day} aria-labelledby={`mobile-availability-${dayIndex}`}>
-              <h2 id={`mobile-availability-${dayIndex}`} aria-current={dayIndex === clock.day ? 'date' : undefined}>{day}</h2>
-              {ranges.length ? <ul className="availability-mobile-ranges">{ranges.map(range => <li key={range.start}>{time(range.start)}–{time(range.end)}</li>)}</ul> : <p className="availability-unavailable">Unavailable</p>}
-            </section>; })}
-          </div>
-          <div className="availability-grid" ref={grid} role="group" aria-label="Weekly availability" onPointerMove={move} onPointerUp={() => { drag.current = null; }} onPointerCancel={() => { drag.current = null; }} onLostPointerCapture={() => { drag.current = null; }}>
-            <div className="availability-time-column" aria-hidden="true"><div className="availability-day-heading">Time</div>{Array.from({ length: 48 - start }, (_, i) => <div className="availability-time" key={i}>{time(start + i)}</div>)}</div>
-            {days.map((day, dayIndex) => <div key={day} className={`availability-day${dayIndex === clock.day ? ' availability-today' : ''}`}><div className="availability-day-heading" aria-current={dayIndex === clock.day ? 'date' : undefined}>{day}</div>
-              {Array.from({ length: 48 - start }, (_, i) => { const slot = start + i; const key = dayIndex * 48 + slot; return <button type="button" className="availability-slot" key={key} data-availability-slot={key} aria-label={`${day} ${time(slot)}–${time(slot + 1)}`} aria-pressed={selected.has(key)} disabled={!editable} tabIndex={focusSlot === key ? 0 : -1} onFocus={() => setFocusSlot(key)} onKeyDown={event => keyDown(event, key)} onPointerDown={event => pointerDown(event, key)} onClick={event => { if (editable && (event.detail === 0 || (event.nativeEvent as globalThis.PointerEvent).pointerType !== 'mouse')) toggle(key); }} />; })}
-            </div>)}
-            {clock.minutes >= start * 30 && <div className="availability-now-marker" role="img" aria-label={`Current Singapore time ${String(Math.floor(clock.minutes / 60)).padStart(2, '0')}:${String(clock.minutes % 60).padStart(2, '0')}`} style={{ top: `min(100%, ${34 + (clock.minutes / 30 - start) * 26}px)` }}><span className="availability-now-time" aria-hidden="true">{String(Math.floor(clock.minutes / 60)).padStart(2, '0')}:{String(clock.minutes % 60).padStart(2, '0')}</span></div>}
-          </div>
+          <WeeklyAvailabilityView slots={draft.weekly_slots} clock={clock} editable={editable} onChange={slots => setDraft(current => ({ ...current, weekly_slots: slots }))} />
         </div>
         <div className="patient-actions availability-mobile-actions">
           {editing && !rangeEditor ? <><button className="patient-primary" type="button" disabled={!editable} onClick={() => void save()}>{saving ? 'Saving…' : 'Save availability'}</button><button type="button" disabled={saving} onClick={() => { setDraft(saved); setEditing(false); setConflict(false); setError(''); }}>Cancel</button></> : <button className="patient-primary" type="button" disabled={saving} onClick={() => { setError(''); setChosenDay(clock.day); setChoosingDay(true); }}>Edit availability</button>}

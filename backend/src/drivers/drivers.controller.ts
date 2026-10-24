@@ -17,6 +17,9 @@ export class DriversController {
     return this.service.list(header, page, search, status, sort, direction);
   }
 
+  @Get(':id/availability')
+  availability(@Headers('authorization') header: string | undefined, @Param('id') id: string) { return this.service.availability(header, id); }
+
   @Patch(':id')
   updateStatus(@Headers('authorization') header: string | undefined, @Param('id') id: string, @Body() body: unknown) { return this.service.updateStatus(header, id, body); }
 

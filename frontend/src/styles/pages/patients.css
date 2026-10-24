@@ -224,6 +224,6 @@
 
 @media (max-width: 760px) {
   .drivers-panel .patients-table tr {
-    grid-template-columns: 2ch minmax(0, 1fr) 92px;
+    grid-template-columns: 2ch minmax(0, 1fr) 140px;
   }
 }

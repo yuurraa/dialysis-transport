@@ -42,6 +42,13 @@ export class DriversService {
     return { vehicle: result.data };
   }
 
+  async availability(header: string | undefined, id: string) {
+    const { client } = await this.access(header, 'coordinator');
+    if (!/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(id)) throw new BadRequestException('Invalid driver.');
+    const result = await client.rpc('get_driver_availability', { target: id });
+    this.check(result.error); return result.data;
+  }
+
   async submit(header: string | undefined, body: unknown) {
     const { client } = await this.access(header, 'driver');
     const input = this.input(body, ['licence_number', 'plate_number', 'make', 'model', 'passenger_capacity', 'wheelchair_accessible', 'version']);

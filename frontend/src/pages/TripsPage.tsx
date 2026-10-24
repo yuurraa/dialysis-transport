@@ -153,7 +153,7 @@ export default function TripsPage({ coordinator, onSessionExpired }: { coordinat
       {loading ? <div className="account-loading" role="status"><span className="account-spinner" aria-hidden="true" /><span>Loading...</span></div> : error ? <ListError title="Trips could not be loaded" message="Please try again to load your journeys and trip statuses." onRetry={() => setReload(value => value + 1)} /> : !data?.trips.length ? <div className="dashboard-data-status patients-status" role="status"><div><h3>No trips scheduled.</h3><p>No trips match these filters.</p></div></div>
         : <div className="trip-records panel-scroll" role="region" aria-label="Trip list" tabIndex={0}>{data.trips.map((trip, index) => <article className="trip-record" key={trip.id}>
           <div className="trip-record-heading">
-            <h3 className="trip-record-title"><span>{tripDate(trip.treatment_start)}</span><span className="trip-direction-status"><span>{trip.direction === 'outbound' ? 'Outbound' : 'Return'}</span><TripStatus status={trip.status} /></span></h3>
+            <h3 className="trip-record-title"><span className="trip-date-status"><span>{tripDate(trip.treatment_start)}</span><TripStatus status={trip.status} /></span><span className="trip-direction-status">{trip.direction === 'outbound' ? 'Outbound' : 'Return'}</span></h3>
             {coordinator && <p className="trip-patient-identity">{trip.patient_name}</p>}
             <MobileTripTiming trip={trip} />
           </div>

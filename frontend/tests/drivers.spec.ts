@@ -387,3 +387,42 @@ test('drivers edit personal details with cancel, retry and stale-version protect
   await expect(name).toHaveValue('Updated Driver');await expect(name).toBeDisabled();
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
 });
+
+test('coordinator inspects driver availability in a read-only popup with retry, empty and mobile states', async ({ page }) => {
+  await seedSession(page);
+  await page.route('**/api/auth/me', route => route.fulfill({json:{account:{...activeAccount,role:'coordinator'}}}));
+  const driver={id:driverId,display_name:'Driver',email:'driver@example.test',account_status:'active',status_version:1,profile,vehicle:null};
+  await page.route('**/api/drivers?*',route=>route.fulfill({json:{drivers:[driver],total:1,page:1,pageSize:10}}));
+  let failure=true;let empty=false;let reads=0;
+  await page.route(`**/api/drivers/${driverId}/availability`,route=>{
+    expect(route.request().method()).toBe('GET');reads++;
+    if(failure) return route.fulfill({status:503,json:{}});
+    return route.fulfill({json:{eligible:false,availability:empty ? null : {weekly_slots:[16,17,18,19],version:2}}});
+  });
+  await page.goto('/dashboard/drivers');
+  const button=page.getByRole('button',{name:'View availability for Fixture Driver',exact:true});
+  await button.click();const dialog=page.getByRole('dialog',{name:'Weekly Availability',exact:true});
+  await expect(dialog.getByRole('alert')).toContainText('could not be loaded');
+  failure=false;await dialog.getByRole('button',{name:'Try again',exact:true}).click();
+  const slot=dialog.getByRole('button',{name:'Monday 08:00–08:30',exact:true});
+  await expect(slot).toHaveAttribute('aria-pressed','true');await expect(slot).toBeDisabled();
+  await expect(dialog.getByText('Hours per week: 2h',{exact:true})).toBeVisible();
+  await expect(dialog.getByText('Not currently eligible for trip assignment.',{exact:true})).toBeVisible();
+  await expect(dialog.getByRole('button',{name:/Edit availability|Save availability|Approve|Reject/})).toHaveCount(0);
+  await expectPopup(dialog);
+  const body=dialog.locator('.overlay-body');
+  await body.evaluate(element => { element.scrollTop=180; });
+  await expect.poll(async () => {
+    const header=(await dialog.locator('.availability-day-heading').first().boundingBox())!;
+    const bounds=(await body.boundingBox())!;
+    return Math.abs(header.y-bounds.y);
+  }).toBeLessThanOrEqual(1);
+  await page.setViewportSize({width:390,height:844});
+  await expectPopup(dialog);
+  await expect(dialog.getByRole('region',{name:'Monday',exact:true})).toContainText('08:00–10:00');
+  await dialog.getByRole('button',{name:'Close Weekly Availability',exact:true}).click();
+  await expect(button).toBeFocused();
+  empty=true;await button.click();
+  await expect(dialog.getByText('No availability set.',{exact:true})).toBeVisible();expect(reads).toBe(3);
+  await page.keyboard.press('Escape');await expect(dialog).toBeHidden();await expect(button).toBeFocused();
+});

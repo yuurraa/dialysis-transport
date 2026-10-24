@@ -61,9 +61,11 @@
 
 /* The live marker is visual only and never intercepts slot selection. */
 .availability-today .availability-day-heading { background: color-mix(in srgb, var(--ui-accent) 18%, var(--ui-surface)); color: var(--ui-text); font-weight: 700; gap: 6px; }
-.availability-now-marker { position: absolute; left: 0; right: 0; height: 0; z-index: 2; pointer-events: none; }
-.availability-now-marker::after { content: ''; position: absolute; left: 68px; right: 0; top: -1.5px; border-top: 3px solid var(--ui-accent); }
-.availability-now-time { position: absolute; left: 0; transform: translateY(-50%); padding: 2px 5px; border-radius: 4px; background: var(--ui-accent); color: var(--ui-accent-text); font-size: .75rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.availability-now-marker { position: absolute; left: 68px; right: 0; height: 0; z-index: 2; pointer-events: none; }
+.availability-now-line { position: absolute; left: 0; right: 0; top: -1px; border-top: 2px solid var(--ui-accent); }
+.availability-now-marker::before, .availability-now-marker::after { content: ''; position: absolute; top: -6px; border-top: 6px solid transparent; border-bottom: 6px solid transparent; }
+.availability-now-marker::before { left: 0; border-left: 8px solid var(--ui-accent); }
+.availability-now-marker::after { right: 0; border-right: 8px solid var(--ui-accent); }
 
 .availability-mobile-day { display: grid; grid-template-columns: 104px minmax(0, 1fr); align-items: center; gap: 8px; min-height: 48px; }
 .availability-mobile-day h2 { margin: 0; font-size: .875rem; font-weight: 600; padding: 6px 10px; border-radius: 5px; }
@@ -82,3 +84,15 @@
   .availability-panel > .page-heading .dashboard-eyebrow { margin-top: 4px; }
   .availability-mobile-actions { display: flex; justify-content: flex-end; flex-shrink: 0; padding-top: 12px; }
 }
+
+.weekly-availability-view { min-width: 0; }
+.dashboard-dialog.driver-availability-dialog { width: min(1000px, calc(100% - 24px)); }
+.driver-availability-dialog .overlay-body > .availability-hours { margin: 0 0 16px; }
+.availability-eligibility { margin: 0 0 16px; color: var(--ui-muted); font-size: .875rem; }
+
+@media (min-width: 761px) {
+  .driver-availability-dialog .overlay-body:has(> .weekly-availability-view) { padding-top: 0; }
+  .driver-availability-dialog .overlay-body > .availability-hours { padding-top: 24px; }
+}
+
+.driver-availability-dialog .availability-day-heading:not([aria-current=date]) { background: var(--ui-raised); }

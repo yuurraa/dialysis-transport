@@ -1093,6 +1093,14 @@ test('driver availability is approved-owner-only, versioned and validates weekly
 
     const [{availability}]=await save(driver,0,[10,11,60,335]);
     assert.deepEqual(availability.weekly_slots,[10,11,60,335]);assert.equal(availability.version,1);
+    const inspect=target=>act(coordinator,'select public.get_driver_availability($1) as result',[target]);
+    assert.deepEqual((await inspect(account.id))[0].result.availability.weekly_slots,[10,11,60,335]);
+    assert.equal((await inspect(account.id))[0].result.eligible,true);
+    assert.equal((await act(coordinator,'select * from public.driver_availability')).length,1);
+    for(const who of [patient,driver]) await assert.rejects(act(who,'select public.get_driver_availability($1)',[account.id]),/Coordinator/);
+    await assert.rejects(inspect(patient),/Driver not found/);
+    await assert.rejects(act(coordinator,'update public.driver_availability set weekly_slots=array[1]'),/permission/i);
+
     await assert.rejects(save(driver,0),/changed/i);
     for(const who of [patient,coordinator]) await assert.rejects(save(who,0),/Driver|approved/i);
     for(const slots of [[-1],[336],[10,10],[1,null]]) await assert.rejects(save(driver,1,slots),/Invalid/i);
@@ -1107,6 +1115,14 @@ test('driver availability is approved-owner-only, versioned and validates weekly
     assert.equal((await local.query("select to_regprocedure('public.save_my_availability(integer[],jsonb,integer)') as legacy")).rows[0].legacy,null);
     await act(driver,'select public.submit_driver_vehicle($1::jsonb,$2)',[JSON.stringify({licence_number:'MOCK',plate_number:'AVAIL123',make:'Fixture',model:'Updated',passenger_capacity:3,wheelchair_accessible:false}),vehicle.version+1]);
     assert.equal((await get())[0].result.eligible,false);await assert.rejects(save(driver,2),/approved/i);
+    const reviewed=(await inspect(account.id))[0].result;
+    assert.equal(reviewed.eligible,false);assert.deepEqual(reviewed.availability.weekly_slots,[10]);
+    await local.query("update public.accounts set status='inactive' where id=$1",[account.id]);
+    assert.equal((await inspect(account.id))[0].result.eligible,false);
+    await local.query("update public.accounts set status='inactive' where auth_user_id=$1",[coordinator]);
+    await assert.rejects(inspect(account.id),/Coordinator/);
+    await local.query("update public.accounts set status='active' where auth_user_id=$1",[coordinator]);
+
     const originalApproval=(await local.query('select registered_at from public.driver_vehicles where driver_id=$1',[account.id])).rows[0].registered_at;
     assert.ok(originalApproval, 'Resubmitting retains the previous approval date');
     await local.query('update public.driver_vehicles set registered_at=null where driver_id=$1',[account.id]);

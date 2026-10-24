@@ -598,7 +598,7 @@ revoke all on public.driver_availability from public,anon,authenticated;
 grant select on public.driver_availability to authenticated;
 drop policy if exists driver_availability_read on public.driver_availability;
 create policy driver_availability_read on public.driver_availability for select to authenticated
-  using (driver_id=(select private.approved_driver_id()));
+  using ((select private.is_coordinator()) or driver_id=(select private.approved_driver_id()));
 
 create or replace function private.get_my_availability() returns jsonb
 language plpgsql security definer set search_path='' as $$
@@ -612,6 +612,25 @@ end;
 $$;
 create or replace function public.get_my_availability() returns jsonb
 language sql security invoker set search_path='' as $$ select private.get_my_availability(); $$;
+
+-- Coordinator reads do not grant availability editing or relax assignment eligibility.
+create or replace function private.get_driver_availability(target uuid) returns jsonb
+language plpgsql security definer set search_path='' as $$
+declare eligible boolean;
+begin
+  if not private.is_coordinator() then raise exception 'Coordinator access required.' using errcode='42501'; end if;
+  select a.status='active' and coalesce(v.status='approved',false) into eligible
+    from public.accounts a left join public.driver_vehicles v on v.driver_id=a.id
+    where a.id=target and a.role='driver';
+  if not found then raise exception 'Driver not found.' using errcode='P0002'; end if;
+  return jsonb_build_object('eligible',eligible,'availability',
+    (select to_jsonb(a) from public.driver_availability a where a.driver_id=target));
+end;
+$$;
+create or replace function public.get_driver_availability(target uuid) returns jsonb
+language sql security invoker set search_path='' as $$ select private.get_driver_availability(target); $$;
+revoke all on function private.get_driver_availability(uuid),public.get_driver_availability(uuid) from public,anon;
+grant execute on function private.get_driver_availability(uuid),public.get_driver_availability(uuid) to authenticated;
 
 create or replace function private.save_my_availability(slots integer[], expected_version integer) returns jsonb
 language plpgsql security definer set search_path='' as $$

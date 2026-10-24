@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
+import DriverAvailabilityDialog from '../components/DriverAvailabilityDialog';
 import { ApiError, apiGet, apiRequest } from '../lib/api';
 import { ChoiceGroup, InfoButton, ListError, ListPagination, ListToolbar, Overlay, PageHeading, SortOverlay, sortSummary } from '../components/DashboardUI';
 import { PersonalFields, emptyPersonal, type PersonalDetails } from '../components/PersonalFields';
@@ -23,7 +24,7 @@ export default function DriversPage({ notify, onSessionExpired }: { notify: (mes
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [reload, setReload] = useState(0);
-  const [detailView, setDetailView] = useState<'driver' | 'car'>('driver');
+  const [detailView, setDetailView] = useState<'driver' | 'car' | 'schedule'>('driver');
   const [selected, setSelected] = useState<Driver | null>(null);
   const [editing, setEditing] = useState(false);
   const [statusDraft, setStatusDraft] = useState<'active' | 'inactive'>('active');
@@ -59,7 +60,7 @@ export default function DriversPage({ notify, onSessionExpired }: { notify: (mes
     return () => { active = false; };
   }, [filters, reload, onSessionExpired]);
 
-  function open(driver: Driver, view: 'driver' | 'car' = 'driver') {
+  function open(driver: Driver, view: 'driver' | 'car' | 'schedule' = 'driver') {
     setDetailView(view);
     setSelected(driver); setStatusDraft(driver.account_status); setEditing(false);
     setReason(''); setReviewError(''); setConflict(false);
@@ -125,7 +126,7 @@ export default function DriversPage({ notify, onSessionExpired }: { notify: (mes
     {loading && !list ? <div className="account-loading patients-loading" role="status" aria-label="Loading drivers"><span className="account-spinner" aria-hidden="true" /><span>Loading...</span></div>
       : error ? <ListError title="Drivers could not be loaded" message={error} onRetry={() => setReload(value => value + 1)} />
       : list?.drivers.length ? <div className="patients-table-scroll" tabIndex={0} role="region" aria-label="Driver records">
-        <table className="patients-table"><colgroup>{[5, 24, 19, 16, 12, 12, 0].map((width, index) => <col key={index} style={{ width: index === 6 ? '128px' : `${width}%` }} />)}</colgroup>
+        <table className="patients-table"><colgroup>{[5, 24, 19, 16, 12, 12, 0].map((width, index) => <col key={index} style={{ width: index === 6 ? '176px' : `${width}%` }} />)}</colgroup>
           <thead><tr><th scope="col" className="record-number-heading" aria-label="Row number">#</th>{driverColumns.map(column => <th key={column.key} scope="col" aria-label={column.label} aria-sort={filters.sort === column.key ? filters.direction === 'asc' ? 'ascending' : 'descending' : 'none'}>
             <button type="button" className="patient-sort-button" aria-label={filters.sort === column.key && filters.direction === 'desc' ? `Reset ${column.label} ordering` : `Sort by ${column.label} ${filters.sort === column.key ? 'descending' : 'ascending'}`} onClick={() => sortDrivers(column.key)}>{column.label}{filters.sort === column.key && <span aria-hidden="true">{filters.direction === 'asc' ? '▲' : '▼'}</span>}</button>
           </th>)}<th scope="col" aria-label="Details" /></tr></thead>
@@ -135,6 +136,7 @@ export default function DriversPage({ notify, onSessionExpired }: { notify: (mes
             <td data-label="Contact">{driver.profile?.phone ?? 'Not provided'}</td><td data-label="Vehicle">{driver.vehicle?.plate_number ?? 'Not submitted'}</td>
             <td data-label="Registration">{registrationLabels[driver.vehicle?.status ?? 'not-submitted']}</td>
             <td className="patient-record-action"><div className="driver-record-actions">
+              <button className="list-info-control" type="button" aria-label={`View availability for ${driver.profile?.full_name ?? driver.display_name}`} title="Weekly availability" disabled={updating} onClick={() => open(driver, 'schedule')}><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2" /><path d="M7 3v4m10-4v4M3 11h18M7 15h2m3 0h2m3 0h.01M7 18h2" /></svg></button>
               <button className="list-info-control" type="button" aria-label={`View car for ${driver.profile?.full_name ?? driver.display_name}`} title="Car details" disabled={updating} onClick={() => open(driver, 'car')}>
                 <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m5 10 2-6h10l2 6M5 10h14a2 2 0 0 1 2 2v6H3v-6a2 2 0 0 1 2-2ZM5 18v2m14-2v2M7 14h.01M17 14h.01" /></svg>
               </button>
@@ -149,6 +151,7 @@ export default function DriversPage({ notify, onSessionExpired }: { notify: (mes
       footer={<><button className="patient-primary" type="submit">Apply Filters</button><button type="button" onClick={() => setFilterDraft('all')}>Reset</button><button type="button" onClick={() => setFilterDraft(null)}>Cancel</button></>}>
       <ChoiceGroup label="Registration" value={filterDraft} onChange={setFilterDraft} options={[{ value: 'all', label: 'All drivers' }, ...Object.entries(registrationLabels).map(([value, label]) => ({ value, label }))]} />
     </Overlay>}
+    {selected && detailView === 'schedule' && <DriverAvailabilityDialog driverId={selected.id} name={selected.profile?.full_name ?? selected.display_name} onClose={close} onSessionExpired={onSessionExpired} />}
     {selected && detailView === 'driver' && <Overlay title="Driver Details" className={`patient-dialog${editing ? ' patient-editing' : ''}`} description={<span className="profile-id">Driver ID: {selected.id}</span>} busy={saving} onClose={close} onSubmit={editing ? saveStatus : undefined} error={reviewError} onDismissError={() => setReviewError('')}
       footer={editing ? <>
         <button className="patient-primary" type="submit" disabled={saving || conflict}>{saving ? 'Saving…' : 'Save Driver'}</button>
