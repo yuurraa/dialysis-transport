@@ -995,7 +995,7 @@ begin
   ), parents as (select id from page union select replaces_schedule_id from page where replaces_schedule_id is not null)
   select jsonb_build_object(
     'centres',(select coalesce(jsonb_agg(to_jsonb(c) order by name,id),'[]'::jsonb) from public.dialysis_centres c),
-    'schedules',(select coalesce(jsonb_agg(to_jsonb(p)-'centre_name'-'list_order' order by list_order),'[]'::jsonb) from page p),
+    'schedules',(select coalesce(jsonb_agg((to_jsonb(p)-'centre_name'-'list_order') || case when private.is_coordinator() then jsonb_build_object('trip_generation',private.treatment_trip_coverage(p.id)) else '{}'::jsonb end order by list_order),'[]'::jsonb) from page p),
     'context',(select coalesce(jsonb_agg(to_jsonb(s)-'centre_name' order by effective_from,id),'[]'::jsonb) from visible s where s.id in (select id from parents) or s.replaces_schedule_id in (select id from parents)),
     'total',(select count(*) from matched),'page',page_no,'pageSize',10) into result;
   return result;
@@ -1057,7 +1057,7 @@ create table if not exists public.trip_history (
 );
 create index if not exists trip_history_trip on public.trip_history(trip_id,created_at,id);
 alter table public.trip_history drop constraint if exists trip_history_event_check;
-alter table public.trip_history add constraint trip_history_event_check check (event in ('generated','refreshed','requirements_changed','deleted'));
+alter table public.trip_history add constraint trip_history_event_check check (event in ('generated','refreshed','requirements_changed','deleted','restored'));
 alter table public.trips enable row level security;
 alter table public.trip_history enable row level security;
 revoke all on public.trips,public.trip_history from public,anon,authenticated;
@@ -1153,8 +1153,7 @@ begin
       due := case when leg='outbound' then session_start-interval '15 minutes' end;
       ready := case when leg='return' then session_end+interval '15 minutes' end;
       select * into old_trip from public.trips where root_schedule_id=source_root and occurrence_key=key and direction=leg for update;
-      if found and old_trip.deleted_at is not null then skipped:=skipped+1; continue; end if;
-      if found and not old_trip.review_required and old_trip.source_version=session.version and old_trip.patient_version=person.version
+      if found and old_trip.deleted_at is null and not old_trip.review_required and old_trip.source_version=session.version and old_trip.patient_version=person.version
         and old_trip.source_schedule_id=session.id and old_trip.session_date=session.actual_date and old_trip.origin=origin_text and old_trip.destination=destination_text
         and old_trip.treatment_start=session_start and old_trip.treatment_end=session_end then
         unchanged:=unchanged+1; continue;
@@ -1168,12 +1167,12 @@ begin
       else
         update public.trips set patient_name=person.full_name,source_schedule_id=session.id,session_date=session.actual_date,
           origin=origin_text,destination=destination_text,treatment_start=session_start,treatment_end=session_end,arrival_by=due,pickup_not_before=ready,
-          source_version=session.version,patient_version=person.version,review_required=false,updated_at=now()
+          source_version=session.version,patient_version=person.version,review_required=false,deleted_at=null,updated_at=now()
           where id=old_trip.id returning * into saved;
         refreshed:=refreshed+1;
       end if;
       insert into public.trip_history(trip_id,actor_id,event,details) values(saved.id,actor,
-        case when old_trip.id is null then 'generated' else 'refreshed' end,
+        case when old_trip.id is null then 'generated' when old_trip.deleted_at is not null then 'restored' else 'refreshed' end,
         jsonb_build_object('source_schedule_id',session.id,'source_version',session.version,'session_date',session.actual_date));
     end loop;
   end loop;
@@ -1216,19 +1215,83 @@ drop function if exists public.list_trips(integer,date,date,text);
 drop function if exists private.list_trips(integer,date,date,text);
 drop function if exists public.list_trips(integer,date,date,text,text,text);
 drop function if exists private.list_trips(integer,date,date,text,text,text);
+-- Coordinator row indicators are calculated from current journeys, not generation history.
+create or replace function private.treatment_trip_coverage(target uuid) returns jsonb
+language plpgsql stable security invoker set search_path='' as $$
+declare chosen public.treatment_schedules; window_start date; window_end date; result jsonb;
+begin
+  if not private.is_coordinator() then raise exception 'Coordinator access required.' using errcode='42501'; end if;
+  select * into chosen from public.treatment_schedules where id=target;
+  if not found or not isfinite(chosen.effective_from) or not isfinite(chosen.effective_to)
+    or chosen.effective_from not between date '0001-01-01' and date '9999-12-31'
+    or chosen.effective_to not between date '0001-01-01' and date '9999-12-31' then
+    return jsonb_build_object('status','unavailable','through',null);
+  end if;
+  select greatest((now() at time zone 'Asia/Singapore')::date,
+    least(chosen.effective_from,coalesce(min(s.effective_from),chosen.effective_from))) into window_start
+    from public.treatment_schedules s where chosen.kind='recurring' and s.replaces_schedule_id=target
+      and s.effective_to>=(now() at time zone 'Asia/Singapore')::date
+      and s.effective_from between date '0001-01-01' and date '9999-12-31';
+  window_end:=least(window_start+89,date '9999-12-31');
+  with sources as materialized (
+    select s.*,p.version as current_patient_version from public.treatment_schedules s
+    join public.patients p on p.id=s.patient_id
+    where (s.id=target or (chosen.kind='recurring' and s.replaces_schedule_id=target))
+      and s.effective_from between date '0001-01-01' and date '9999-12-31'
+      and s.effective_to between date '0001-01-01' and date '9999-12-31'
+  ), sessions as (
+    select s.*,d::date as actual_date,(d::date+s.start_time) at time zone 'Asia/Singapore' as actual_start,
+      (d::date+s.end_time) at time zone 'Asia/Singapore' as actual_end,
+      coalesce(s.replaces_schedule_id,s.id) as root_id,
+      case when s.kind='single' and s.replaces_schedule_id is null then 'single' else coalesce(s.replaces_date,d::date)::text end as occurrence
+    from sources s cross join lateral generate_series(greatest(s.effective_from,window_start)::timestamp,
+      least(s.effective_to,window_end)::timestamp,interval '1 day') d
+    where extract(isodow from d)::integer=s.days[1]
+      and (d::date+s.start_time) at time zone 'Asia/Singapore'>now()
+      and not exists(select 1 from public.treatment_schedules r where r.replaces_schedule_id=s.id and r.replaces_date=d::date)
+  ), coverage as (
+    select s.id,s.actual_date,count(t.id) as present_legs,
+      count(t.id) filter (where t.source_schedule_id=s.id and t.source_version=s.version
+        and t.patient_version=s.current_patient_version and not t.review_required
+        and t.session_date=s.actual_date and t.treatment_start=s.actual_start and t.treatment_end=s.actual_end) as valid_legs
+    from sessions s left join public.trips t on t.root_schedule_id=s.root_id and t.occurrence_key=s.occurrence and t.deleted_at is null
+    group by s.id,s.actual_date
+  ), summary as (
+    select count(*) as expected,count(*) filter(where valid_legs=2) as complete,
+      coalesce(sum(present_legs),0) as present,min(actual_date) filter(where valid_legs<>2) as first_gap from coverage
+  ), dates as (
+    select actual_date,bool_and(valid_legs=2) as complete from coverage group by actual_date
+  ), blocks as (
+    select *,sum(case when complete then 0 else 1 end) over(order by actual_date) as block from dates
+  ), generated_ranges as (
+    select min(actual_date) as from_date,max(actual_date) as until_date from blocks where complete group by block
+  )
+  select jsonb_build_object(
+    'status',case when x.expected=0 then 'none' when x.complete=x.expected then 'generated' when x.present=0 then 'not_generated' else 'partial' end,
+    'through',(select max(actual_date) from coverage where valid_legs=2 and (x.first_gap is null or actual_date<x.first_gap)),
+    'generated_ranges',(select coalesce(jsonb_agg(to_jsonb(r) order by from_date),'[]'::jsonb) from generated_ranges r),
+    'expected_sessions',x.expected,'generated_sessions',x.complete,'window_start',window_start,'window_end',window_end)
+    into result from summary x;
+  return result;
+end;
+$$;
+revoke all on function private.treatment_trip_coverage(uuid) from public,anon;
+grant execute on function private.treatment_trip_coverage(uuid) to authenticated;
+
 create or replace function private.list_trips(page_no integer,from_date date,until_date date,status_filter text default 'all',search_text text default '',direction_filter text default 'all',sort_by text default 'treatment_start',sort_order text default 'asc') returns jsonb
 language plpgsql stable security invoker set search_path = '' as $$
 declare result jsonb;
 begin
   if not private.is_coordinator() and private.patient_account_id() is null then raise exception 'Trip access denied.' using errcode='42501'; end if;
-  if page_no is null or page_no<1 or page_no>1000000 or from_date is null or until_date is null or not isfinite(from_date) or not isfinite(until_date)
-    or from_date<date '0001-01-01' or until_date>date '9999-12-31' or until_date<from_date or until_date-from_date>89
+  if page_no is null or page_no<1 or page_no>1000000 or from_date is null or not isfinite(from_date)
+    or from_date<date '0001-01-01' or from_date>date '9999-12-31'
+    or (until_date is not null and (not isfinite(until_date) or until_date>date '9999-12-31' or until_date<from_date))
     or status_filter is null or status_filter !~ '^(all|(unfilled|at-risk|on-track|resolved)(,(unfilled|at-risk|on-track|resolved)){0,3})$'
     or direction_filter is null or direction_filter !~ '^(all|(outbound|return)(,(outbound|return)){0,1})$'
     or sort_by is null or sort_by not in ('treatment_start','patient_name','direction','status')
     or sort_order is null or sort_order not in ('asc','desc')
     or search_text is null or length(search_text)>100 or search_text ~ '[[:cntrl:]]' then raise exception 'Invalid trip filters.' using errcode='22023'; end if;
-  with windowed as materialized (select * from public.trips t where deleted_at is null and session_date between from_date and until_date
+  with windowed as materialized (select * from public.trips t where deleted_at is null and session_date>=from_date and (until_date is null or session_date<=until_date)
     and (direction_filter='all' or direction=any(string_to_array(direction_filter,',')))
     and (btrim(search_text)='' or exists(select 1 from unnest(array[
       case when private.is_coordinator() then patient_name else '' end,

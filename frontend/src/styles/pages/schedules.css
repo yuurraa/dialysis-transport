@@ -23,13 +23,8 @@
   border-radius: 4px;
   font-size: .75rem;
   font-weight: 600;
-  color: var(--ui-info);
-  background: var(--ui-info-surface);
-}
-
-.generation-kind-single {
-  color: var(--ui-success);
-  background: var(--ui-success-surface);
+  color: var(--ui-accent);
+  background: color-mix(in srgb, var(--ui-accent) 12%, var(--ui-surface));
 }
 
 .generation-kind-rescheduled {
@@ -481,7 +476,7 @@
   line-height: 1.5;
 }
 
-.treatment-record h2, .treatment-location > span {
+.treatment-record h2, .treatment-location > span, .treatment-generation-label {
   font-size: 1rem;
   line-height: 1.5;
   margin: 0 0 4px;
@@ -525,14 +520,9 @@
   line-height: 1.5;
 }
 
-.treatment-record p.treatment-kind-recurring {
-  background: var(--ui-info-surface);
-  color: var(--ui-info);
-}
-
-.treatment-record p.treatment-kind-single {
-  background: var(--ui-success-surface);
-  color: var(--ui-success);
+.treatment-record p.treatment-kind-recurring, .treatment-record p.treatment-kind-single {
+  background: color-mix(in srgb, var(--ui-accent) 12%, var(--ui-surface));
+  color: var(--ui-accent);
 }
 
 .treatment-record p.treatment-kind-rescheduled {
@@ -654,4 +644,45 @@
     border-radius: 50%;
     box-shadow: 0 4px 12px rgb(0 0 0 / 24%);
   }
+}
+
+/* Coordinator trip coverage remains distinct from assignment status. */
+.treatment-generation { display: flex; flex-direction: column; align-items: flex-start; min-width: 0; }
+.treatment-generation-summary { display: flex; align-items: center; gap: 8px; max-width: 100%; min-width: 0; }
+.treatment-generation-badge { display: inline-block; flex-shrink: 0; white-space: nowrap; border: 1px solid var(--ui-border); border-radius: 5px; padding: 3px 8px; font-size: .75rem; line-height: 1.5; color: var(--ui-muted); }
+.treatment-generation-badge.generation-not_generated { color: var(--ui-danger); border-color: var(--ui-danger); background: var(--ui-danger-surface); }
+.treatment-generation-badge.generation-partial { color: var(--ui-warning); border-color: var(--ui-warning); background: var(--ui-warning-surface); }
+.treatment-generation-badge.generation-generated { color: var(--ui-success); border-color: var(--ui-success); background: var(--ui-success-surface); }
+@media (min-width: 1201px) {
+  .treatment-summary-coordinator { grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr) minmax(0, 1.3fr) minmax(11rem, 1fr); }
+}
+@media (min-width: 761px) and (max-width: 1200px) {
+  .treatment-summary-coordinator { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+
+.generation-coverage { margin: 16px 0; }
+.generation-coverage h3 { margin: 0 0 6px; font-size: .875rem; font-weight: 600; }
+.generation-coverage ul { display: grid; gap: 4px; list-style: none; margin: 0; padding: 0; }
+.generation-coverage li, .generation-coverage p { margin: 0; color: var(--ui-muted); font-size: .875rem; line-height: 1.6; }
+
+/* Mobile schedule type and trip coverage share one badge row. */
+@media (max-width: 760px) {
+  .treatment-summary-coordinator { grid-template-columns: max-content minmax(0, 1fr); gap: 6px 8px; }
+  .treatment-summary-coordinator .treatment-identity { display: contents; }
+  .treatment-summary-coordinator .treatment-identity > p:first-child {
+    grid-column: 1 / -1;
+    grid-row: 1;
+    min-height: 0;
+    padding-right: 104px;
+  }
+  .treatment-summary-coordinator p.treatment-kind {
+    grid-column: 1;
+    grid-row: 2;
+    white-space: nowrap;
+  }
+  .treatment-summary-coordinator > .treatment-generation { grid-column: 2; grid-row: 2; align-self: center; }
+  .treatment-summary-coordinator .treatment-generation-label { display: none; }
+  .treatment-summary-coordinator > .treatment-session { grid-column: 1 / -1; grid-row: 3; margin-top: 6px; }
+  .treatment-summary-coordinator > .treatment-location { grid-column: 1 / -1; grid-row: 4; }
 }

@@ -307,7 +307,7 @@
   left: 4px;
   top: calc(.5625rem + 5px);
   bottom: calc(5px - .5625rem);
-  border-left: 1px solid var(--ui-border);
+  border-left: 1px dotted var(--ui-border);
 }
 
 .trip-detail-route li:last-child::before {
@@ -827,7 +827,7 @@
     left: 3px;
     top: 16px;
     bottom: -32px;
-    border-left: 1px solid var(--ui-border);
+    border-left: 1px dotted var(--ui-border);
   }
 }
 
@@ -1048,3 +1048,39 @@
   justify-content: start;
 }
 .trip-date-status > span:first-child { white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+.trip-pagination-selection { display: contents; }
+
+/* Coordinator selection reuses the row-number gutter and pinned list footer. */
+.trip-selection-cell { position: absolute; left: 0; top: 12px; width: 32px; min-height: 44px; display: flex; align-items: center; justify-content: flex-start; cursor: pointer; }
+.trip-selection-cell input { width: 18px; height: 18px; min-height: 18px; margin: 0; accent-color: var(--ui-accent); cursor: pointer; }
+.trip-selection-cell:has(:focus-visible) { outline: 2px solid var(--ui-focus); outline-offset: 2px; }
+.trip-selection-toggle[aria-pressed="true"] { color: var(--ui-accent); border-color: var(--ui-accent); }
+.trips-panel .patients-pagination .trip-selection-action { width: auto; padding-inline: 12px; }
+@media (max-width: 760px) {
+  .trip-selection-cell { top: 2px; width: 24px; }
+}
+
+.trips-panel .patients-pagination .trip-selection-delete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ui-danger);
+  width: 44px;
+  min-width: 44px;
+  padding: 0;
+}
+.trip-bulk-delete-list { display: grid; gap: 12px; list-style: none; padding: 0; margin: 16px 0 0; }
+.trip-bulk-delete-list li { display: flex; flex-direction: column; gap: 4px; }
+.trip-bulk-delete-list li span { color: var(--ui-muted); font-size: .875rem; }
+
+/* Reserve the longer label so selecting all never shifts the footer controls. */
+.trips-panel .patients-pagination .trip-select-all { display: grid; }
+.trip-select-all::after { content: "Select all"; visibility: hidden; grid-area: 1 / 1; }
+.trip-select-all > span { grid-area: 1 / 1; }
+
+.trip-delete-dialog .overlay-body > .trip-delete-scope {
+  border-top: 0;
+  padding-top: 0;
+  margin-top: 0;
+}

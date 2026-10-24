@@ -48,15 +48,15 @@ export class TripsService {
   async listTrips(header?: string, page = '1', from = this.today(), until?: string, status = 'all', search = '', direction = 'all', sort = 'treatment_start', order = 'asc') {
     const client = await this.access(header);
     const start = this.date(from);
-    until ??= new Date(start + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-    this.window(from, until);
+    const end = until === undefined || until === '' ? null : this.date(until);
+    if (end !== null && end < start) throw new BadRequestException('End date cannot be before start date.');
     const statuses = typeof status === 'string' ? status.split(',') : [];
     if (typeof page !== 'string' || !/^\d+$/.test(page) || !Number.isSafeInteger(Number(page)) || Number(page) < 1 || Number(page) > 1000000
       || typeof status !== 'string' || statuses.length > 4 || (status !== 'all' && statuses.some(value => !['unfilled', 'at-risk', 'on-track', 'resolved'].includes(value)))
       || typeof search !== 'string' || search.length > 100 || /[\u0000-\u001f\u007f]/.test(search)
       || typeof direction !== 'string' || (direction !== 'all' && (direction.split(',').length > 2 || direction.split(',').some(value => !['outbound', 'return'].includes(value))))
       || !['treatment_start', 'patient_name', 'direction', 'status'].includes(sort) || !['asc', 'desc'].includes(order)) throw new BadRequestException('Invalid trip filters.');
-    const result = await client.rpc('list_trips', { page_no: Number(page), from_date: from, until_date: until, status_filter: status, search_text: search.trim(), direction_filter: direction, sort_by: sort, sort_order: order });
+    const result = await client.rpc('list_trips', { page_no: Number(page), from_date: from, until_date: end === null ? null : until, status_filter: status, search_text: search.trim(), direction_filter: direction, sort_by: sort, sort_order: order });
     this.check(result.error);
     return result.data;
   }

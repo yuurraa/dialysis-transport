@@ -48,9 +48,7 @@ function RouteAddress({ address }: { address: string }) {
   return <><span className="trip-address-full">{address}</span><span className="trip-address-short">{compactRouteLabel(address)}</span></>;
 }
 function MobileTripTiming({ trip }: { trip: Trip }) {
-  const timing = trip.pickup_at ? `Pickup at ${tripTime(trip.pickup_at)}`
-    : trip.direction === 'outbound' && trip.arrival_by ? `Arrive by ${tripTime(trip.arrival_by)}`
-    : trip.direction === 'return' && trip.pickup_not_before ? `Earliest pickup ${tripTime(trip.pickup_not_before)}` : null;
+  const timing = trip.pickup_at ? `Pickup at ${tripTime(trip.pickup_at)}` : null;
   return timing ? <p className="trip-mobile-timing">{timing}</p> : null;
 }
 function JourneyDetails({ trip }: { trip: Trip }) {
@@ -62,16 +60,23 @@ function JourneyDetails({ trip }: { trip: Trip }) {
 
 }
 
+const validTripDate = (value: string) => /^(?!0000)\d{4}-\d{2}-\d{2}$/.test(value)
+  && Number.isFinite(Date.parse(`${value}T00:00:00Z`)) && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value;
 interface Filters { page: number; from: string; until: string; status: string; search: string; direction: string; sort: string; order: string }
 export default function TripsPage({ coordinator, onSessionExpired }: { coordinator: boolean; onSessionExpired: () => void }) {
-  const [defaultRange] = useState(() => { const from = singaporeToday(); return { from, until: addDays(from, 30) }; });
+  const [defaultRange] = useState(() => { const from = singaporeToday(); return { from, until: '' }; });
   const [filters, setFilters] = useState<Filters>(() => ({ page: 1, ...defaultRange, status: 'all', search: '', direction: 'all', sort: 'treatment_start', order: 'asc' }));
   const [search, setSearch] = useState('');
   const [filterDraft, setFilterDraft] = useState<Filters | null>(null);
   const [sorting, setSorting] = useState(false);
+  const [selecting, setSelecting] = useState(false);
+  const [selectedTrips, setSelectedTrips] = useState<Set<string>>(() => new Set());
   const [filterError, setFilterError] = useState('');
   const [details, setDetails] = useState<Trip | null>(null);
   const [deleting, setDeleting] = useState<Trip | null>(null);
+  const [bulkDeleting, setBulkDeleting] = useState<Trip[] | null>(null);
+  const [bulkDeleteResult, setBulkDeleteResult] = useState('');
+  const [bulkDeleteError, setBulkDeleteError] = useState('');
   const [busy, setBusy] = useState(false);
   const [deleteError, setDeleteError] = useState('');
   const [conflict, setConflict] = useState(false);
@@ -86,10 +91,12 @@ export default function TripsPage({ coordinator, onSessionExpired }: { coordinat
     const timer = window.setTimeout(() => setFilters(current => current.search === search.trim() ? current : { ...current, page: 1, search: search.trim() }), 300);
     return () => window.clearTimeout(timer);
   }, [search]);
-  const query = new URLSearchParams({ ...filters, page: String(filters.page) }).toString();
+  const params = new URLSearchParams({ ...filters, page: String(filters.page) });
+  if (!filters.until) params.delete('until');
+  const query = params.toString();
   useEffect(() => {
     let active = true;
-    setLoading(true); setError(false);
+    setLoading(true); setError(false); setSelectedTrips(new Set());
     apiGet<TripsData>(`/trips?${query}`)
       .then(result => {
         if (!active) return;
@@ -105,7 +112,7 @@ export default function TripsPage({ coordinator, onSessionExpired }: { coordinat
     event.preventDefault();
     if (!filterDraft) return;
     const { from, until } = filterDraft;
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || from < '0001-01-01' || !/^\d{4}-\d{2}-\d{2}$/.test(until) || until < from || until > addDays(from, 89)) { setFilterError('Choose a valid date range of at most 90 days.'); return; }
+    if (!validTripDate(from) || (until !== '' && (!validTripDate(until) || until < from))) { setFilterError('Choose a valid start date and an optional end date on or after it.'); return; }
     setFilters(current => ({ ...current, page: 1, from, until, direction: filterDraft.direction, status: filterDraft.status })); setFilterDraft(null); setFilterError('');
   }
   function confirmDelete(trip: Trip) { setDeleting(trip); setDeleteError(''); setConflict(false); }
@@ -139,16 +146,52 @@ export default function TripsPage({ coordinator, onSessionExpired }: { coordinat
       setDeleteError('Trips could not be reloaded. Please try again.');
     } finally { if (alive.current) setBusy(false); }
   }
+  function closeBulkDelete() {
+    if (busy) return;
+    setBulkDeleting(null); setBulkDeleteError('');
+    if (bulkDeleteResult) {
+      setBulkDeleteResult(''); setSelecting(false); setSelectedTrips(new Set()); setReload(value => value + 1);
+    }
+  }
+  async function removeSelectedTrips() {
+    if (!bulkDeleting?.length || busy || bulkDeleteResult) return;
+    setBusy(true); setBulkDeleteError('');
+    let deleted = 0;
+    for (const trip of bulkDeleting) {
+      try {
+        await apiRequest(`/trips/${trip.id}`, 'DELETE', { version: trip.version });
+        deleted++;
+      } catch (reason) {
+        if (!alive.current) return;
+        if (reason instanceof ApiError && reason.status === 401) { onSessionExpired(); break; }
+      }
+      if (!alive.current) return;
+    }
+    if (!alive.current) return;
+    setBusy(false);
+    const failed = bulkDeleting.length - deleted;
+    if (failed) {
+      setBulkDeleteResult(`${deleted} ${deleted === 1 ? 'trip' : 'trips'} deleted. ${failed} ${failed === 1 ? 'trip could' : 'trips could'} not be deleted.`);
+      setBulkDeleteError('Some trips may have changed or are no longer eligible. Reload trips before selecting them again.');
+    } else {
+      setBulkDeleting(null); setSelecting(false); setSelectedTrips(new Set());
+      setToast(`${deleted} ${deleted === 1 ? 'trip' : 'trips'} deleted.`); setReload(value => value + 1);
+    }
+  }
   const activeFilterCount = Number(filters.from !== defaultRange.from || filters.until !== defaultRange.until) + Number(filters.direction !== 'all') + Number(filters.status !== 'all');
   const selected = categories.find(category => category.key === filters.status);
+  const tripTitle = coordinator ? selected ? `${selected.label} trips` : filters.from === singaporeToday() && filters.until === filters.from ? "Today's trips" : 'Trip List' : 'Your rides';
   const next = data?.next_trip;
   const pending = loading || search.trim() !== filters.search;
+  const selectionButton = coordinator && <button className="list-tool-button trip-selection-toggle" type="button" aria-label="Select trips" title="Select trips" aria-pressed={selecting} disabled={!selecting && (pending || error || !data?.trips.length)} onClick={() => { setSelecting(value => !value); setSelectedTrips(new Set()); }}>
+          <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="m3 6 2 2 3-4M11 6h10M3 13h5M11 13h10M3 20h5M11 20h10" /></svg>
+        </button>;
   return <div className="trips-workspace">
     {!coordinator && <section className="dashboard-trips patient-next-pickup trip-next-summary" aria-labelledby="patient-pickup-title"><h2 id="patient-pickup-title">Next pickup</h2>
       {next ? <><div className="trip-next-reading"><strong>{tripDate(next.treatment_start)} · {next.direction === 'outbound' ? 'Outbound' : 'Return'}</strong><span className={next.pickup_at ? 'trip-next-confirmed' : 'trip-next-note'}>{next.pickup_at ? `Pickup at ${tripTime(next.pickup_at)}` : 'Pickup time to be confirmed'}</span></div><InfoButton label="View details" onClick={() => setDetails(next)} /></> : <p className="patient-overview-note">{loading ? 'Loading pickup details…' : error ? 'Your pickup details are currently unavailable.' : 'Your next journey will appear once transport is generated.'}</p>}
     </section>}
     <section className="dashboard-trips page-panel trips-panel" aria-labelledby="trips-title" aria-busy={loading}>
-      <PageHeading id="trips-title" title={coordinator ? selected ? `${selected.label} trips` : filters.from === singaporeToday() && filters.until === filters.from ? "Today's trips" : 'Trip List' : 'Your rides'} eyebrow={coordinator ? 'Trip management' : 'Upcoming transport'} level={2}
+      <PageHeading id="trips-title" title={tripTitle} eyebrow={coordinator ? 'Trip management' : 'Upcoming transport'} level={2}
         actions={<ListToolbar search={search} onSearch={setSearch} label="Search trips" placeholder={coordinator ? 'Patient or trip details' : 'Route, date, time or type'} filterCount={activeFilterCount} onFilter={() => { setFilterDraft({ ...filters }); setFilterError(''); }} onSort={() => setSorting(true)} sortLabel={sortSummary(tripSortOptions, filters.sort, filters.order)} />} />
       {loading ? <div className="account-loading" role="status"><span className="account-spinner" aria-hidden="true" /><span>Loading...</span></div> : error ? <ListError title="Trips could not be loaded" message="Please try again to load your journeys and trip statuses." onRetry={() => setReload(value => value + 1)} /> : !data?.trips.length ? <div className="dashboard-data-status patients-status" role="status"><div><h3>No trips scheduled.</h3><p>No trips match these filters.</p></div></div>
         : <div className="trip-records panel-scroll" role="region" aria-label="Trip list" tabIndex={0}>{data.trips.map((trip, index) => <article className="trip-record" key={trip.id}>
@@ -164,13 +207,17 @@ export default function TripsPage({ coordinator, onSessionExpired }: { coordinat
             </div>
           </div>
           <div className="patient-actions trip-stop-actions"><InfoButton label="View trip details" onClick={() => setDetails(trip)} /></div>
-          <span className="record-number" title="Row number">{(data.page - 1) * data.pageSize + index + 1}</span>
+          {coordinator && selecting ? <label className="trip-selection-cell"><input type="checkbox" aria-label={`Select ${trip.patient_name}, ${tripDate(trip.treatment_start)}, ${trip.direction === 'outbound' ? 'outbound' : 'return'}`} checked={selectedTrips.has(trip.id)} onChange={() => setSelectedTrips(current => { const updated = new Set(current); if (updated.has(trip.id)) updated.delete(trip.id); else updated.add(trip.id); return updated; })} /></label> : <span className="record-number" title="Row number">{(data.page - 1) * data.pageSize + index + 1}</span>}
         </article>)}</div>}
 
-      {!error && <ListPagination label="Trip pages" page={filters.page} disabled={pending || error} hasNext={!!data && filters.page * data.pageSize < data.total} onPageChange={page => setFilters(current => ({ ...current, page }))}>{data && !error ? `${data.total} ${data.total === 1 ? 'trip' : 'trips'} · Page ${filters.page} of ${Math.max(1, Math.ceil(data.total / data.pageSize))}` : loading ? 'Loading...' : 'Trip count unavailable'}</ListPagination>}
+      {!error && <ListPagination leadingActions={!selecting && coordinator ? <span className="trip-pagination-selection">{selectionButton}</span> : undefined} label={selecting ? 'Trip selection' : 'Trip pages'} actions={coordinator && selecting ? <><button className="trip-selection-delete" type="button" aria-label="Delete selected trips" title="Delete selected trips" disabled={pending || selectedTrips.size === 0} onClick={() => { setBulkDeleting(data?.trips.filter(trip => selectedTrips.has(trip.id)) ?? []); setBulkDeleteResult(''); setBulkDeleteError(''); }}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 6h18M9 6V4h6v2M5 6l1 14h12l1-14M10 10v6m4-6v6" /></svg></button><button className="trip-selection-action trip-select-all" type="button" disabled={pending || !data?.trips.length} onClick={() => setSelectedTrips(current => current.size === data?.trips.length ? new Set() : new Set(data?.trips.map(trip => trip.id)))}><span>{selectedTrips.size > 0 && selectedTrips.size === data?.trips.length ? 'Clear' : 'Select all'}</span></button><button className="trip-selection-action" type="button" onClick={() => { setSelecting(false); setSelectedTrips(new Set()); }}>Cancel</button></> : undefined} page={filters.page} disabled={pending || error} hasNext={!!data && filters.page * data.pageSize < data.total} onPageChange={page => setFilters(current => ({ ...current, page }))}>{coordinator && selecting ? <span role="status">{selectedTrips.size} selected</span> : data && !error ? `${data.total} ${data.total === 1 ? 'trip' : 'trips'} · Page ${filters.page} of ${Math.max(1, Math.ceil(data.total / data.pageSize))}` : loading ? 'Loading...' : 'Trip count unavailable'}</ListPagination>}
     </section>
     {sorting && <SortOverlay sort={filters.sort} order={filters.order} options={tripSortOptions.filter(option => coordinator || option.value !== 'patient_name')} defaultSort="treatment_start" defaultOrder="asc" onClose={() => setSorting(false)} onApply={(sort, order) => { setFilters(current => ({ ...current, page: 1, sort, order })); setSorting(false); }} />}
-    {filterDraft && <Overlay title="Trip filters" description="Choose the journeys to show." className="list-options-dialog" onClose={() => setFilterDraft(null)} onSubmit={applyFilters} noValidate error={filterError} onDismissError={() => setFilterError('')} footer={<><button className="patient-primary" type="submit">Apply Filters</button><button type="button" onClick={() => setFilterDraft(current => current && ({ ...current, ...defaultRange, status: 'all', direction: 'all' }))}>Reset</button><button type="button" onClick={() => setFilterDraft(null)}>Cancel</button></>}><fieldset className="patient-form-fields">{coordinator && <div className="patient-form-wide"><ChoiceGroup label="Status" multiple value={filterDraft.status} options={categories.map(category => ({ value: category.key, label: `${category.label} (${data && !error && !pending ? data.counts[category.key] : '-'})` }))} onChange={status => setFilterDraft(current => current && ({ ...current, status }))} /></div>}<div className="patient-field"><label htmlFor="trips-from">From date</label><input id="trips-from" type="date" value={filterDraft.from} max="9999-12-31" onChange={event => { const from = event.target.value; setFilterDraft(current => current ? { ...current, from, until: current.until < from ? from : current.until > addDays(from, 89) ? addDays(from, 89) : current.until } : null); }} /></div><div className="patient-field"><label htmlFor="trips-until">Until date</label><input id="trips-until" type="date" value={filterDraft.until} min={filterDraft.from} max={addDays(filterDraft.from, 89)} onChange={event => setFilterDraft(current => current ? { ...current, until: event.target.value } : null)} /></div><div className="patient-form-wide"><ChoiceGroup label="Direction" multiple value={filterDraft.direction} options={[{ value: 'outbound', label: 'Outbound' }, { value: 'return', label: 'Return' }]} onChange={direction => setFilterDraft(current => current && ({ ...current, direction }))} /></div></fieldset></Overlay>}
+    {filterDraft && <Overlay title="Trip filters" description="Choose the journeys to show." className="list-options-dialog" onClose={() => setFilterDraft(null)} onSubmit={applyFilters} noValidate error={filterError} onDismissError={() => setFilterError('')} footer={<><button className="patient-primary" type="submit">Apply Filters</button><button type="button" onClick={() => setFilterDraft(current => current && ({ ...current, ...defaultRange, status: 'all', direction: 'all' }))}>Reset</button><button type="button" onClick={() => setFilterDraft(null)}>Cancel</button></>}><fieldset className="patient-form-fields">{coordinator && <div className="patient-form-wide"><ChoiceGroup label="Status" multiple value={filterDraft.status} options={categories.map(category => ({ value: category.key, label: `${category.label} (${data && !error && !pending ? data.counts[category.key] : '-'})` }))} onChange={status => setFilterDraft(current => current && ({ ...current, status }))} /></div>}<div className="patient-field"><label htmlFor="trips-from">From date</label><input id="trips-from" type="date" value={filterDraft.from} max="9999-12-31" onChange={event => { const from = event.target.value; setFilterDraft(current => current ? { ...current, from, until: current.until && current.until < from ? from : current.until } : null); }} /></div><div className="patient-field"><label htmlFor="trips-until">Until date (optional)</label><input id="trips-until" type="date" value={filterDraft.until} min={filterDraft.from} max="9999-12-31" onChange={event => setFilterDraft(current => current ? { ...current, until: event.target.value } : null)} /></div><div className="patient-form-wide"><ChoiceGroup label="Direction" multiple value={filterDraft.direction} options={[{ value: 'outbound', label: 'Outbound' }, { value: 'return', label: 'Return' }]} onChange={direction => setFilterDraft(current => current && ({ ...current, direction }))} /></div></fieldset></Overlay>}
+    {bulkDeleting && <Overlay className="trip-delete-dialog" title="Delete selected trips" description={bulkDeleteResult || `Delete ${bulkDeleting.length} selected ${bulkDeleting.length === 1 ? 'trip' : 'trips'}?`} busy={busy} onClose={closeBulkDelete} error={bulkDeleteError} onDismissError={() => setBulkDeleteError('')} footer={bulkDeleteResult ? <button className="patient-primary" type="button" onClick={closeBulkDelete}>Reload trips</button> : <><button className="button-danger" type="button" disabled={busy} onClick={() => void removeSelectedTrips()}>{busy ? 'Deleting…' : `Delete ${bulkDeleting.length} ${bulkDeleting.length === 1 ? 'trip' : 'trips'}`}</button><button type="button" disabled={busy} onClick={closeBulkDelete}>Cancel</button></>}>
+      <p className="trip-delete-scope">Only selected, unassigned journeys will be removed. You can restore deleted journeys by generating their trips again.</p>
+      <ul className="trip-bulk-delete-list">{bulkDeleting.map(trip => <li key={trip.id}><strong>{trip.patient_name}</strong><span>{tripDate(trip.treatment_start)} · {trip.direction === 'outbound' ? 'Outbound' : 'Return'}</span></li>)}</ul>
+    </Overlay>}
     {deleting ? <Overlay className="trip-delete-dialog" title="Delete Trip" description="Permanently remove this journey?" busy={busy} onClose={() => { setDeleting(null); setDeleteError(''); }} error={deleteError} onDismissError={() => setDeleteError('')} footer={<><button className={conflict ? 'patient-primary' : 'button-danger'} type="button" disabled={busy} onClick={() => void (conflict ? reloadForDelete() : removeTrip())}>{busy ? 'Loading…' : conflict ? 'Reload trips' : 'Delete Trip'}</button><button type="button" disabled={busy} onClick={() => { setDeleting(null); setDeleteError(''); }}>Cancel</button></>}><div className="trip-delete-summary"><p className="trip-delete-person">{deleting.patient_name}</p><p>{tripDate(deleting.treatment_start)} · {deleting.direction === 'outbound' ? 'Outbound' : 'Return'}</p><p className="trip-delete-destination"><span>Destination</span>{deleting.destination}</p><p className="trip-delete-scope">This deletes one journey only. Its other outbound or return journey stays unchanged.</p></div></Overlay>
       : details && <Overlay className="trip-details-dialog" title="Trip details" description={<span className="trip-detail-heading"><span>{tripDate(details.treatment_start)}</span><span className="trip-direction-status"><span>{details.direction === 'outbound' ? 'Outbound' : 'Return'}</span><TripStatus status={details.status} /></span></span>} onClose={() => setDetails(null)} footer={<>{coordinator && <button className="button-danger" type="button" aria-label="Delete Trip" title="Delete Trip" onClick={() => confirmDelete(details)}>Delete Trip</button>}<button type="button" aria-label="Close Trip details" onClick={() => setDetails(null)}>Close</button></>}>
         <div className="trip-detail-identity"><p className="trip-detail-name">{details.patient_name}</p><p className="trip-detail-id">Patient ID: {details.patient_id}</p>{details.pickup_at && <p>Pickup {tripTime(details.pickup_at)}</p>}</div><JourneyDetails trip={details} />

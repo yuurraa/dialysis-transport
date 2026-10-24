@@ -671,14 +671,20 @@ test('real PostgreSQL serializes overlapping writes and rejects stale concurrent
     await race('generation refresh blocks stale trip deletion', generate(refreshedSourceVersion), deleteTrip(outboundId, staleTripVersion), '40001', coordinator);
     assert.equal(await checked('select count(*) from public.trips where deleted_at is null'), '2');
     const currentTripVersion = await checked(`select version from public.trips where id=${literal(outboundId)}`);
-    await race('trip deletion survives simultaneous regeneration', deleteTrip(outboundId, currentTripVersion), generate(refreshedSourceVersion), undefined, coordinator);
-    assert.equal(await checked('select count(*) from public.trips'), '2', 'The deleted journey remains as an audit tombstone.');
-    assert.equal(await checked('select count(*) from public.trips where deleted_at is null'), '1', 'Regeneration must not resurrect the deleted journey or delete its other leg.');
+    await race('manual regeneration restores a concurrently deleted trip', deleteTrip(outboundId, currentTripVersion), generate(refreshedSourceVersion), undefined, coordinator);
+    assert.equal(await checked('select count(*) from public.trips'), '2', 'Restoration reuses the existing journey identity.');
+    assert.equal(await checked('select count(*) from public.trips where deleted_at is null'), '2', 'Manual generation restores the deleted journey and preserves its other leg.');
     assert.equal(await checked("select count(*) from public.trip_history where event='deleted'"), '1');
     const coordinatorRead = sql => `set role authenticated; select set_config('request.jwt.claim.sub',${literal(coordinator)},false); ${sql}`;
-    assert.equal(await checked(coordinatorRead(`select public.list_trips(1,${literal(future)},${literal(future)},'all')->>'total'`)), '1');
-    const skipped = await checked(coordinatorRead(generate(refreshedSourceVersion)));
-    assert.ok(skipped.includes('"skipped": 1'), 'Later generation must report the deleted leg as skipped.');
+    assert.equal(await checked("select count(*) from public.trip_history where event='restored'"), '1');
+    assert.equal(await checked(coordinatorRead(`select public.list_trips(1,${literal(future)},${literal(future)},'all')->>'total'`)), '2');
+    const repeated = await checked(coordinatorRead(generate(refreshedSourceVersion)));
+    assert.ok(repeated.includes('"unchanged": 2'), 'Repeated generation must leave both restored journeys unchanged.');
+    const restoredVersion = await checked(`select version from public.trips where id=${literal(outboundId)}`);
+    await race('deletion after generation remains deleted until another manual generation', generate(refreshedSourceVersion), deleteTrip(outboundId, restoredVersion), undefined, coordinator);
+    assert.equal(await checked('select count(*) from public.trips where deleted_at is null'), '1');
+    await checked(coordinatorRead(generate(refreshedSourceVersion)));
+    assert.equal(await checked('select count(*) from public.trips where deleted_at is null'), '2');
     const version = Number(await checked(`select version from public.patients where id=${literal(patientId)}`));
     const update = (status, notes) => `select public.save_patient(${literal(patientId)},${literal(JSON.stringify({ version, status, notes }))}::jsonb);`;
     await race('stale patient status', update('inactive', 'First coordinator'), update('active', 'Stale notes edit'), '40001', coordinator);
@@ -770,6 +776,12 @@ test('coordinators generate idempotent unfilled journeys with buffers, exception
     const [moved]=await own(patient,`insert into public.treatment_schedules(patient_id,centre_id,kind,days,start_time,end_time,effective_from,effective_to,replaces_schedule_id,replaces_date)
       values($1,$2,'single',array[2],'10:00','14:00',$3,$3,$4,$5) returning *`,[ids.patient,ids.centre,dates.moved,series.id,first]);
     const generate=async(who,version)=>(await own(who,'select public.generate_treatment_trips($1,$2,$3,$4) as result',[series.id,first,dates.until,version]))[0].result;
+    const coverage=async()=> (await own(coordinator,'select private.treatment_trip_coverage($1) as result',[series.id]))[0].result;
+    assert.equal((await coverage()).status,'not_generated');assert.equal((await coverage()).expected_sessions,3);
+    await assert.rejects(own(patient,'select private.treatment_trip_coverage($1)',[series.id]),/Coordinator/);
+    const patientList=(await own(patient,'select public.list_treatments() as result'))[0].result;
+    assert.ok(patientList.schedules.every(row=>!('trip_generation' in row)));
+
     for(const who of [patient,driver,stranger]) await assert.rejects(generate(who,2),/Coordinator|denied/i);
     assert.equal((await generate(coordinator,2)).created,6);
     const [again]=await own(coordinator,'select public.list_trips($1,$2,$3,$4) as result',[1,first,dates.until,'all']);
@@ -782,6 +794,21 @@ test('coordinators generate idempotent unfilled journeys with buffers, exception
       else assert.equal(Date.parse(trip.pickup_not_before)-Date.parse(trip.treatment_end),15*60000);
     }
     assert.equal((await generate(coordinator,2)).unchanged,6);
+    const complete=await coverage();assert.equal(complete.status,'generated');assert.equal(complete.through,dates.until);
+    assert.deepEqual(complete.generated_ranges,[{from_date:dates.moved,until_date:dates.until}]);
+    const coordinatorList=(await own(coordinator,'select public.list_treatments() as result'))[0].result;
+    assert.equal(coordinatorList.schedules.find(row=>row.id===series.id).trip_generation.status,'generated');
+    const firstJourney=again.result.trips.find(trip=>trip.source_schedule_id===moved.id&&trip.direction==='return');
+    await local.query('update public.trips set deleted_at=now() where id=$1',[firstJourney.id]);
+    const hole=await coverage();assert.equal(hole.status,'partial');assert.equal(hole.through,null);
+    assert.equal(hole.generated_ranges.length,1);assert.equal(hole.generated_ranges[0].until_date,dates.until);
+    assert.notEqual(hole.generated_ranges[0].from_date,dates.moved);
+    await local.query('update public.trips set deleted_at=null where id=$1',[firstJourney.id]);
+    await local.query('update public.trips set review_required=true where source_schedule_id=$1',[moved.id]);
+    assert.equal((await coverage()).status,'partial');
+    await local.query('update public.trips set review_required=false where source_schedule_id=$1',[moved.id]);
+    assert.equal((await coverage()).status,'generated');
+
     assert.equal((await own(patient,'select * from public.trips')).length,6);
     assert.equal((await own(stranger,'select * from public.trips')).length,0);
     assert.equal((await own(driver,'select * from public.trips')).length,0);
@@ -872,11 +899,21 @@ test('trip listing paginates before returning rows and independent sessions reta
     assert.equal((await own(coordinator,'select * from public.trips where source_schedule_id=$1',[overflow.id])).length,0);
     await local.exec(schema);
     assert.equal((await list()).total,28);
+    const late=(await local.query('select ($1::date+140)::text as date,extract(isodow from $1::date+140)::integer as day',[dates.first])).rows[0];
+    const [later]=await own(patient,`insert into public.treatment_schedules(patient_id,centre_id,kind,days,start_time,end_time,effective_from,effective_to)
+      values($1,$2,'single',array[$3::integer],'09:00','13:00',$4,$4) returning *`,[ids.patient,ids.centre,late.day,late.date]);
+    await own(coordinator,'select public.generate_treatment_trips($1,$2,$2,1)',[later.id,late.date]);
+    const allFuture=(await own(patient,"select public.list_trips(1,$1,null,'all') as result",[dates.first]))[0].result;
+    assert.equal(allFuture.total,30);assert.equal(allFuture.counts.unfilled,30);assert.equal(allFuture.trips.length,10);
+    assert.equal((await list()).total,28);
+    assert.equal((await own(patient,"select public.list_trips(1,$1,$2,'all') as result",[dates.first,late.date]))[0].result.total,30);
+    await assert.rejects(own(patient,"select public.list_trips(1,$1::date,$1::date-1,'all')",[dates.first]),/Invalid/);
+
   }finally{await local.close();}
 });
 
 
-test('trip search precedes pagination and coordinator deletion preserves history without regeneration',async()=>{
+test('trip search precedes pagination and manual generation restores deleted trips with history',async()=>{
   const local=await databaseWithAuth();
   try {
     await local.exec(schema);
@@ -927,15 +964,32 @@ test('trip search precedes pagination and coordinator deletion preserves history
     assert.equal((await list()).counts.unfilled,25);
     assert.notEqual((await list()).next_trip?.id,trip.id);
     assert.ok((await own(coordinator,"select * from public.trip_history where trip_id=$1 and event='deleted'",[trip.id])).length===1);
+    await assert.rejects(remove(coordinator,trip.version),/not found|deleted/i);
+    const remainingBefore = (await own(coordinator,'select * from public.trips where id<>$1 order by id',[trip.id]));
     const again=await gen();
     assert.equal(again.created,0);
-    assert.equal(again.skipped,1);
-    assert.equal((await list()).total,25);
-    await assert.rejects(remove(coordinator,trip.version),/not found|deleted/i);
+    assert.equal(again.updated,1);
+    assert.equal(again.unchanged,25);
+    assert.equal(again.skipped,0);
+    assert.equal((await list()).total,26);
+    assert.equal((await list()).counts.unfilled,26);
+    const [restored] = await own(coordinator,'select * from public.trips where id=$1',[trip.id]);
+    assert.equal(restored.deleted_at,null);
+    assert.ok(restored.version>trip.version);
+    assert.equal(restored.status,'unfilled');
+    assert.equal(restored.pickup_at,null);
+    assert.deepEqual(await own(coordinator,'select * from public.trips where id<>$1 order by id',[trip.id]),remainingBefore);
+    assert.equal((await own(coordinator,"select * from public.trip_history where trip_id=$1 and event='deleted'",[trip.id])).length,1);
+    assert.equal((await own(coordinator,"select * from public.trip_history where trip_id=$1 and event='restored'",[trip.id])).length,1);
+    await assert.rejects(remove(coordinator,trip.version),/changed/i);
+    const repeat=await gen();
+    assert.equal(repeat.updated,0);
+    assert.equal(repeat.unchanged,26);
+    assert.equal((await own(coordinator,"select * from public.trip_history where trip_id=$1 and event='restored'",[trip.id])).length,1);
     await assert.rejects(list(coordinator,'x'.repeat(101)),/Invalid/i);
     await assert.rejects(list(coordinator,'','unknown'),/Invalid/i);
     await local.exec(schema);
-    assert.equal((await list()).total,25);
+    assert.equal((await list()).total,26);
   }finally{await local.close();}
 });
 

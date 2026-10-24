@@ -6,7 +6,8 @@ import { addDays, singaporeToday } from './TripsPage';
 
 interface Centre { id: string; name: string; address: string; postal_code: string }
 interface Details { kind: 'recurring' | 'single'; centre_id: string; days: number[]; start_time: string; end_time: string; effective_from: string; effective_to: string }
-interface Schedule extends Omit<Details, 'kind'> { kind?: 'recurring' | 'single'; id: string; version: number; patient_id: string; patients: { full_name: string }; replaces_schedule_id?: string | null; replaces_date?: string | null }
+interface TripCoverage { generated_ranges?: { from_date: string; until_date: string }[]; status: 'not_generated' | 'partial' | 'generated' | 'none' | 'unavailable'; through: string | null; window_start?: string; window_end?: string; expected_sessions?: number; generated_sessions?: number }
+interface Schedule extends Omit<Details, 'kind'> { trip_generation?: TripCoverage; kind?: 'recurring' | 'single'; id: string; version: number; patient_id: string; patients: { full_name: string }; replaces_schedule_id?: string | null; replaces_date?: string | null }
 interface Data { centres: Centre[]; schedules: Schedule[]; context: Schedule[]; total: number; page: number; pageSize: number }
 const scheduleIcon = <span className="dashboard-data-status-icon" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="5" width="16" height="16" rx="3" /><path d="M8 3v4m8-4v4M4 11h16m-10 4 4 4m0-4-4 4" /></svg></span>;
 const scheduleSortOptions = [{ value: 'effective_from', label: 'Start date', ascending: 'Earliest first', descending: 'Latest first' }, { value: 'start_time', label: 'Treatment time', ascending: 'Earliest time first', descending: 'Latest time first' }, { value: 'patient_name', label: 'Patient name' }, { value: 'centre_name', label: 'Dialysis centre' }, { value: 'kind', label: 'Schedule type', ascending: 'Recurring → Rescheduled → Single Session', descending: 'Single Session → Rescheduled → Recurring' }];
@@ -16,6 +17,23 @@ const dayFor = (date: string) => new Date(`${date}T00:00:00Z`).getUTCDay() || 7;
 const supportedDate = (date: string) => /^\d{4}-\d{2}-\d{2}$/.test(date) && !date.startsWith('0000') && Number.isFinite(Date.parse(`${date}T00:00:00Z`)) && new Date(`${date}T00:00:00Z`).toISOString().slice(0,10) === date;
 const formatDayDate = (date: string) => !supportedDate(date) ? 'Invalid date' : new Intl.DateTimeFormat('en-SG', { weekday: 'long', day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Singapore' }).format(new Date(`${date}T00:00:00+08:00`));
 const formatDate = (date: string) => !supportedDate(date) ? 'Invalid date' : new Intl.DateTimeFormat('en-SG', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Singapore' }).format(new Date(`${date}T00:00:00+08:00`));
+
+function GenerationStatus({ coverage }: { coverage?: TripCoverage }) {
+  const status = coverage?.status ?? 'unavailable';
+  const label = status === 'generated' ? 'Generated'
+    : status === 'partial' ? 'Partially generated' : status === 'not_generated' ? 'Not generated'
+    : status === 'none' ? 'No upcoming sessions' : 'Coverage unavailable';
+  const window = coverage?.window_start && coverage.window_end ? `Coverage: ${formatDate(coverage.window_start)} – ${formatDate(coverage.window_end)}.` : 'Trip coverage could not be determined.';
+  return <div className="treatment-generation"><span className="treatment-generation-label">Trips</span><div className="treatment-generation-summary"><span className={`treatment-generation-badge generation-${status}`} title={window}>{label}</span></div></div>;
+}
+
+function GeneratedCoverage({ coverage }: { coverage?: TripCoverage }) {
+  const ranges = coverage?.generated_ranges;
+  return <section className="generation-coverage" aria-label="Generated trip coverage"><h3>Trips already generated</h3>
+    {ranges?.length ? <ul>{ranges.map(range => <li key={range.from_date}>{range.from_date === range.until_date ? formatDate(range.from_date) : `${formatDate(range.from_date)} – ${formatDate(range.until_date)}`}</li>)}</ul>
+      : <p>{coverage?.status === 'not_generated' ? 'None yet.' : coverage?.status === 'none' ? 'No upcoming sessions.' : ranges ? 'Some trips are generated, but coverage is incomplete.' : 'Generated dates unavailable.'}</p>}
+  </section>;
+}
 
 export default function TreatmentSchedules({ coordinator, notify, onSessionExpired }: {
   coordinator: boolean; notify: (message: string) => void; onSessionExpired: () => void;
@@ -187,8 +205,8 @@ export default function TreatmentSchedules({ coordinator, notify, onSessionExpir
     try {
       const result = await apiRequest<{ created: number; updated: number; unchanged: number; skipped?: number; total: number }>('/trips/generate', 'POST', { schedule_id: generatingSchedule.id, from_date: from, until_date: until, version: generatingSchedule.version });
       if (!alive.current) return;
-      setGeneratingSchedule(null);
-      notify(`Trips generated: ${result.created} created, ${result.updated} updated, ${result.unchanged} unchanged (${result.total} total).${result.skipped ? ` ${result.skipped} deleted ${result.skipped === 1 ? 'trip' : 'trips'} skipped.` : ''} No duplicate trips created.`);
+      setGeneratingSchedule(null); setReload(value => value + 1);
+      notify(`Trips generated: ${result.created} created, ${result.updated} updated, ${result.unchanged} unchanged (${result.total} total). No duplicate trips created.`);
     } catch (reason) {
       if (!alive.current) return;
       if (reason instanceof ApiError && reason.status === 401) onSessionExpired();
@@ -203,13 +221,14 @@ export default function TreatmentSchedules({ coordinator, notify, onSessionExpir
       {error && !draft ? <ListError title="Schedules could not be loaded" message="Please try again to load your treatment schedules." onRetry={() => setReload(value => value+1)} /> : <>
         {!data?.centres.length && <div className="dashboard-data-status patients-status" role="status">{scheduleIcon}<div><h3>No dialysis centres are available.</h3><p>{coordinator ? 'The dialysis centre directory has not been loaded yet.' : 'Contact your Transport Coordinator.'}</p></div></div>}
         {(data?.total ?? data?.schedules.length) === 0 ? (data?.centres.length ?? 0) > 0 && <div className="dashboard-data-status patients-status" role="status">{scheduleIcon}<div><h3>{searchTerm || filters.kind !== 'all' || filters.centre !== 'all' ? 'No matching schedules.' : 'No treatment schedules yet.'}</h3><p>{searchTerm || filters.kind !== 'all' || filters.centre !== 'all' ? 'Try another search or change the filters.' : coordinator ? 'Patient treatment schedules will appear here once submitted.' : 'Add your treatment schedule to share your dialysis requirements.'}</p></div></div> : searchTerm && visibleSchedules.length === 0 ? <div className="dashboard-data-status patients-status" role="status">{scheduleIcon}<div><h3>No matching schedules.</h3><p>{coordinator ? 'Try another patient name, ID, centre, day, date or schedule type.' : 'Try another centre, day, date or schedule type.'}</p></div></div> : <div className="treatment-records panel-scroll" tabIndex={0} role="region" aria-label="Treatment schedules">{visibleSchedules.map((schedule, index) => <article className="treatment-record" key={schedule.id}>
-          <div className="treatment-summary">
+          <div className={`treatment-summary${coordinator ? ' treatment-summary-coordinator' : ''}`}>
             <div className="treatment-identity"><p>{schedule.patients.full_name}</p><p className={`treatment-kind treatment-kind-${schedule.replaces_schedule_id ? 'rescheduled' : schedule.kind ?? 'recurring'}`}>{schedule.replaces_schedule_id ? 'Rescheduled Session' : schedule.kind === 'single' ? 'Single Session' : 'Recurring'}</p></div>
             <div className="treatment-session"><h2>{schedule.kind === 'single' ? formatDayDate(schedule.effective_from) : `Every ${schedule.days.map(day => weekdays[day-1]).join(', ')}`}</h2>{schedule.kind === 'single' ? <p className="treatment-time">{schedule.start_time.slice(0,5)}–{schedule.end_time.slice(0,5)}</p> : <p className="treatment-session-meta"><span>{formatDate(schedule.effective_from)} – {formatDate(schedule.effective_to)}</span><span className="treatment-session-clock"><span aria-hidden="true">·</span><span>{schedule.start_time.slice(0,5)}–{schedule.end_time.slice(0,5)}</span></span></p>}
               {schedule.replaces_date && <p className="treatment-date-range">Replaces {formatDate(schedule.replaces_date)}</p>}
               {replacements.has(schedule.id) && <button className="reschedule-summary" type="button" onClick={() => setHistorySchedule(schedule)}>{replacements.get(schedule.id)!.length} rescheduled {replacements.get(schedule.id)!.length === 1 ? 'session' : 'sessions'}</button>}
             </div>
             <div className="treatment-location"><span>Dialysis Centre</span><p>{data?.centres.find(c => c.id === schedule.centre_id)?.name}</p></div>
+            {coordinator && <GenerationStatus coverage={schedule.trip_generation} />}
           </div>
           <div className="schedule-record-info"><InfoButton label="View schedule details" onClick={() => setViewingSchedule(schedule)} /></div>
           <div className="patient-actions schedule-record-actions">{coordinator ? <button className="list-info-control schedule-generate schedule-icon-action" type="button" aria-label="Generate Trips" title="Generate Trips" disabled={!schedule.version || !supportedDate(schedule.effective_from) || (schedule.kind === 'single' && schedule.effective_from < singaporeToday())} onClick={() => openGeneration(schedule)}><ScheduleActionIcon action="generate" /></button> : <button className="list-info-control schedule-icon-action" type="button" aria-label="Edit Schedule" title="Edit Schedule" onClick={() => open(schedule)}><ScheduleActionIcon action="edit" /></button>}</div>
@@ -243,8 +262,8 @@ export default function TreatmentSchedules({ coordinator, notify, onSessionExpir
         <p className="generation-session">{generatingSchedule.kind === 'single' ? formatDayDate(generatingSchedule.effective_from) : `Every ${generatingSchedule.days.map(day => weekdays[day-1]).join(', ')}`} · {generatingSchedule.start_time.slice(0,5)}–{generatingSchedule.end_time.slice(0,5)}</p>
         <dl><div><dt>Dialysis centre</dt><dd>{data?.centres.find(centre => centre.id === generatingSchedule.centre_id)?.name}</dd></div></dl>
       </section>
+      <GeneratedCoverage coverage={generatingSchedule.trip_generation} />
       <fieldset className="patient-form-fields trip-generation-dates" disabled={generating}><div className="patient-field"><label htmlFor="generation-from">From date</label><input id="generation-from" type="date" min={singaporeToday()} max={generationDates.until} value={generationDates.from} onChange={event => setGenerationDates(current => ({ ...current, from: event.target.value }))} /></div><div className="patient-field"><label htmlFor="generation-until">Until date</label><input id="generation-until" type="date" min={generationDates.from} max={supportedDate(generationDates.from) ? addDays(generationDates.from, 89) : undefined} value={generationDates.until} onChange={event => setGenerationDates(current => ({ ...current, until: event.target.value }))} /></div></fieldset>
-      <p className="generation-range-hint">Up to 90 days.{generatingSchedule.kind !== 'single' && ' Includes rescheduled sessions.'}</p>
       <dl className="generation-timing"><div><dt>Outbound arrival</dt><dd>15 min before session starts</dd></div><div><dt>Return pickup</dt><dd>15+ min after session ends</dd></div></dl>
     </Overlay>}
     {draft && !coordinator && <Overlay title={confirmingDelete ? 'Delete Schedule' : id || rescheduling ? 'Edit Schedule' : 'Add Schedule'}

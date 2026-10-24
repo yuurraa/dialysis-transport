@@ -277,3 +277,48 @@ test("schedule list retries failed loads without showing unavailable pagination"
   await expect(page.locator('.patients-pagination')).toBeVisible();
 
 });
+
+test('coordinator schedule rows show trip coverage and refresh it after generation while patients see no indicator', async ({ page }) => {
+  await seedSession(page);await page.setViewportSize({width:390,height:844});
+  let role='coordinator';let generated=false;
+  await page.route('**/api/auth/me',route=>route.fulfill({json:{account:{...activeAccount,role}}}));
+  const centre={id:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',name:'Fixture Centre',address:'Fixture road',postal_code:'560123'};
+  const base={id:'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',patient_id:session.user.id,version:1,kind:'recurring',centre_id:centre.id,days:[1],start_time:'09:00',end_time:'13:00',effective_from:'2027-01-04',effective_to:'2027-03-29',patients:{full_name:'Fixture Patient'}};
+  await page.route('**/api/schedules?*',route=>route.fulfill({json:{centres:[centre],schedules:[
+    {...base,trip_generation:{status:generated ? 'generated' : 'not_generated',through:generated ? '2027-01-25' : null,window_start:'2027-01-04',window_end:'2027-04-03'}},
+    {...base,kind:'single',id:'cccccccc-cccc-4ccc-8ccc-cccccccccccc',trip_generation:{status:'partial',through:'2027-01-04',generated_ranges:[{from_date:'2027-01-04',until_date:'2027-01-25'},{from_date:'2027-02-08',until_date:'2027-02-08'}]}},
+    {...base,id:'dddddddd-dddd-4ddd-8ddd-dddddddddddd',trip_generation:{status:'none',through:null}}
+  ],total:3,page:1,pageSize:10,context:[]}}));
+  await page.route('**/api/trips/generate',route=>{generated=true;return route.fulfill({json:{created:8,updated:0,unchanged:0,skipped:0,total:8}});});
+  await page.goto('/dashboard/schedules');
+  await expect(page.getByText('Not generated',{exact:true})).toBeVisible();
+  await expect(page.getByText('Partially generated',{exact:true})).toBeVisible();
+  const partialRow = page.locator('.treatment-record').nth(1);
+  await expect(partialRow.locator('.treatment-generation-label')).toBeHidden();
+  const kindBadge = partialRow.locator('.treatment-kind');
+  const coverageBadge = partialRow.locator('.treatment-generation-badge');
+  await expect(kindBadge).toHaveText('Single Session');
+  const kindBounds = (await kindBadge.boundingBox())!;
+  const coverageBounds = (await coverageBadge.boundingBox())!;
+  expect(Math.abs(kindBounds.y - coverageBounds.y)).toBeLessThan(1);
+  expect(coverageBounds.x).toBeGreaterThanOrEqual(kindBounds.x + kindBounds.width);
+  expect(await kindBadge.evaluate(element => getComputedStyle(element).whiteSpace)).toBe('nowrap');
+  expect(await coverageBadge.evaluate(element => getComputedStyle(element).whiteSpace)).toBe('nowrap');
+
+  await expect(page.getByText('Through 4 Jan 2027',{exact:true})).toHaveCount(0);
+  await page.getByRole('button',{name:'Generate Trips',exact:true}).nth(1).click();
+  const partial=page.getByRole('dialog',{name:'Generate Trips',exact:true});
+  await expect(partial.getByRole('heading',{name:'Trips already generated',exact:true})).toBeVisible();
+  await expect(partial.getByText('4 Jan 2027 – 25 Jan 2027',{exact:true})).toBeVisible();
+  await expect(partial.getByText('8 Feb 2027',{exact:true})).toBeVisible();
+  await expect(partial.getByText('Up to 90 days. Includes rescheduled sessions.',{exact:true})).toHaveCount(0);
+  await partial.getByRole('button',{name:'Cancel',exact:true}).click();
+  await expect(page.getByText('No upcoming sessions',{exact:true})).toBeVisible();
+  await page.getByRole('button',{name:'Generate Trips',exact:true}).first().click();
+  const dialog=page.getByRole('dialog',{name:'Generate Trips',exact:true});
+  await dialog.getByRole('button',{name:'Generate Trips',exact:true}).click();
+  await expect(page.getByText('Generated',{exact:true})).toBeVisible();
+  role='patient';await page.reload();
+  await expect(page.getByRole('heading',{name:'Treatment Schedules',exact:true})).toBeVisible();
+  await expect(page.locator('.treatment-generation')).toHaveCount(0);
+});

@@ -69,8 +69,8 @@ export function Overlay({ title, description, children, footer, onClose, onSubmi
 }
 
 /** Viewport-pinned pagination shared by the three record lists. */
-export function ListPagination({ children, label, page, hasNext, disabled, onPageChange }: {
-  children: ReactNode; label: string; page: number; hasNext: boolean; disabled: boolean; onPageChange: (page: number) => void;
+export function ListPagination({ children, label, page, hasNext, disabled, onPageChange, actions, leadingActions }: {
+  children: ReactNode; label: string; page: number; hasNext: boolean; disabled: boolean; onPageChange: (page: number) => void; actions?: ReactNode; leadingActions?: ReactNode;
 }) {
   const footer = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
@@ -88,8 +88,9 @@ export function ListPagination({ children, label, page, hasNext, disabled, onPag
     };
   }, []);
   return <div ref={footer} className="patients-pagination" aria-label={label}><span>{children}</span><div className="patient-actions">
-    <button type="button" aria-label="Previous" title="Previous page" disabled={disabled || page <= 1} onClick={() => onPageChange(page - 1)}>{'<'}</button>
-    <button type="button" aria-label="Next" title="Next page" disabled={disabled || !hasNext} onClick={() => onPageChange(page + 1)}>{'>'}</button>
+    {leadingActions}
+    {actions ?? <><button type="button" aria-label="Previous" title="Previous page" disabled={disabled || page <= 1} onClick={() => onPageChange(page - 1)}>{'<'}</button>
+    <button type="button" aria-label="Next" title="Next page" disabled={disabled || !hasNext} onClick={() => onPageChange(page + 1)}>{'>'}</button></>}
   </div></div>;
 }
 
