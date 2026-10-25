@@ -183,7 +183,7 @@ Make/model: ${selected.vehicle.make} ${selected.vehicle.model}
 Passenger capacity: ${selected.vehicle.passenger_capacity}
 Wheelchair accessible: ${selected.vehicle.wheelchair_accessible ? 'Yes' : 'No'}`} /></div>
           {selected.vehicle.review_reason && <div className="patient-field patient-form-wide"><label htmlFor="driver-feedback">Coordinator feedback</label><textarea id="driver-feedback" rows={3} value={selected.vehicle.review_reason} disabled readOnly /></div>}
-          {canReview && !editing && <div className="patient-field patient-form-wide"><label htmlFor="driver-review-reason">Review notes (required when rejecting)</label><textarea id="driver-review-reason" maxLength={1000} rows={3} disabled={conflict} value={reason} onChange={event => setReason(event.target.value)} /></div>}
+          {canReview && !editing && <div className="patient-field patient-form-wide"><label className="patient-required" htmlFor="driver-review-reason">Review notes (required when rejecting)</label><textarea id="driver-review-reason" maxLength={1000} rows={3} disabled={conflict} value={reason} onChange={event => setReason(event.target.value)} /></div>}
         </> : <div className="patient-field patient-form-wide"><label htmlFor="driver-car-details">Car details</label><textarea id="driver-car-details" rows={2} value="Not submitted" disabled readOnly /></div>}
       </fieldset>
     </Overlay>}

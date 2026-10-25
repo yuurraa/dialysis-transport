@@ -17,6 +17,18 @@ export class SchedulingController {
   @Delete(':id')
   remove(@Headers('authorization') header: string | undefined, @Param('id') id: string, @Body() body: unknown) { return this.service.deleteTreatment(header, id, body); }
 
+  @Post(':id/change-requests')
+  requestChange(@Headers('authorization') header: string | undefined, @Param('id') id: string, @Body() body: unknown) { return this.service.requestChange(header, id, body); }
+
+  @Get(':id/change-request')
+  changeRequest(@Headers('authorization') header: string | undefined, @Param('id') id: string) { return this.service.changeRequest(header, id); }
+
+  @Patch('change-requests/:id/review')
+  reviewChange(@Headers('authorization') header: string | undefined, @Param('id') id: string, @Body() body: unknown) { return this.service.reviewChange(header, id, body); }
+
+  @Patch('change-requests/:id/withdraw')
+  withdrawChange(@Headers('authorization') header: string | undefined, @Param('id') id: string, @Body() body: unknown) { return this.service.withdrawChange(header, id, body); }
+
   @Patch(':id/auto-generation')
   autoGeneration(@Headers('authorization') header: string | undefined, @Param('id') id: string, @Body() body: unknown) { return this.service.setAutoGeneration(header, id, body); }
 

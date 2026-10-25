@@ -215,109 +215,21 @@ test('treatment schedules enforce ownership, overlap checks and coordinator read
     await own(patient,insert.replace("'2026-10-20','2026-12-31'","'2027-01-04','2027-01-04'"));
     await assert.rejects(own(coordinator,"update public.treatment_schedules set start_time='10:00' returning id"),/permission/i);
     await assert.rejects(own(patient,"update public.treatment_schedules set end_time='08:00'"),/permission/i);
+    const [future] = await own(patient,`insert into public.treatment_schedules(patient_id,centre_id,kind,days,start_time,end_time,effective_from,effective_to)
+      select '${ids.patient_id}','${ids.centre_id}','single',array[extract(isodow from day)::integer],'15:00','16:00',day,day
+      from (select (now() at time zone 'Asia/Singapore')::date+1 as day) fixture returning *`);
+    for (const generated of [false,true]) {
+      if (generated) await own(coordinator,`select public.generate_treatment_trips('${future.id}',(now() at time zone 'Asia/Singapore')::date+1,(now() at time zone 'Asia/Singapore')::date+1,1)`);
+      await assert.rejects(own(patient,`select public.update_my_treatment('${future.id}','{"start_time":"16:00","end_time":"17:00"}'::jsonb,1)`),/permission/i);
+      await assert.rejects(own(patient,`select public.delete_my_treatment('${future.id}',1)`),/permission/i);
+      await assert.rejects(own(patient,`select private.update_my_treatment('${future.id}','{}'::jsonb,1)`),/permission/i);
+      await assert.rejects(own(patient,`insert into public.treatment_schedules(patient_id,centre_id,kind,days,start_time,end_time,effective_from,effective_to,replaces_schedule_id,replaces_date)
+        values('${ids.patient_id}','${ids.centre_id}','single',array[1],'16:00','17:00','2026-10-26','2026-10-26','${future.id}','2026-10-26')`),/permission|policy/i);
+    }
     await local.exec(`update public.accounts set status='inactive' where role='patient'`);
     assert.equal((await own(patient,'select * from public.treatment_schedules')).length,0);
     await local.exec(schema);
-    assert.equal((await local.query('select * from public.treatment_schedules')).rows.length,2);
-  } finally { await local.close(); }
-});
-
-test('single sessions and recurring exceptions reject real conflicts and reschedule atomically', async () => {
-  const local=await databaseWithAuth();
-  try {
-    await local.exec(schema);
-    await local.exec(`insert into public.accounts(auth_user_id,email,display_name,role) values
-      ('${patient}','patient@example.test','Patient','patient'),('${coordinator}','coordinator@example.test','Coordinator','coordinator'),
-      ('${driver}','driver@example.test','Driver','driver');
-      insert into public.patients(account_id,full_name,phone,pickup_address,mobility,assistance_required,status)
-      select id,'Patient','81234567','Test street','ambulant',false,'active' from public.accounts where role='patient';`);
-    const own=async (who,sql,params=[])=>{
-      await local.exec('begin; set local role authenticated;');
-      try {await local.query("select set_config('request.jwt.claim.sub',$1,true)",[who]);const r=await local.query(sql,params);await local.exec('commit');return r.rows;}
-      catch(e){await local.exec('rollback');throw e;}
-    };
-    const ids=(await local.query('select p.id as patient,c.id as centre from public.patients p cross join public.dialysis_centres c limit 1')).rows[0];
-    const insert=async (kind,date,day,start='09:00',end='13:00',parent=null,original=null)=>own(patient,
-      `insert into public.treatment_schedules(patient_id,centre_id,kind,days,start_time,end_time,effective_from,effective_to,replaces_schedule_id,replaces_date)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) returning *`,
-      [ids.patient,ids.centre,kind,[day],start,end,date,kind==='recurring'?'2026-12-31':date,parent,original]);
-    const [series]=await insert('recurring','2026-10-19',1);
-    await assert.rejects(insert('single','2026-10-26',1),/overlap/i);
-    const [extra]=await insert('single','2026-10-27',2);
-    await insert('single','2026-10-27',2,'13:00','14:00');
-    await assert.rejects(insert('single','2026-10-27',2,'10:00','12:00',series.id,'2026-10-26'),/overlap/i);
-    assert.equal((await own(patient,'select * from public.treatment_schedules where replaces_schedule_id is not null')).length,0);
-    const [replacement]=await insert('single','2026-10-26',1,'10:00','14:00',series.id,'2026-10-26');
-    await assert.rejects(insert('single','2026-10-26',1,'15:00','16:00',series.id,'2026-10-26'),/rescheduled|duplicate/i);
-    await assert.rejects(insert('single','2026-11-02',1),/overlap/i);
-    await assert.rejects(insert('single','2026-10-28',3,'09:00','13:00',series.id,'2026-10-27'),/occurrence/i);
-    // Moving the replacement keeps its original exception and frees its former date.
-    await own(patient,`select public.update_my_treatment($1,jsonb_build_object('effective_from','2026-10-28','effective_to','2026-10-28','days',array[3]),(select version from public.treatment_schedules where id=$1))`,[replacement.id]);
-    // Overlap after an excluded week must still be detected in later weeks.
-    await assert.rejects(insert('recurring','2026-10-26',1,'10:00','12:00'),/overlap/i);
-    await insert('single','2026-10-26',1);
-    await assert.rejects(own(patient,`select public.update_my_treatment($1,jsonb_build_object('days',array[2]),(select version from public.treatment_schedules where id=$1))`,[series.id]),/rescheduled|occurrence/i);
-    await assert.rejects(own(patient,`update public.treatment_schedules set replaces_date='2026-11-02' where id=$1`,[replacement.id]),/permission/i);
-    await assert.rejects(own(patient,`select public.update_my_treatment($1,jsonb_build_object('kind','recurring'),(select version from public.treatment_schedules where id=$1))`,[extra.id]),/type|kind/i);
-    await assert.rejects(insert('single','2026-10-29',1),/constraint/i);
-    assert.equal((await own(coordinator,'select * from public.treatment_schedules')).length,5);
-    assert.equal((await own(driver,'select * from public.treatment_schedules')).length,0);
-    // A patient's replacement cannot reference another patient's recurring schedule.
-    await local.exec(`insert into public.accounts(auth_user_id,email,display_name,role) values ('${stranger}','stranger@example.test','Other Patient','patient');
-      insert into public.patients(account_id,full_name,phone,pickup_address,mobility,assistance_required,status)
-      select id,'Other Patient','81234567','Other street','ambulant',false,'active' from public.accounts where auth_user_id='${stranger}';`);
-    const [otherSeries]=await own(stranger,`insert into public.treatment_schedules(patient_id,centre_id,days,start_time,end_time,effective_from,effective_to)
-      select p.id,$1,array[4],'09:00','13:00','2026-10-19','2026-12-31' from public.patients p returning *`,[ids.centre]);
-    await assert.rejects(insert('single','2026-10-29',4,'09:00','13:00',otherSeries.id,'2026-10-29'),/occurrence/i);
-    assert.equal((await own(patient,'select * from public.treatment_schedules where id=$1',[otherSeries.id])).length,0);
-    const before=(await local.query('select * from public.treatment_schedules order by id')).rows;
-    await local.exec(schema);
-    assert.deepEqual((await local.query('select * from public.treatment_schedules order by id')).rows,before);
-  } finally {await local.close();}
-});
-
-
-test('schedule deletion is owner-only, removes linked replacements and restores occurrences atomically', async () => {
-  const local = await databaseWithAuth();
-  try {
-    await local.exec(schema);
-    await local.exec(`insert into public.accounts(auth_user_id,email,display_name,role) values
-      ('${patient}','patient@example.test','Patient','patient'), ('${coordinator}','coordinator@example.test','Coordinator','coordinator'),
-      ('${driver}','driver@example.test','Driver','driver'), ('${stranger}','stranger@example.test','Other','patient');
-      insert into public.patients(account_id,full_name,phone,pickup_address,mobility,assistance_required,status)
-      select id,display_name,'81234567','Test street','ambulant',false,'active' from public.accounts where role='patient';`);
-    const own = async (who, sql, params = []) => {
-      await local.exec('begin; set local role authenticated;');
-      try { await local.query("select set_config('request.jwt.claim.sub',$1,true)",[who]); const r=await local.query(sql,params); await local.exec('commit'); return r.rows; }
-      catch (e) { await local.exec('rollback'); throw e; }
-    };
-    const insert = async (kind, date, day, parent=null, original=null) => (await own(patient,`insert into public.treatment_schedules
-      (patient_id,centre_id,kind,days,start_time,end_time,effective_from,effective_to,replaces_schedule_id,replaces_date)
-      select p.id,c.id,$1,$2,'09:00','13:00',$3,$4,$5,$6 from public.patients p cross join public.dialysis_centres c
-      where p.account_id=(select id from public.accounts where auth_user_id=auth.uid()) limit 1 returning *`,
-      [kind,[day],date,kind==='recurring'?'2026-12-31':date,parent,original]))[0];
-    const remove = async (who,id) => { const row=(await local.query('select version from public.treatment_schedules where id=$1',[id])).rows[0]; return own(who,'select public.delete_my_treatment($1,$2) as id',[id,row?.version ?? 1]); };
-    const series = await insert('recurring','2026-10-19',1);
-    const moved = await insert('single','2026-10-27',2,series.id,'2026-10-26');
-    for (const denied of [coordinator,driver,stranger]) await assert.rejects(remove(denied,series.id),/denied/i);
-    await assert.rejects(own(patient,'delete from public.treatment_schedules where id=$1',[series.id]),/permission/i);
-    const conflict = await insert('single','2026-10-26',1);
-    await assert.rejects(remove(patient,moved.id),/overlap/i);
-    assert.equal((await own(patient,'select id from public.treatment_schedules where id=$1',[moved.id])).length,1);
-    await remove(patient,conflict.id);
-    await remove(patient,moved.id);
-    await assert.rejects(insert('single','2026-10-26',1),/overlap/i);
-    const second = await insert('single','2026-10-28',3,series.id,'2026-10-26');
-    await local.exec(`update public.patients set status='inactive' where account_id=(select id from public.accounts where auth_user_id='${patient}')`);
-    await assert.rejects(remove(patient,series.id),/denied/i);
-    await local.exec(`update public.patients set status='active' where account_id=(select id from public.accounts where auth_user_id='${patient}')`);
-    await remove(patient,series.id);
-    assert.equal((await own(patient,'select id from public.treatment_schedules where id=any($1)',[[series.id,second.id]])).length,0);
-    assert.equal((await remove(patient,series.id))[0].id,null);
-    await local.exec('begin; set local role anon;');
-    try { await assert.rejects(local.query('select public.delete_my_treatment($1,1)',[series.id]),/permission/i); }
-    finally { await local.exec('rollback'); }
-    await local.exec(schema);
+    assert.equal((await local.query('select * from public.treatment_schedules')).rows.length,3);
   } finally { await local.close(); }
 });
 
@@ -341,7 +253,7 @@ test('schedule date bounds and nonempty recurrence are enforced for direct authe
 // directory), and optionally PG_CONCURRENCY_PORT. The connected local role must
 // create/drop databases; fixture roles anon/authenticated must already exist.
 // Each race uses independent connections and verifies an actual lock wait.
-test('real PostgreSQL serializes overlapping writes and rejects stale concurrent edits', {
+test('real PostgreSQL serializes overlaps, trip generation and stale patient writes', {
   skip: !process.env.PG_CONCURRENCY_BIN && !process.env.PG_CONCURRENCY_SOCKET,
   timeout: 30000,
 }, async () => {
@@ -443,26 +355,9 @@ test('real PostgreSQL serializes overlapping writes and rejects stale concurrent
     const centreId = await checked('select id from public.dialysis_centres order by id limit 1');
     const insert = `insert into public.treatment_schedules(patient_id,centre_id,days,start_time,end_time,effective_from,effective_to)
       values (${literal(patientId)},${literal(centreId)},array[1],'09:00','10:00','2026-10-19','2026-12-28');`;
-    const details = { kind: 'recurring', centre_id: centreId, days: [1], start_time: '11:00', end_time: '12:00', effective_from: '2026-10-19', effective_to: '2026-12-28' };
-    const edit = (id, version) => `select public.update_my_treatment(${literal(id)},${literal(JSON.stringify(details))}::jsonb,${version});`;
-    const remove = (id, version) => `select public.delete_my_treatment(${literal(id)},${version});`;
-    async function seed() {
-      await checked('truncate public.treatment_schedules;');
-      await checked(`${authenticated(insert)} commit;`);
-      const [id, version] = (await checked('select id,version from public.treatment_schedules limit 1')).split('|');
-      return { id, version: Number(version) };
-    }
     await race('overlapping inserts', insert, insert, '23P01');
     assert.equal(await checked('select count(*) from public.treatment_schedules'), '1');
-    let row = await seed();
-    await race('simultaneous stale edits', edit(row.id, row.version), edit(row.id, row.version), '40001');
-    assert.equal(await checked(`select version from public.treatment_schedules where id=${literal(row.id)}`), String(row.version + 1));
-    row = await seed();
-    await race('edit then stale delete', edit(row.id, row.version), remove(row.id, row.version), '40001');
-    assert.equal(await checked('select count(*) from public.treatment_schedules'), '1');
-    row = await seed();
-    await race('delete then edit', remove(row.id, row.version), edit(row.id, row.version));
-    assert.equal(await checked('select count(*) from public.treatment_schedules'), '0');
+    await checked('truncate public.treatment_schedules cascade;');
     const future = await checked("select ((now() at time zone 'Asia/Singapore')::date+8)::text");
     await checked(`${authenticated(`insert into public.treatment_schedules(patient_id,centre_id,kind,days,start_time,end_time,effective_from,effective_to)
       values (${literal(patientId)},${literal(centreId)},'single',array[extract(isodow from ${literal(future)}::date)::integer],
@@ -472,20 +367,11 @@ test('real PostgreSQL serializes overlapping writes and rejects stale concurrent
     await race('simultaneous duplicate trip generation', generate(tripVersion), generate(tripVersion), undefined, coordinator);
     assert.equal(await checked('select count(*) from public.trips'), '2');
     assert.equal(await checked('select count(*) from public.trip_history'), '2', 'Idempotent generation must not duplicate generated history.');
-    const changeSource = version => `select public.update_my_treatment(${literal(tripSource)},'{"start_time":"11:00","end_time":"12:00"}'::jsonb,${version});`;
-    await race('generation followed by patient source edit', generate(tripVersion), changeSource(tripVersion), undefined, coordinator, patient);
-    assert.equal(await checked('select count(*) from public.trips where review_required'), '2', 'Source edit after generation must flag both journeys.');
-    const changedVersion = Number(tripVersion) + 1;
-    await race('patient source edit followed by stale generation', changeSource(changedVersion), generate(changedVersion), '40001', patient, coordinator);
-    assert.equal(await checked('select count(*) from public.trips'), '2');
-    assert.equal(await checked('select count(*) from public.trips where review_required'), '2');
     const [outboundId, outboundVersion] = (await checked("select id,version from public.trips where direction='outbound'")).split('|');
     const deleteTrip = (id, version) => `select public.delete_trip(${literal(id)},${version});`;
-    const sourceVersion = changedVersion + 1;
-    const actualSourceChange = `select public.update_my_treatment(${literal(tripSource)},'{"start_time":"13:00","end_time":"14:00"}'::jsonb,${sourceVersion});`;
-    await race('patient source change blocks stale trip deletion', actualSourceChange, deleteTrip(outboundId, outboundVersion), '40001', patient, coordinator);
-    assert.equal(await checked('select count(*) from public.trips where deleted_at is null'), '2');
-    const refreshedSourceVersion = sourceVersion + 1;
+    const profileChange = `select public.save_patient(${literal(patientId)},jsonb_build_object('version',(select version from public.patients where id=${literal(patientId)}),'notes','Updated fixture'));`;
+    await race('profile changes block stale trip deletion', profileChange, deleteTrip(outboundId, outboundVersion), '40001', coordinator);
+    const refreshedSourceVersion = tripVersion;
     const staleTripVersion = await checked(`select version from public.trips where id=${literal(outboundId)}`);
     await race('generation refresh blocks stale trip deletion', generate(refreshedSourceVersion), deleteTrip(outboundId, staleTripVersion), '40001', coordinator);
     assert.equal(await checked('select count(*) from public.trips where deleted_at is null'), '2');
@@ -523,8 +409,8 @@ test('coordinators generate idempotent unfilled journeys with buffers, exception
       ('${patient}','patient@example.test','Patient','patient'),('${coordinator}','coordinator@example.test','Coordinator','coordinator'),('${driver}','driver@example.test','Driver','driver'),('${stranger}','stranger@example.test','Other','patient');
       insert into public.patients(account_id,full_name,phone,pickup_address,mobility,postal_code)
       select id,display_name,'81234567','Fixture street','ambulant','560123' from public.accounts where role='patient';`);
-    const own=async(who,sql,params=[])=>{
-      await local.exec('begin; set local role authenticated;');
+    const own=async(who,sql,params=[],trustedFixture=false)=>{
+      await local.exec(trustedFixture ? 'begin;' : 'begin; set local role authenticated;');
       try {await local.query("select set_config('request.jwt.claim.sub',$1,true)",[who]);const result=await local.query(sql,params);await local.exec('commit');return result.rows;}
       catch(error){await local.exec('rollback');throw error;}
     };
@@ -534,8 +420,9 @@ test('coordinators generate idempotent unfilled journeys with buffers, exception
     const ids=(await own(patient,'select p.id as patient,c.id as centre from public.patients p cross join public.dialysis_centres c order by c.id limit 1'))[0];
     const [series]=await own(patient,`insert into public.treatment_schedules(patient_id,centre_id,days,start_time,end_time,effective_from,effective_to)
       values($1,$2,array[1],'09:00','13:00',$3,$4) returning *`,[ids.patient,ids.centre,first,dates.until]);
+    // Database-owner fixture models an already-approved historical replacement.
     const [moved]=await own(patient,`insert into public.treatment_schedules(patient_id,centre_id,kind,days,start_time,end_time,effective_from,effective_to,replaces_schedule_id,replaces_date)
-      values($1,$2,'single',array[2],'10:00','14:00',$3,$3,$4,$5) returning *`,[ids.patient,ids.centre,dates.moved,series.id,first]);
+      values($1,$2,'single',array[2],'10:00','14:00',$3,$3,$4,$5) returning *`,[ids.patient,ids.centre,dates.moved,series.id,first],true);
     const generate=async(who,version)=>(await own(who,'select public.generate_treatment_trips($1,$2,$3,$4) as result',[series.id,first,dates.until,version]))[0].result;
     const coverage=async()=> (await own(coordinator,'select private.treatment_trip_coverage($1) as result',[series.id]))[0].result;
     assert.equal((await coverage()).status,'not_generated');assert.equal((await coverage()).expected_sessions,3);
@@ -575,7 +462,7 @@ test('coordinators generate idempotent unfilled journeys with buffers, exception
     assert.equal((await own(driver,'select * from public.trips')).length,0);
     await assert.rejects(own(coordinator,"update public.trips set status='unfilled'"),/permission/i);
     const edit={start_time:'10:00',end_time:'14:00'};
-    await own(patient,'select public.update_my_treatment($1,$2::jsonb,$3)',[series.id,JSON.stringify(edit),2]);
+    await own(patient,'select public.update_my_treatment($1,$2::jsonb,$3)',[series.id,JSON.stringify(edit),2],true);
     assert.equal((await own(coordinator,'select * from public.trips where review_required')).length,6);
     await assert.rejects(generate(coordinator,2),/changed/i);
     assert.equal((await generate(coordinator,3)).updated,6);
@@ -584,10 +471,10 @@ test('coordinators generate idempotent unfilled journeys with buffers, exception
     assert.equal((await own(coordinator,'select * from public.trips where review_required')).length,6);
     assert.equal((await generate(coordinator,3)).updated,6);
     assert.ok((await own(patient,"select * from public.trips where direction='outbound'")).every(trip=>trip.origin.includes('Updated fixture street')));
-    await own(patient,'select public.delete_my_treatment($1,$2)',[moved.id,1]);
+    await own(patient,'select public.delete_my_treatment($1,$2)',[moved.id,1],true);
     assert.equal((await generate(coordinator,4)).updated,6);
     assert.equal((await own(coordinator,'select * from public.trips')).length,6);
-    await own(patient,'select public.delete_my_treatment($1,$2)',[series.id,4]);
+    await own(patient,'select public.delete_my_treatment($1,$2)',[series.id,4],true);
     assert.equal((await own(coordinator,'select * from public.trips where review_required')).length,6);
     assert.ok((await own(patient,'select * from public.trip_history')).length>=12);
     assert.equal((await own(stranger,'select * from public.trip_history')).length,0);
@@ -886,8 +773,8 @@ test('automatic trip generation is coordinator-controlled, rolling, idempotent a
     await local.exec(`insert into public.accounts(auth_user_id,email,display_name,role) values
       ('${patient}','patient@example.test','Fixture Patient','patient'),('${coordinator}','coordinator@example.test','Coordinator','coordinator'),('${driver}','driver@example.test','Driver','driver');
       insert into public.patients(account_id,full_name,phone,pickup_address,mobility) select id,'Fixture Patient','81234567','Fixture street','ambulant' from public.accounts where role='patient';`);
-    const own = async (who, sql, params = []) => {
-      await local.exec('begin; set local role authenticated;');
+    const own = async (who, sql, params = [], trustedFixture = false) => {
+      await local.exec(trustedFixture ? 'begin;' : 'begin; set local role authenticated;');
       try { await local.query("select set_config('request.jwt.claim.sub',$1,true)", [who]); const result = await local.query(sql,params); await local.exec('commit'); return result.rows; }
       catch (error) { await local.exec('rollback'); throw error; }
     };
@@ -934,9 +821,10 @@ test('automatic trip generation is coordinator-controlled, rolling, idempotent a
     assert.equal((await listed()).auto_generation.enabled,true,'Schema reapplication preserves the opted-in setting.');
     assert.equal(await count(),10);
     // An occurrence originally outside the window but moved into it inherits the root setting.
+    // Trusted fixture only; patients cannot create replacement records.
     const [replacement] = await own(patient,`insert into public.treatment_schedules(patient_id,centre_id,kind,days,start_time,end_time,effective_from,effective_to,replaces_schedule_id,replaces_date)
       select $1,$2,'single',array[extract(isodow from day)::integer],'09:00','13:00',day,day,$3,$4::date
-      from (select (now() at time zone 'Asia/Singapore')::date+16 as day) d returning *`,[ids.patient,ids.centre,source.id,dates.last]);
+      from (select (now() at time zone 'Asia/Singapore')::date+16 as day) d returning *`,[ids.patient,ids.centre,source.id,dates.last],true);
     const replacementView = (await own(coordinator,'select public.list_treatments() as result'))[0].result.schedules.find(row => row.id === replacement.id);
     assert.equal(replacementView.auto_generation.enabled,true);
     await assert.rejects(own(coordinator,'select public.set_treatment_auto_generation($1,false,$2,0)',[replacement.id,replacement.version]),/original recurring/i);
@@ -963,8 +851,87 @@ test('automatic trip generation is coordinator-controlled, rolling, idempotent a
     await local.query("update public.patients set status='active' where id=$1",[ids.patient]);
     const latestSource = (await own(patient,'select version from public.treatment_schedules where id=$1',[source.id]))[0];
     const beforeDelete = await count();
-    await own(patient,'select public.delete_my_treatment($1,$2)',[source.id,latestSource.version]);
+    await own(patient,'select public.delete_my_treatment($1,$2)',[source.id,latestSource.version],true);
     assert.equal((await local.query('select count(*)::integer as n from public.treatment_trip_generation where schedule_id=$1',[source.id])).rows[0].n,0);
     assert.equal(await count(),beforeDelete,'Deleting a treatment removes its setting, not its existing trips.');
   } finally { await local.close(); }
+});
+
+test('patient change requests preserve schedules until a versioned coordinator decision', async () => {
+  const centre = (await db.query('select id from public.dialysis_centres order by id limit 1')).rows[0].id;
+  const [source] = await asUser(patient,`insert into public.treatment_schedules(patient_id,centre_id,kind,days,start_time,end_time,effective_from,effective_to)
+    select p.id,$1,'single',array[extract(isodow from day)::integer],'09:00','10:00',day,day
+    from public.patients p cross join (select (now() at time zone 'Asia/Singapore')::date+7 as day) d where p.account_id=(select id from public.accounts where auth_user_id=$2) returning *`,[centre,patient]);
+  const proposal = { kind: 'single', centre_id: centre, days: source.days, start_time: '12:00', end_time: '13:00', effective_from: source.effective_from, effective_to: source.effective_to };
+  const request = async (who = patient) => (await asUser(who,'select public.request_treatment_change($1,$2,$3::jsonb,null,$4,$5) as request',[source.id,'update',JSON.stringify(proposal),'Appointment changed',source.version]))[0].request;
+  const review = async (id,decision,version=1,note='') => (await asUser(coordinator,'select public.review_treatment_change($1,$2,$3,$4) as request',[id,decision,note,version]))[0].request;
+  for (const who of [coordinator,driver,stranger]) await assert.rejects(request(who),/denied/i);
+  const pending = await request();
+  assert.equal(pending.status,'pending');
+  assert.equal((await db.query('select start_time from public.treatment_schedules where id=$1',[source.id])).rows[0].start_time,'09:00:00');
+  await assert.rejects(request(),/already pending/i);
+  await assert.rejects(asUser(patient,"update public.treatment_change_requests set status='approved' where id=$1",[pending.id]),/permission/i);
+  await assert.rejects(asUser(patient,"select public.review_treatment_change($1,'approved','',1)",[pending.id]),/Coordinator/i);
+  await assert.rejects(review(pending.id,'rejected'),/reason/i);
+  assert.equal((await review(pending.id,'rejected',1,'Please confirm with the centre')).status,'rejected');
+  assert.equal((await db.query('select version from public.treatment_schedules where id=$1',[source.id])).rows[0].version,1);
+  const withdrawal = await request();
+  assert.equal((await asUser(patient,'select public.withdraw_treatment_change($1,1) as request',[withdrawal.id]))[0].request.status,'withdrawn');
+  const accepted = await request();
+  await assert.rejects(review(accepted.id,'approved',2),/changed/i);
+  assert.equal((await review(accepted.id,'approved')).status,'approved');
+  const changed = (await db.query('select * from public.treatment_schedules where id=$1',[source.id])).rows[0];
+  assert.equal(changed.start_time,'12:00:00'); assert.equal(changed.version,2);
+  await assert.rejects(review(accepted.id,'approved'),/changed/i);
+  assert.equal((await asUser(driver,'select * from public.treatment_change_requests')).length,0);
+  const visible = (await asUser(patient,'select public.list_treatments() as result'))[0].result.schedules.find(row=>row.id===source.id);
+  assert.equal(visible.change_request.status,'approved');
+  assert.equal((await db.query('select count(*)::integer as count from public.trips where root_schedule_id=$1',[source.id])).rows[0].count,0,'Approval without generated trips must not manufacture trips.');
+});
+
+test('approved rescheduling and deletion reconcile future trips atomically and preserve historical snapshots', async () => {
+  const centre = (await db.query('select id from public.dialysis_centres order by id limit 1')).rows[0].id;
+  const dates = (await db.query(`select ((now() at time zone 'Asia/Singapore')::date+1)::text as first,
+    ((now() at time zone 'Asia/Singapore')::date+8)::text as original,((now() at time zone 'Asia/Singapore')::date+9)::text as moved,
+    ((now() at time zone 'Asia/Singapore')::date+15)::text as last`)).rows[0];
+  const [source] = await asUser(patient,`insert into public.treatment_schedules(patient_id,centre_id,days,start_time,end_time,effective_from,effective_to)
+    select id,$1,array[extract(isodow from $2::date)::integer],'09:00','10:00',$2,$3 from public.patients where account_id=(select id from public.accounts where auth_user_id=$4) returning *`,[centre,dates.first,dates.last,patient]);
+  await asUser(coordinator,'select public.generate_treatment_trips($1,$2,$3,1)',[source.id,dates.first,dates.last]);
+  const [first] = await asUser(coordinator,"select * from public.trips where root_schedule_id=$1 and session_date=$2 and direction='outbound'",[source.id,dates.first]);
+  await asUser(coordinator,'select public.delete_trip($1,$2)',[first.id,first.version]);
+  // A historical snapshot can outlive changes to the current treatment definition.
+  const historical = (await db.query(`insert into public.trips(patient_id,patient_name,source_schedule_id,root_schedule_id,occurrence_key,original_session_date,session_date,direction,origin,destination,treatment_start,treatment_end,arrival_by,source_version,patient_version,created_by)
+    select patient_id,patient_name,source_schedule_id,root_schedule_id,'historical-fixture',(now() at time zone 'Asia/Singapore')::date,(now() at time zone 'Asia/Singapore')::date,'outbound',origin,destination,
+      now()-interval '2 hours',now()-interval '1 hour',now()-interval '135 minutes',source_version,patient_version,created_by from public.trips where id=$1 returning *`,[first.id])).rows[0];
+  const movedIds = (await db.query('select id from public.trips where root_schedule_id=$1 and session_date=$2 order by id',[source.id,dates.original])).rows.map(row=>row.id);
+  const proposal = { kind:'single',centre_id:centre,days:[new Date(`${dates.moved}T00:00:00Z`).getUTCDay()||7],start_time:'11:00',end_time:'12:00',effective_from:dates.moved,effective_to:dates.moved };
+  const make = async (id,operation,details,original=null) => {
+    const version=(await db.query('select version from public.treatment_schedules where id=$1',[id])).rows[0].version;
+    return (await asUser(patient,'select public.request_treatment_change($1,$2,$3::jsonb,$4,$5,$6) as request',[id,operation,JSON.stringify(details),original,'Treatment changed',version]))[0].request;
+  };
+  const approve = request => asUser(coordinator,"select public.review_treatment_change($1,'approved','',1)",[request.id]);
+  await approve(await make(source.id,'reschedule',proposal,dates.original));
+  const moved = (await db.query('select * from public.treatment_schedules where replaces_schedule_id=$1',[source.id])).rows[0];
+  assert.equal(moved.effective_from,dates.moved);
+  const journeys = (await db.query('select * from public.trips where id=any($1::uuid[]) order by id',[movedIds])).rows;
+  assert.ok(journeys.every(trip=>trip.session_date===dates.moved && trip.source_schedule_id===moved.id && !trip.deleted_at));
+  assert.ok((await db.query('select deleted_at from public.trips where id=$1',[first.id])).rows[0].deleted_at,'Approval must not restore a deliberately deleted journey.');
+  await approve(await make(moved.id,'delete',{}));
+  assert.ok((await db.query('select * from public.trips where id=any($1::uuid[])',[movedIds])).rows.every(trip=>trip.session_date===dates.original && trip.source_schedule_id===source.id));
+  const recurring = {kind:'recurring',centre_id:centre,days:source.days,start_time:'09:00',end_time:'10:00',effective_from:source.effective_from,effective_to:source.effective_to};
+  await approve(await make(source.id,'update',{...recurring,days:[source.days[0] % 7 + 1]}));
+  assert.ok((await db.query('select * from public.trips where id=any($1::uuid[])',[movedIds])).rows.every(trip=>trip.deleted_at && trip.schedule_change_cancelled));
+  await approve(await make(source.id,'update',recurring));
+  assert.ok((await db.query('select * from public.trips where id=any($1::uuid[])',[movedIds])).rows.every(trip=>!trip.deleted_at && !trip.schedule_change_cancelled),'Schedule cancellations should be restored when the original weekday returns.');
+  assert.ok((await db.query('select deleted_at from public.trips where id=$1',[first.id])).rows[0].deleted_at,'Deliberate deletions remain protected after changing the weekday back.');
+  await asUser(patient,`insert into public.treatment_schedules(patient_id,centre_id,kind,days,start_time,end_time,effective_from,effective_to)
+    values($1,$2,'single',array[extract(isodow from $3::date)::integer],'11:00','12:00',$3,$3)`,[source.patient_id,centre,dates.last]);
+  const conflict = await make(source.id,'update',{kind:'recurring',centre_id:centre,days:source.days,start_time:'11:00',end_time:'12:00',effective_from:source.effective_from,effective_to:source.effective_to});
+  await assert.rejects(approve(conflict),/overlap/i);
+  assert.equal((await db.query('select status from public.treatment_change_requests where id=$1',[conflict.id])).rows[0].status,'pending');
+  assert.equal((await db.query('select start_time from public.treatment_schedules where id=$1',[source.id])).rows[0].start_time,'09:00:00');
+  await asUser(coordinator,"select public.review_treatment_change($1,'rejected','Conflicting appointment',1)",[conflict.id]);
+  await approve(await make(source.id,'delete',{}));
+  assert.equal((await db.query('select count(*)::integer as count from public.trips where root_schedule_id=$1 and deleted_at is null and treatment_start>now()',[source.id])).rows[0].count,0);
+  assert.deepEqual((await db.query('select * from public.trips where id=$1',[historical.id])).rows[0],historical);
 });

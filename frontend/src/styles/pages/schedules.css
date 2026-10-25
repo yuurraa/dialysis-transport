@@ -668,7 +668,7 @@
 
 /* Mobile schedule type and trip coverage share one badge row. */
 @media (max-width: 760px) {
-  .treatment-summary-coordinator { grid-template-columns: max-content minmax(0, 1fr); gap: 6px 8px; }
+  .treatment-summary-coordinator { grid-template-columns: minmax(0, 1fr) max-content; gap: 6px 8px; }
   .treatment-summary-coordinator .treatment-identity { display: contents; }
   .treatment-summary-coordinator .treatment-identity > p:first-child {
     grid-column: 1 / -1;
@@ -676,7 +676,7 @@
     min-height: 0;
     padding-right: 104px;
   }
-  .treatment-summary-coordinator p.treatment-kind {
+  .treatment-summary-coordinator .treatment-badges {
     grid-column: 1;
     grid-row: 2;
     white-space: nowrap;
@@ -696,3 +696,37 @@
 .generation-auto-row { display: flex; align-items: center; gap: 12px; min-height: 44px; }
 
 .dashboard-dialog .generation-auto-row .generation-auto-save { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 20px; width: 20px; height: 20px; min-width: 20px; min-height: 20px; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--ui-accent); }
+
+.schedule-create-warning { margin: 0 0 20px; font-size: .875rem; line-height: 1.6; color: var(--ui-text); }
+@media (max-width: 760px) {
+  .treatment-panel:not(:has(.schedule-generate)) .treatment-summary .treatment-identity { padding-right: 56px; }
+}
+
+.schedule-create-confirmation .overlay-body { padding-top: 12px; }
+.schedule-create-confirmation .schedule-create-warning { margin: 0 0 16px; }
+.schedule-create-confirmation .schedule-detail-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 24px; }
+.schedule-create-confirmation .schedule-detail-fields dt { color: var(--ui-text); font-size: 1rem; }
+.schedule-create-confirmation .schedule-detail-fields dd { color: var(--ui-muted); font-size: .8125rem; }
+
+/* Change requests use the established flat records and centered modal controls. */
+.treatment-panel .treatment-change-badge { display: inline-flex; width: fit-content; margin: 0; padding: 3px 8px; border: 1px solid currentColor; border-radius: 5px; font-size: .75rem; min-height: 0; line-height: 1.5; color: var(--ui-warning); background: var(--ui-warning-surface); }
+.treatment-change-badge.change-rejected { color: var(--ui-danger); background: var(--ui-danger-surface); }
+.treatment-change-outcome { margin: 0 0 16px; font-size: .875rem; line-height: 1.6; }
+.treatment-change-dialog .overlay-body { display: grid; gap: 16px; }
+.treatment-change-dialog .overlay-body > .treatment-hint { margin: 0; }
+.treatment-change-comparison { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
+.treatment-change-comparison h3 { margin: 0 0 12px; font-size: 1rem; }
+@media (max-width: 760px) {
+  .treatment-panel:not(:has(.schedule-generate)) .treatment-summary .treatment-identity { padding-right: 104px; }
+  .treatment-change-comparison { gap: 16px; }
+}
+
+.treatment-badges { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
+.treatment-badges > .treatment-kind, .treatment-badges > .treatment-change-badge { margin: 0; white-space: nowrap; }
+
+@media (min-width: 761px) {
+  .generation-settings { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; align-items: start; margin: 16px 0; }
+  .generation-settings > :is(.generation-automatic, .generation-coverage) { margin: 0; }
+  .generation-settings :is(.generation-auto-row, .generation-auto-toggle) { min-height: 24px; }
+  .generation-settings .generation-coverage h3 { line-height: 24px; }
+}

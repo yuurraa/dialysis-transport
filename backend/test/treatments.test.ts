@@ -23,6 +23,9 @@ test('treatment service rejects missing authentication, caregivers, drivers and 
   for (const denied of ['driver','caregiver']) { role=denied; await assert.rejects(service.treatments('Bearer fixture'),/access denied/); }
   role='coordinator'; await assert.rejects(service.saveTreatment('Bearer fixture',details),/access denied/);
   role='patient'; status='inactive'; await assert.rejects(service.saveTreatment('Bearer fixture',details),/access denied/);
+  status='active';
+  await assert.rejects(service.saveTreatment('Bearer fixture', { ...details, version: 1 }, details.centre_id), /coordinator approval/);
+  await assert.rejects(service.deleteTreatment('Bearer fixture', details.centre_id, { version: 1 }), /coordinator approval/);
 });
 
 test('trip generation permits only bounded versioned coordinator commands and maps database failures', async context => {
@@ -77,4 +80,27 @@ test('auto-generation settings require an active coordinator and versioned boole
   for (const other of ['patient', 'driver', 'caregiver']) { role = other; await assert.rejects(service.setAutoGeneration('Bearer fixture', id, input), /access denied/i); }
   role = 'coordinator'; status = 'inactive'; await assert.rejects(service.setAutoGeneration('Bearer fixture', id, input), /access denied/i);
   status = 'active'; error = { code: '40001' }; await assert.rejects(service.setAutoGeneration('Bearer fixture', id, input), /changed/i);
+});
+
+test('schedule-change requests and decisions enforce roles, strict proposals and version conflicts', async () => {
+  let role = 'patient'; let code: string | undefined;
+  const calls: Array<[string, Record<string, unknown>]> = [];
+  const service = new SchedulingService(
+    { verifyIdentity: async () => ({ account: { id: 'trusted', role, status: 'active' } }) } as unknown as AuthService,
+    { forUser: () => ({ rpc: async (name: string, args: Record<string, unknown>) => { calls.push([name,args]); return { data: { id: details.centre_id, status: name === 'review_treatment_change' ? args.decision : 'pending' }, error: code ? { code } : null }; } }) } as unknown as SupabaseService);
+  const id = details.centre_id;
+  const input = { action: 'update', details, reason: 'Appointment changed', version: 1 };
+  await service.requestChange('Bearer fixture', id, input);
+  assert.equal(calls[0][0], 'request_treatment_change');
+  assert.equal(calls[0][1].expected_version, 1);
+  assert.equal((calls[0][1].proposal as { kind: string }).kind, 'recurring');
+  for (const body of [{ ...input, requested_by: id }, { ...input, version: 0 }, { ...input, reason: '' }, { ...input, action: 'approved' }, { ...input, action: 'delete' }, { ...input, details: { ...details, patient_id: id } }]) await assert.rejects(service.requestChange('Bearer fixture', id, body));
+  await assert.rejects(service.reviewChange('Bearer fixture', id, { decision: 'approved', version: 1 }), /Coordinator/);
+  role = 'driver'; await assert.rejects(service.requestChange('Bearer fixture', id, input), /denied/);
+  role = 'coordinator'; await assert.rejects(service.requestChange('Bearer fixture', id, input), /denied/);
+  await assert.rejects(service.reviewChange('Bearer fixture', id, { decision: 'rejected', version: 1, note: '' }), /reason/);
+  await service.reviewChange('Bearer fixture', id, { decision: 'approved', version: 1 });
+  assert.equal(calls.at(-1)?.[0], 'review_treatment_change');
+  assert.equal(calls.at(-1)?.[1].note, '');
+  code = '40001'; await assert.rejects(service.reviewChange('Bearer fixture', id, { decision: 'approved', version: 1 }), /changed/);
 });

@@ -774,9 +774,9 @@ alter table public.dialysis_centres enable row level security;
 alter table public.treatment_schedules enable row level security;
 revoke all on public.dialysis_centres, public.treatment_schedules from public, anon, authenticated;
 grant select on public.dialysis_centres, public.treatment_schedules to authenticated;
-grant insert(patient_id,centre_id,kind,days,start_time,end_time,effective_from,effective_to,replaces_schedule_id,replaces_date),
-  update(centre_id,kind,days,start_time,end_time,effective_from,effective_to) on public.treatment_schedules to authenticated;
--- Updates require a version-checked RPC; INSERT still validates through RLS/triggers.
+grant insert(patient_id,centre_id,kind,days,start_time,end_time,effective_from,effective_to) on public.treatment_schedules to authenticated;
+revoke insert(replaces_schedule_id,replaces_date) on public.treatment_schedules from authenticated;
+-- Patient creation is allowed; saved schedules require coordinator approval to change.
 revoke update on public.treatment_schedules from authenticated;
 revoke update(centre_id,kind,days,start_time,end_time,effective_from,effective_to) on public.treatment_schedules from authenticated;
 
@@ -797,10 +797,9 @@ create policy treatment_read on public.treatment_schedules for select to authent
   using ((select private.is_coordinator()) or private.owns_active_patient(patient_id));
 drop policy if exists treatment_insert on public.treatment_schedules;
 create policy treatment_insert on public.treatment_schedules for insert to authenticated
-  with check (private.owns_active_patient(patient_id));
+  with check (private.owns_active_patient(patient_id) and replaces_schedule_id is null and replaces_date is null);
 drop policy if exists treatment_update on public.treatment_schedules;
-create policy treatment_update on public.treatment_schedules for update to authenticated
-  using (private.owns_active_patient(patient_id)) with check (private.owns_active_patient(patient_id));
+-- Saved schedules are read-only to clients; future approved changes use a coordinator workflow.
 
 -- Generation preferences are coordinator-owned, separate from patient treatment versions.
 create table if not exists public.treatment_trip_generation (
@@ -831,6 +830,45 @@ $$;
 revoke all on function private.treatment_auto_generation(uuid) from public,anon;
 grant execute on function private.treatment_auto_generation(uuid) to authenticated;
 
+-- Requests preserve the saved schedule until a coordinator reviews the proposal.
+create table if not exists public.treatment_change_requests (
+  id uuid primary key default gen_random_uuid(),
+  schedule_id uuid not null,
+  root_schedule_id uuid not null,
+  patient_id uuid not null references public.patients(id) on delete restrict,
+  requested_by uuid not null references public.accounts(id) on delete restrict,
+  action text not null check (action in ('update','reschedule','delete')),
+  proposal jsonb not null default '{}'::jsonb check (jsonb_typeof(proposal)='object'),
+  original_date date,
+  before_snapshot jsonb not null,
+  schedule_version integer not null check (schedule_version>0),
+  root_version integer not null check (root_version>0),
+  reason text not null check (length(btrim(reason)) between 1 and 1000),
+  status text not null default 'pending' check (status in ('pending','approved','rejected','withdrawn')),
+  version integer not null default 1 check (version>0),
+  requested_at timestamptz not null default now(),
+  reviewed_at timestamptz,
+  reviewed_by uuid references public.accounts(id) on delete restrict,
+  review_note text not null default '' check (length(review_note)<=1000)
+);
+create unique index if not exists treatment_one_pending_change on public.treatment_change_requests(root_schedule_id) where status='pending';
+create index if not exists treatment_change_latest on public.treatment_change_requests(schedule_id,requested_at desc,id);
+alter table public.treatment_change_requests enable row level security;
+revoke all on public.treatment_change_requests from public,anon,authenticated;
+grant select on public.treatment_change_requests to authenticated;
+drop policy if exists treatment_change_read on public.treatment_change_requests;
+create policy treatment_change_read on public.treatment_change_requests for select to authenticated
+  using (private.is_coordinator() or private.owns_active_patient(patient_id));
+
+create or replace function private.treatment_change_summary(target uuid) returns jsonb
+language sql stable security invoker set search_path='' as $$
+  select to_jsonb(r) from public.treatment_change_requests r
+  where r.schedule_id=target or (r.status='pending' and r.root_schedule_id=(select coalesce(s.replaces_schedule_id,s.id) from public.treatment_schedules s where s.id=target))
+  order by (r.status='pending') desc,r.requested_at desc,r.id desc limit 1;
+$$;
+revoke all on function private.treatment_change_summary(uuid) from public,anon;
+grant execute on function private.treatment_change_summary(uuid) to authenticated;
+
 -- Lock before the statement touches any schedule rows, including direct Data API
 -- updates. Saves and deletion therefore always acquire Patient -> Schedule locks.
 create or replace function private.lock_treatment_patient() returns trigger
@@ -850,7 +888,7 @@ create or replace function private.check_treatment_overlap() returns trigger
 language plpgsql security definer set search_path = '' as $$
 declare parent public.treatment_schedules;
 begin
-  if not private.owns_active_patient(new.patient_id) then
+  if not private.owns_active_patient(new.patient_id) and not private.is_coordinator() then
     raise exception 'Treatment access denied.' using errcode='42501';
   end if;
   perform 1 from public.patients where id=new.patient_id for update;
@@ -897,7 +935,7 @@ drop trigger if exists treatment_overlap on public.treatment_schedules;
 create trigger treatment_overlap before insert or update on public.treatment_schedules
   for each row execute function private.check_treatment_overlap();
 
--- A narrow owner operation keeps linked replacements and restored occurrences atomic.
+-- Owner-only internal operation for controlled future approval work; no client execution.
 -- Direct DELETE remains revoked; all changes serialize on the same Patient as saves.
 drop function if exists public.delete_my_treatment(uuid);
 drop function if exists private.delete_my_treatment(uuid);
@@ -913,7 +951,7 @@ begin
     end if;
     return null;
   end if;
-  if not private.owns_active_patient(selected.patient_id) then
+  if not private.owns_active_patient(selected.patient_id) and not private.is_coordinator() then
     raise exception 'Treatment access denied.' using errcode='42501';
   end if;
   perform 1 from public.patients where id=selected.patient_id for update;
@@ -921,7 +959,7 @@ begin
   select * into selected from public.treatment_schedules where id=target for update;
   if not found then return null; end if;
   if selected.version <> expected_version then raise exception 'Schedule changed. Reload before deleting.' using errcode='40001'; end if;
-  if not private.owns_active_patient(selected.patient_id) then
+  if not private.owns_active_patient(selected.patient_id) and not private.is_coordinator() then
     raise exception 'Treatment access denied.' using errcode='42501';
   end if;
   delete from public.treatment_schedules where replaces_schedule_id=target;
@@ -937,9 +975,9 @@ $$;
 create or replace function public.delete_my_treatment(target uuid, expected_version integer) returns uuid
 language sql security invoker set search_path = '' as $$ select private.delete_my_treatment(target,expected_version); $$;
 revoke all on function private.delete_my_treatment(uuid,integer), public.delete_my_treatment(uuid,integer) from public, anon;
-grant execute on function private.delete_my_treatment(uuid,integer), public.delete_my_treatment(uuid,integer) to authenticated;
+revoke all on function private.delete_my_treatment(uuid,integer), public.delete_my_treatment(uuid,integer) from authenticated;
 
--- Serialize owner edits and compare the version while holding the same Patient lock
+-- Owner-only internal edits compare the version while holding the same Patient lock
 -- used by inserts/deletion. Direct Data API UPDATE is intentionally unavailable.
 create or replace function private.update_my_treatment(target uuid, details jsonb, expected_version integer) returns jsonb
 language plpgsql security definer set search_path = '' as $$
@@ -951,11 +989,11 @@ begin
   end if;
   select * into selected from public.treatment_schedules where id=target;
   if not found then return null; end if;
-  if not private.owns_active_patient(selected.patient_id) then raise exception 'Treatment access denied.' using errcode='42501'; end if;
+  if not private.owns_active_patient(selected.patient_id) and not private.is_coordinator() then raise exception 'Treatment access denied.' using errcode='42501'; end if;
   perform 1 from public.patients where id=selected.patient_id for update;
   select * into selected from public.treatment_schedules where id=target for update;
   if not found then return null; end if;
-  if not private.owns_active_patient(selected.patient_id) then raise exception 'Treatment access denied.' using errcode='42501'; end if;
+  if not private.owns_active_patient(selected.patient_id) and not private.is_coordinator() then raise exception 'Treatment access denied.' using errcode='42501'; end if;
   if selected.version<>expected_version then raise exception 'Schedule changed. Reload before saving.' using errcode='40001'; end if;
   candidate := jsonb_populate_record(selected,details);
   update public.treatment_schedules set kind=candidate.kind,centre_id=candidate.centre_id,days=candidate.days,
@@ -967,7 +1005,7 @@ $$;
 create or replace function public.update_my_treatment(target uuid, details jsonb, expected_version integer) returns jsonb
 language sql security invoker set search_path = '' as $$ select private.update_my_treatment(target,details,expected_version); $$;
 revoke all on function private.update_my_treatment(uuid,jsonb,integer), public.update_my_treatment(uuid,jsonb,integer) from public,anon;
-grant execute on function private.update_my_treatment(uuid,jsonb,integer), public.update_my_treatment(uuid,jsonb,integer) to authenticated;
+revoke all on function private.update_my_treatment(uuid,jsonb,integer), public.update_my_treatment(uuid,jsonb,integer) from authenticated;
 
 -- A replacement changes the series context seen by an open editor as well.
 create or replace function private.touch_treatment_parent() returns trigger
@@ -1024,7 +1062,7 @@ begin
   ), parents as (select id from page union select replaces_schedule_id from page where replaces_schedule_id is not null)
   select jsonb_build_object(
     'centres',(select coalesce(jsonb_agg(to_jsonb(c) order by name,id),'[]'::jsonb) from public.dialysis_centres c),
-    'schedules',(select coalesce(jsonb_agg((to_jsonb(p)-'centre_name'-'list_order') || case when private.is_coordinator() then jsonb_build_object('trip_generation',private.treatment_trip_coverage(p.id),'auto_generation',private.treatment_auto_generation(coalesce(p.replaces_schedule_id,p.id))) else '{}'::jsonb end order by list_order),'[]'::jsonb) from page p),
+    'schedules',(select coalesce(jsonb_agg((to_jsonb(p)-'centre_name'-'list_order') || jsonb_build_object('change_request',private.treatment_change_summary(p.id)) || case when private.is_coordinator() then jsonb_build_object('trip_generation',private.treatment_trip_coverage(p.id),'auto_generation',private.treatment_auto_generation(coalesce(p.replaces_schedule_id,p.id))) else '{}'::jsonb end order by list_order),'[]'::jsonb) from page p),
     'context',(select coalesce(jsonb_agg(to_jsonb(s)-'centre_name' order by effective_from,id),'[]'::jsonb) from visible s where s.id in (select id from parents) or s.replaces_schedule_id in (select id from parents)),
     'total',(select count(*) from matched),'page',page_no,'pageSize',10) into result;
   return result;
@@ -1069,6 +1107,8 @@ create index if not exists trips_patient_date on public.trips(patient_id,session
 create index if not exists trips_session_date on public.trips(session_date,id);
 alter table public.trips add column if not exists version integer not null default 1 check (version>0);
 alter table public.trips add column if not exists deleted_at timestamptz;
+-- System cancellations can return when the schedule changes back; deliberate deletions cannot.
+alter table public.trips add column if not exists schedule_change_cancelled boolean not null default false;
 create or replace function private.increment_trip_version() returns trigger
 language plpgsql security definer set search_path = '' as $$
 begin new.version:=old.version+1; return new; end;
@@ -1086,7 +1126,7 @@ create table if not exists public.trip_history (
 );
 create index if not exists trip_history_trip on public.trip_history(trip_id,created_at,id);
 alter table public.trip_history drop constraint if exists trip_history_event_check;
-alter table public.trip_history add constraint trip_history_event_check check (event in ('generated','refreshed','requirements_changed','deleted','restored'));
+alter table public.trip_history add constraint trip_history_event_check check (event in ('generated','refreshed','requirements_changed','deleted','restored','schedule_change_approved'));
 alter table public.trips enable row level security;
 alter table public.trip_history enable row level security;
 revoke all on public.trips,public.trip_history from public,anon,authenticated;
@@ -1118,6 +1158,7 @@ begin
   end if;
   for changed in update public.trips set review_required=true,updated_at=now()
     where deleted_at is null and (coalesce(pickup_not_before,treatment_end) at time zone 'Asia/Singapore')::date >= (now() at time zone 'Asia/Singapore')::date
+      and (subject is not null or treatment_start>now())
       and (patient_id=subject or (root_schedule_id=root and (original is null or original_session_date=original))) returning id
   loop
     insert into public.trip_history(trip_id,actor_id,event,details)
@@ -1133,7 +1174,7 @@ create trigger treatment_trip_review after insert or update or delete on public.
 drop trigger if exists patient_trip_review on public.patients;
 create trigger patient_trip_review after update on public.patients for each row execute function private.flag_trip_review();
 
-create or replace function private.generate_treatment_trips_internal(target uuid,from_date date,until_date date,expected_version integer,actor uuid,restore_deleted boolean) returns jsonb
+create or replace function private.generate_treatment_trips_internal(target uuid,from_date date,until_date date,expected_version integer,actor uuid,restore_deleted boolean,approved_change boolean) returns jsonb
 language plpgsql security definer set search_path = '' as $$
 declare chosen public.treatment_schedules; person public.patients; old_trip public.trips; saved public.trips;
   session record; leg text; source_root uuid; key text; origin_text text; destination_text text;
@@ -1152,7 +1193,7 @@ begin
   select * into chosen from public.treatment_schedules where id=target for update;
   if not found then raise exception 'Treatment schedule not found.' using errcode='P0002'; end if;
   if chosen.version<>expected_version then raise exception 'Treatment schedule changed. Reload before generating Trips.' using errcode='40001'; end if;
-  if not restore_deleted then
+  if not restore_deleted and not approved_change then
     perform 1 from public.treatment_trip_generation where schedule_id=chosen.id and enabled for update;
     if not found then return jsonb_build_object('created',0,'updated',0,'unchanged',0,'skipped',0,'total',0); end if;
     if not exists(select 1 from public.accounts a where a.id=person.account_id and a.role='patient' and a.status='active') then
@@ -1187,7 +1228,8 @@ begin
       due := case when leg='outbound' then session_start-interval '15 minutes' end;
       ready := case when leg='return' then session_end+interval '15 minutes' end;
       select * into old_trip from public.trips where root_schedule_id=source_root and occurrence_key=key and direction=leg for update;
-      if found and old_trip.deleted_at is not null and not restore_deleted then skipped:=skipped+1; continue; end if;
+      if found and old_trip.treatment_start<=now() then skipped:=skipped+1; continue; end if;
+      if found and old_trip.deleted_at is not null and not restore_deleted and not old_trip.schedule_change_cancelled then skipped:=skipped+1; continue; end if;
       if found and old_trip.deleted_at is null and not old_trip.review_required and old_trip.source_version=session.version and old_trip.patient_version=person.version
         and old_trip.source_schedule_id=session.id and old_trip.session_date=session.actual_date and old_trip.origin=origin_text and old_trip.destination=destination_text
         and old_trip.treatment_start=session_start and old_trip.treatment_end=session_end then
@@ -1202,7 +1244,7 @@ begin
       else
         update public.trips set patient_name=person.full_name,source_schedule_id=session.id,session_date=session.actual_date,
           origin=origin_text,destination=destination_text,treatment_start=session_start,treatment_end=session_end,arrival_by=due,pickup_not_before=ready,
-          source_version=session.version,patient_version=person.version,review_required=false,deleted_at=null,updated_at=now()
+          source_version=session.version,patient_version=person.version,review_required=false,deleted_at=null,schedule_change_cancelled=false,updated_at=now()
           where id=old_trip.id returning * into saved;
         refreshed:=refreshed+1;
       end if;
@@ -1214,6 +1256,9 @@ begin
   return jsonb_build_object('created',inserted,'updated',refreshed,'unchanged',unchanged,'skipped',skipped,'total',inserted+refreshed+unchanged+skipped);
 end;
 $$;
+revoke all on function private.generate_treatment_trips_internal(uuid,date,date,integer,uuid,boolean,boolean) from public,anon,authenticated;
+create or replace function private.generate_treatment_trips_internal(target uuid,from_date date,until_date date,expected_version integer,actor uuid,restore_deleted boolean) returns jsonb
+language sql security definer set search_path='' as $$ select private.generate_treatment_trips_internal(target,from_date,until_date,expected_version,actor,restore_deleted,false); $$;
 revoke all on function private.generate_treatment_trips_internal(uuid,date,date,integer,uuid,boolean) from public,anon,authenticated;
 create or replace function private.generate_treatment_trips(target uuid,from_date date,until_date date,expected_version integer) returns jsonb
 language plpgsql security definer set search_path='' as $$
@@ -1245,7 +1290,7 @@ begin
   if selected.version<>expected_version then raise exception 'Trip changed. Reload before deleting.' using errcode='40001'; end if;
   if selected.status<>'unfilled' or selected.pickup_at is not null then raise exception 'Only unassigned trips may be deleted.' using errcode='22023'; end if;
   select id into actor from public.accounts where auth_user_id=(select auth.uid());
-  update public.trips set deleted_at=now(),updated_at=now() where id=target;
+  update public.trips set deleted_at=now(),schedule_change_cancelled=false,updated_at=now() where id=target;
   insert into public.trip_history(trip_id,actor_id,event,details) values(target,actor,'deleted',
     jsonb_build_object('direction',selected.direction,'session_date',selected.session_date));
   return target;
@@ -1452,6 +1497,205 @@ begin
   end if;
 end;
 $$;
+
+-- Validate stored proposals at the database boundary as well as in the HTTP service.
+create or replace function private.validate_treatment_proposal(chosen public.treatment_schedules,operation text,proposal jsonb,original_day date) returns jsonb
+language plpgsql security definer set search_path='' as $$
+declare candidate public.treatment_schedules;
+begin
+  if operation is null or operation not in ('update','reschedule','delete') or proposal is null or jsonb_typeof(proposal)<>'object' then
+    raise exception 'Invalid schedule change.' using errcode='22023';
+  end if;
+  if operation='delete' then
+    if proposal<>'{}'::jsonb or original_day is not null then raise exception 'Deletion has no replacement details.' using errcode='22023'; end if;
+    return proposal;
+  end if;
+  if proposal-array['kind','centre_id','days','start_time','end_time','effective_from','effective_to']<>'{}'::jsonb
+    or not (proposal ?& array['kind','centre_id','days','start_time','end_time','effective_from','effective_to']) then
+    raise exception 'Complete treatment details are required.' using errcode='22023';
+  end if;
+  candidate:=jsonb_populate_record(chosen,proposal);
+  if num_nulls(candidate.kind,candidate.centre_id,candidate.days,candidate.start_time,candidate.end_time,candidate.effective_from,candidate.effective_to)>0
+    or candidate.kind not in ('recurring','single') or cardinality(candidate.days)<>1 or candidate.days[1] is null or candidate.days[1] not between 1 and 7
+    or candidate.start_time>=candidate.end_time or candidate.start_time>=time '24:00' or candidate.end_time>=time '24:00' or not isfinite(candidate.effective_from) or not isfinite(candidate.effective_to)
+    or candidate.effective_from<date '0001-01-01' or candidate.effective_to>date '9999-12-31' or candidate.effective_to<candidate.effective_from
+    or candidate.effective_from+((candidate.days[1]-extract(isodow from candidate.effective_from)::integer+7)%7)>candidate.effective_to
+    or (candidate.kind='single' and candidate.effective_from<>candidate.effective_to)
+    or (candidate.kind='single' and (candidate.effective_from+candidate.start_time) at time zone 'Asia/Singapore'<=now())
+    or not exists(select 1 from public.dialysis_centres where id=candidate.centre_id) then
+    raise exception 'Check the centre, days, dates and treatment times.' using errcode='22023';
+  end if;
+  if operation='update' then
+    if chosen.kind='single' and (chosen.effective_from+chosen.start_time) at time zone 'Asia/Singapore'<=now() then
+      raise exception 'A session that has already started cannot be moved.' using errcode='22023';
+    end if;
+    if original_day is not null or candidate.kind<>chosen.kind then raise exception 'Schedule type cannot be changed.' using errcode='22023'; end if;
+    if row(candidate.centre_id,candidate.days,candidate.start_time,candidate.end_time,candidate.effective_from,candidate.effective_to)
+      is not distinct from row(chosen.centre_id,chosen.days,chosen.start_time,chosen.end_time,chosen.effective_from,chosen.effective_to) then
+      raise exception 'Change at least one treatment detail.' using errcode='22023';
+    end if;
+  else
+    if chosen.kind<>'recurring' or chosen.replaces_schedule_id is not null or candidate.kind<>'single' or original_day is null
+      or not isfinite(original_day) or original_day<chosen.effective_from or original_day>chosen.effective_to
+      or original_day<(now() at time zone 'Asia/Singapore')::date or extract(isodow from original_day)::integer<>chosen.days[1]
+      or (original_day+chosen.start_time) at time zone 'Asia/Singapore'<=now()
+      or candidate.effective_from<(now() at time zone 'Asia/Singapore')::date
+      or exists(select 1 from public.treatment_schedules where replaces_schedule_id=chosen.id and replaces_date=original_day) then
+      raise exception 'Choose an upcoming occurrence that has not been rescheduled.' using errcode='22023';
+    end if;
+  end if;
+  return jsonb_build_object('kind',candidate.kind,'centre_id',candidate.centre_id,'days',candidate.days,
+    'start_time',candidate.start_time,'end_time',candidate.end_time,'effective_from',candidate.effective_from,'effective_to',candidate.effective_to);
+end;
+$$;
+revoke all on function private.validate_treatment_proposal(public.treatment_schedules,text,jsonb,date) from public,anon,authenticated;
+
+create or replace function private.request_treatment_change(target uuid,operation text,proposal jsonb,original_day date,reason text,expected_version integer) returns jsonb
+language plpgsql security definer set search_path='' as $$
+declare chosen public.treatment_schedules; root public.treatment_schedules; actor uuid; saved public.treatment_change_requests;
+begin
+  select * into chosen from public.treatment_schedules where id=target;
+  if not found or not private.owns_active_patient(chosen.patient_id) then raise exception 'Treatment access denied.' using errcode='42501'; end if;
+  perform 1 from public.patients where id=chosen.patient_id for update;
+  select * into root from public.treatment_schedules where id=coalesce(chosen.replaces_schedule_id,chosen.id) for update;
+  select * into chosen from public.treatment_schedules where id=target for update;
+  if not found then raise exception 'Treatment schedule not found.' using errcode='P0002'; end if;
+  if not private.owns_active_patient(chosen.patient_id) then raise exception 'Treatment access denied.' using errcode='42501'; end if;
+  if expected_version is null or expected_version<>chosen.version then raise exception 'Treatment schedule changed.' using errcode='40001'; end if;
+  if reason is null or length(btrim(reason)) not between 1 and 1000 then raise exception 'A reason is required.' using errcode='22023'; end if;
+  if exists(select 1 from public.treatment_change_requests where root_schedule_id=root.id and status='pending') then
+    raise exception 'A change request for this series is already pending.' using errcode='40001';
+  end if;
+  proposal:=private.validate_treatment_proposal(chosen,operation,proposal,original_day);
+  select id into actor from public.accounts where auth_user_id=(select auth.uid());
+  insert into public.treatment_change_requests(schedule_id,root_schedule_id,patient_id,requested_by,action,proposal,original_date,before_snapshot,schedule_version,root_version,reason)
+    values(chosen.id,root.id,chosen.patient_id,actor,operation,proposal,original_day,to_jsonb(chosen),chosen.version,root.version,btrim(reason)) returning * into saved;
+  return to_jsonb(saved);
+end;
+$$;
+create or replace function public.request_treatment_change(target uuid,operation text,proposal jsonb,original_day date,reason text,expected_version integer) returns jsonb
+language sql security invoker set search_path='' as $$ select private.request_treatment_change(target,operation,proposal,original_day,reason,expected_version); $$;
+revoke all on function private.request_treatment_change(uuid,text,jsonb,date,text,integer),public.request_treatment_change(uuid,text,jsonb,date,text,integer) from public,anon;
+grant execute on function private.request_treatment_change(uuid,text,jsonb,date,text,integer),public.request_treatment_change(uuid,text,jsonb,date,text,integer) to authenticated;
+
+create or replace function public.get_treatment_change_request(target uuid) returns jsonb
+language plpgsql stable security invoker set search_path='' as $$
+declare chosen public.treatment_schedules;
+begin
+  select * into chosen from public.treatment_schedules where id=target;
+  if not found then raise exception 'Treatment schedule not found.' using errcode='P0002'; end if;
+  return jsonb_build_object('schedule',to_jsonb(chosen),'request',private.treatment_change_summary(target));
+end;
+$$;
+revoke all on function public.get_treatment_change_request(uuid) from public,anon;
+grant execute on function public.get_treatment_change_request(uuid) to authenticated;
+
+create or replace function private.withdraw_treatment_change(target uuid,expected_version integer) returns jsonb
+language plpgsql security definer set search_path='' as $$
+declare saved public.treatment_change_requests;
+begin
+  select * into saved from public.treatment_change_requests where id=target;
+  if not found or not private.owns_active_patient(saved.patient_id) then raise exception 'Treatment access denied.' using errcode='42501'; end if;
+  perform 1 from public.patients where id=saved.patient_id for update;
+  perform 1 from public.treatment_schedules where id=saved.root_schedule_id for update;
+  select * into saved from public.treatment_change_requests where id=target for update;
+  if not private.owns_active_patient(saved.patient_id) then raise exception 'Treatment access denied.' using errcode='42501'; end if;
+  if expected_version is null or saved.version<>expected_version or saved.status<>'pending' then raise exception 'Request changed.' using errcode='40001'; end if;
+  update public.treatment_change_requests set status='withdrawn',version=version+1 where id=target returning * into saved;
+  return to_jsonb(saved);
+end;
+$$;
+create or replace function public.withdraw_treatment_change(target uuid,expected_version integer) returns jsonb
+language sql security invoker set search_path='' as $$ select private.withdraw_treatment_change(target,expected_version); $$;
+revoke all on function private.withdraw_treatment_change(uuid,integer),public.withdraw_treatment_change(uuid,integer) from public,anon;
+grant execute on function private.withdraw_treatment_change(uuid,integer),public.withdraw_treatment_change(uuid,integer) to authenticated;
+
+-- Approval and all trip reconciliation occur in one transaction under Patient -> Schedule -> Request locks.
+create or replace function private.review_treatment_change(target uuid,decision text,note text,expected_version integer) returns jsonb
+language plpgsql security definer set search_path='' as $$
+declare request public.treatment_change_requests; chosen public.treatment_schedules; root public.treatment_schedules;
+  candidate public.treatment_schedules; actor uuid; affected uuid; window_from date; window_until date; cursor_day date;
+  today date:=(now() at time zone 'Asia/Singapore')::date;
+begin
+  if not private.is_coordinator() then raise exception 'Coordinator access required.' using errcode='42501'; end if;
+  if decision is null or decision not in ('approved','rejected') or note is null or length(note)>1000 or (decision='rejected' and btrim(note)='') then
+    raise exception 'Choose a decision and give a reason for rejection.' using errcode='22023';
+  end if;
+  select * into request from public.treatment_change_requests where id=target;
+  if not found then raise exception 'Change request not found.' using errcode='P0002'; end if;
+  perform 1 from public.patients where id=request.patient_id for update;
+  select * into root from public.treatment_schedules where id=request.root_schedule_id for update;
+  select * into chosen from public.treatment_schedules where id=request.schedule_id for update;
+  select * into request from public.treatment_change_requests where id=target for update;
+  if expected_version is null or request.version<>expected_version or request.status<>'pending' then raise exception 'Request changed.' using errcode='40001'; end if;
+  select id into actor from public.accounts where auth_user_id=(select auth.uid());
+  if decision='approved' then
+    if chosen.id is null or root.id is null or chosen.version<>request.schedule_version or root.version<>request.root_version then
+      raise exception 'The treatment changed since this request. Reject it and ask for a new request.' using errcode='40001';
+    end if;
+    if not exists(select 1 from public.patients p join public.accounts a on a.id=p.account_id
+      where p.id=request.patient_id and p.status='active' and a.role='patient' and a.status='active') then
+      raise exception 'An active patient is required.' using errcode='42501';
+    end if;
+    if exists(select 1 from public.trips where root_schedule_id=root.id and deleted_at is null and treatment_start>now() and (status<>'unfilled' or pickup_at is not null)) then
+      raise exception 'Assigned trips must be handled before approving this schedule change.' using errcode='22023';
+    end if;
+    request.proposal:=private.validate_treatment_proposal(chosen,request.action,request.proposal,request.original_date);
+    select min(session_date),max(session_date) into window_from,window_until from public.trips where root_schedule_id=root.id and (deleted_at is null or schedule_change_cancelled) and treatment_start>now();
+    if request.action='delete' then
+      perform private.delete_my_treatment(chosen.id,chosen.version);
+    elsif request.action='update' then
+      perform private.update_my_treatment(chosen.id,request.proposal,chosen.version);
+      candidate:=jsonb_populate_record(chosen,request.proposal);
+    else
+      candidate:=jsonb_populate_record(chosen,request.proposal);
+      insert into public.treatment_schedules(patient_id,centre_id,kind,days,start_time,end_time,effective_from,effective_to,replaces_schedule_id,replaces_date)
+        values(chosen.patient_id,candidate.centre_id,'single',candidate.days,candidate.start_time,candidate.end_time,candidate.effective_from,candidate.effective_to,chosen.id,request.original_date);
+    end if;
+    -- A logical occurrence that still exists is refreshed in place, retaining journey identity.
+    for affected in update public.trips t set deleted_at=now(),schedule_change_cancelled=true,updated_at=now() where t.root_schedule_id=request.root_schedule_id
+      and t.deleted_at is null and t.treatment_start>now() and not exists (
+        select 1 from public.treatment_schedules s where coalesce(s.replaces_schedule_id,s.id)=t.root_schedule_id and (
+          (s.replaces_schedule_id is not null and s.replaces_date=t.original_session_date and (s.effective_from+s.start_time) at time zone 'Asia/Singapore'>now())
+          or (s.replaces_schedule_id is null and s.kind='single' and t.occurrence_key='single' and (s.effective_from+s.start_time) at time zone 'Asia/Singapore'>now())
+          or (s.replaces_schedule_id is null and s.kind='recurring' and t.original_session_date between s.effective_from and s.effective_to
+            and extract(isodow from t.original_session_date)::integer=s.days[1] and (t.original_session_date+s.start_time) at time zone 'Asia/Singapore'>now()
+            and not exists(select 1 from public.treatment_schedules r where r.replaces_schedule_id=s.id and r.replaces_date=t.original_session_date)))) returning id
+    loop
+      insert into public.trip_history(trip_id,actor_id,event,details) values(affected,actor,'schedule_change_approved',jsonb_build_object('request_id',request.id,'operation','removed'));
+    end loop;
+    select * into root from public.treatment_schedules where id=request.root_schedule_id;
+    if root.id is not null then
+      if window_from is not null then
+        if request.action='delete' and chosen.replaces_date is not null then
+          window_from:=least(window_from,chosen.replaces_date); window_until:=greatest(window_until,chosen.replaces_date);
+        elsif candidate.kind='single' then
+          window_from:=least(window_from,candidate.effective_from);
+          window_until:=greatest(window_until,candidate.effective_to);
+        elsif candidate.kind='recurring' and candidate.days<>chosen.days then
+          window_until:=least(window_until+6,date '9999-12-31');
+        end if;
+        cursor_day:=greatest(window_from,today);
+        while cursor_day<=window_until loop
+          perform private.generate_treatment_trips_internal(root.id,cursor_day,least(cursor_day+89,window_until),root.version,actor,false,true);
+          exit when cursor_day>=date '9999-12-31'-89;
+          cursor_day:=cursor_day+90;
+        end loop;
+      end if;
+      if exists(select 1 from public.treatment_trip_generation where schedule_id=root.id and enabled) then
+        perform private.generate_treatment_trips_internal(root.id,today,least(today+29,date '9999-12-31'),root.version,actor,false,true);
+      end if;
+    end if;
+  end if;
+  update public.treatment_change_requests set status=decision,review_note=btrim(note),reviewed_by=actor,reviewed_at=now(),version=version+1
+    where id=target returning * into request;
+  return to_jsonb(request);
+end;
+$$;
+create or replace function public.review_treatment_change(target uuid,decision text,note text,expected_version integer) returns jsonb
+language sql security invoker set search_path='' as $$ select private.review_treatment_change(target,decision,note,expected_version); $$;
+revoke all on function private.review_treatment_change(uuid,text,text,integer),public.review_treatment_change(uuid,text,text,integer) from public,anon;
+grant execute on function private.review_treatment_change(uuid,text,text,integer),public.review_treatment_change(uuid,text,text,integer) to authenticated;
 
 notify pgrst, 'reload schema';
 commit;

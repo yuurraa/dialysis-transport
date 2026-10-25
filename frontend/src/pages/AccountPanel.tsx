@@ -148,10 +148,10 @@ export default function AccountPanel({ email, onSignOut, onCancel, onLoadingChan
           </button>
         </div>
       </div>
-      <label className="block font-medium">Username
+      <label className="block font-medium"><span className="patient-required">Username</span>
         <input disabled={saving || signingOut} required maxLength={100} autoComplete="username" placeholder="Enter your username" value={username} onChange={event => setUsername(event.target.value)} className="mt-1 block w-full rounded-lg border border-slate-400 p-3 font-normal" />
       </label>
-      <label className="block font-medium">Role
+      <label className="block font-medium"><span className="patient-required">Role</span>
         <select disabled={saving || signingOut} required value={role} onChange={event => setRole(event.target.value)} className="mt-1 block w-full rounded-lg border border-slate-400 bg-white p-3 font-normal">
           <option value="">Choose a role</option><option value="patient">Patient</option><option value="caregiver">Caregiver</option><option value="driver">Driver</option>
         </select>
