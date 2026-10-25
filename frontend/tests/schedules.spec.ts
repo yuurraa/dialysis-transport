@@ -105,6 +105,7 @@ test('coordinator opts into automatic generation per schedule and reloads stale 
 
 test('patients request changes and coordinators reject or approve them from the schedule row', async ({ page }) => {
   await seedSession(page);
+  await page.route('**/api/schedules/change-requests/*/assignments', route => route.fulfill({ json: { token:'d41d8cd98f00b204e9800998ecf8427e', trips:[] } }));
   let role = 'patient';
   const centre = { id:'77777777-7777-4777-8777-777777777777',name:'Test Centre',address:'Fixture street',postal_code:'560123' };
   const source = { id:'88888888-8888-4888-8888-888888888888',patient_id:session.user.id,version:1,kind:'recurring',centre_id:centre.id,days:[1],start_time:'09:00',end_time:'10:00',effective_from:'2027-01-04',effective_to:'2027-03-29',patients:{full_name:'Test Patient'} };

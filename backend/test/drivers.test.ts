@@ -74,4 +74,15 @@ test('availability routes enforce active driver ownership and validate bounded w
   assert.equal((await request('/me/availability','PATCH',body)).status,200);
   assert.deepEqual(calls[0],{name:'save_my_availability',args:{slots:body.weekly_slots,expected_version:0}});
   assert.equal((await request('/me/availability')).status,200);assert.equal(calls.at(-1)?.name,'get_my_availability');
+  const monday=new Date(Date.now()+8*3600000);monday.setUTCDate(monday.getUTCDate()+1-(monday.getUTCDay()||7));
+  const week=monday.toISOString().slice(0,10);
+  assert.equal((await request(`/${id}/week?start=${week}`)).status,403);
+  assert.equal((await request(`/me/week?start=${week}`)).status,200);
+  assert.deepEqual(calls.at(-1),{name:'get_driver_week',args:{target:id,week_start:week}});
+  assert.equal((await request('/me/availability','PATCH',{...body,week_start:week,template_version:0})).status,200);
+  assert.equal(calls.at(-1)?.name,'save_my_week_availability');
+  role='coordinator';
+  for(const start of ['bad','2026-02-30','2026-10-27']) assert.equal((await request(`/${id}/week?start=${start}`)).status,400);
+  assert.equal((await request(`/${id}/week?start=${week}`)).status,200);
+  assert.deepEqual(calls.at(-1),{name:'get_driver_week',args:{target:id,week_start:week}});
 });

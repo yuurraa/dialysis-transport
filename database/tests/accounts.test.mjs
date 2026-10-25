@@ -414,8 +414,8 @@ test('coordinators generate idempotent unfilled journeys with buffers, exception
       try {await local.query("select set_config('request.jwt.claim.sub',$1,true)",[who]);const result=await local.query(sql,params);await local.exec('commit');return result.rows;}
       catch(error){await local.exec('rollback');throw error;}
     };
-    const first=(await local.query(`select ((now() at time zone 'Asia/Singapore')::date+8+
-      ((1-extract(isodow from (now() at time zone 'Asia/Singapore')::date+8)::integer+7)%7))::text as date`)).rows[0].date;
+    const first=(await local.query(`select ((now() at time zone 'Asia/Singapore')::date+1+
+      ((1-extract(isodow from (now() at time zone 'Asia/Singapore')::date+1)::integer+7)%7))::text as date`)).rows[0].date;
     const dates=(await local.query("select ($1::date+1)::text as moved,($1::date+14)::text as until",[first])).rows[0];
     const ids=(await own(patient,'select p.id as patient,c.id as centre from public.patients p cross join public.dialysis_centres c order by c.id limit 1'))[0];
     const [series]=await own(patient,`insert into public.treatment_schedules(patient_id,centre_id,days,start_time,end_time,effective_from,effective_to)
@@ -503,13 +503,20 @@ test('trip search precedes pagination and manual generation restores deleted tri
     const own=async(who,sql,params=[])=>{await local.exec('begin; set local role authenticated;');try{
       await local.query("select set_config('request.jwt.claim.sub',$1,true)",[who]); const result=await local.query(sql,params); await local.exec('commit');return result.rows;
     }catch(error){await local.exec('rollback');throw error;}};
-    const dates=(await local.query(`select ((now() at time zone 'Asia/Singapore')::date+7)::text as first,
-      ((now() at time zone 'Asia/Singapore')::date+91)::text as until,
-      extract(isodow from (now() at time zone 'Asia/Singapore')::date+7)::integer as day`)).rows[0];
+    const dates=(await local.query(`select ((now() at time zone 'Asia/Singapore')::date+1)::text as first,
+      ((now() at time zone 'Asia/Singapore')::date+13)::text as until`)).rows[0];
     const ids=(await own(patient,'select p.id as patient,c.id as centre from public.patients p cross join public.dialysis_centres c limit 1'))[0];
-    const [source]=await own(patient,`insert into public.treatment_schedules(patient_id,centre_id,days,start_time,end_time,effective_from,effective_to)
-      values($1,$2,array[$3::integer],'09:00','13:00',$4,$5) returning *`,[ids.patient,ids.centre,dates.day,dates.first,dates.until]);
-    const gen=async()=>(await own(coordinator,'select public.generate_treatment_trips($1,$2,$3,1) as result',[source.id,dates.first,dates.until]))[0].result;
+    const sources=await own(patient,`insert into public.treatment_schedules(patient_id,centre_id,kind,days,start_time,end_time,effective_from,effective_to)
+      select $1,$2,'single',array[extract(isodow from day)::integer],'09:00','13:00',day::date,day::date
+      from generate_series($3::date::timestamp,$4::date::timestamp,interval '1 day') day returning *`,[ids.patient,ids.centre,dates.first,dates.until]);
+    const gen=async()=>{
+      const total={created:0,updated:0,unchanged:0,skipped:0,total:0};
+      for(const source of sources) {
+        const result=(await own(coordinator,'select public.generate_treatment_trips($1,$2,$2,1) as result',[source.id,source.effective_from]))[0].result;
+        for(const key of Object.keys(total)) total[key]+=result[key];
+      }
+      return total;
+    };
     await gen();
     const list=async(who=coordinator,term='',direction='all')=>(await own(who,'select public.list_trips(1,$1,$2,$3,$4,$5) as result',[dates.first,dates.until,'all',term,direction]))[0].result;
     const descending = (await own(coordinator, "select public.list_trips(1,$1,$2,'all','','all','treatment_start','desc') as result", [dates.first,dates.until]))[0].result;
@@ -522,7 +529,7 @@ test('trip search precedes pagination and manual generation restores deleted tri
     assert.equal(lastPage.trips.length, 6);
     assert.equal(new Set([...descending.trips, ...middlePage.trips, ...lastPage.trips].map(trip => trip.id)).size, 26);
     for (const args of [['notes', 'asc'], ['status', 'bad']]) await assert.rejects(own(coordinator, "select public.list_trips(1,$1,$2,'all','','all',$3,$4)", [dates.first, dates.until, ...args]), /Invalid/);
-    await assert.rejects(own(driver, "select public.list_trips(1,$1,$2,'all','','all','patient_name','desc')", [dates.first, dates.until]), /denied/);
+    assert.equal((await own(driver, "select public.list_trips(1,$1,$2,'all','','all','patient_name','desc') as result", [dates.first, dates.until]))[0].result.total,0);
 
     assert.equal((await list(coordinator,' RETURN ')).total,13);
     assert.equal((await list(coordinator,'09:00')).total,26);
@@ -796,30 +803,32 @@ test('automatic trip generation is coordinator-controlled, rolling, idempotent a
     const on = await setting(coordinator,true,0);
     assert.equal(on.enabled,true); assert.equal(on.version,1); assert.ok(on.last_run_at);
     const count = async () => (await local.query('select count(*)::integer as n from public.trips where deleted_at is null')).rows[0].n;
-    assert.equal(await count(),10,'Inclusive today through day 29 includes five weekly sessions, excluding day 36.');
-    assert.equal((await local.query(`select count(*)::integer as n from public.trips where session_date>(now() at time zone 'Asia/Singapore')::date+29`)).rows[0].n,0);
+    const expected=(await local.query(`select count(*)::integer*2 as n from generate_series($1::date::timestamp,private.planning_window_end()::timestamp,interval '7 days') d`,[dates.first])).rows[0].n;
+    assert.equal(await count(),expected,'Only sessions through the fourth Sunday are generated.');
+    await assert.rejects(own(coordinator,'select public.generate_treatment_trips($1,$2,$3,1)',[source.id,dates.first,dates.last]),/fourth Sunday/);
+    assert.equal((await local.query(`select count(*)::integer as n from public.trips where session_date>private.planning_window_end()`)).rows[0].n,0);
     assert.equal((await listed()).version,source.version,'Preference changes must not stale the treatment snapshot.');
     await assert.rejects(setting(coordinator,false,0),/changed/i);
     await local.query('select private.run_automatic_trip_generation()');
-    assert.equal(await count(),10);
-    assert.equal((await local.query('select count(*)::integer as n from public.trip_history')).rows[0].n,10);
+    assert.equal(await count(),expected);
+    assert.equal((await local.query('select count(*)::integer as n from public.trip_history')).rows[0].n,expected);
     const trip = (await own(coordinator,'select * from public.trips order by id limit 1'))[0];
     await own(coordinator,'select public.delete_trip($1,$2)',[trip.id,trip.version]);
     await local.query('select private.run_automatic_trip_generation()');
-    assert.equal(await count(),9,'Automatic runs preserve deliberate deletions.');
+    assert.equal(await count(),expected-1,'Automatic runs preserve deliberate deletions.');
     const disabled = await setting(coordinator,false,1);
-    assert.equal(disabled.version,2); assert.equal(await count(),9);
+    assert.equal(disabled.version,2); assert.equal(await count(),expected-1);
     assert.equal((await local.query('select private.run_automatic_trip_generation() as result')).rows[0].result.processed,0);
     await setting(coordinator,true,2);
-    assert.equal(await count(),9,'Enabling also preserves deleted trips.');
+    assert.equal(await count(),expected-1,'Enabling also preserves deleted trips.');
     await own(coordinator,'select public.generate_treatment_trips($1,$2,$2,$3)',[source.id,trip.session_date,source.version]);
-    assert.equal(await count(),10,'Explicit manual generation can restore deleted trips.');
+    assert.equal(await count(),expected,'Explicit manual generation can restore deleted trips.');
     await local.query("update public.accounts set status='inactive' where auth_user_id=$1",[patient]);
     assert.equal((await local.query('select private.run_automatic_trip_generation() as result')).rows[0].result.processed,0);
     await local.query("update public.accounts set status='active' where auth_user_id=$1",[patient]);
     await local.exec(schema);
     assert.equal((await listed()).auto_generation.enabled,true,'Schema reapplication preserves the opted-in setting.');
-    assert.equal(await count(),10);
+    assert.equal(await count(),expected);
     // An occurrence originally outside the window but moved into it inherits the root setting.
     // Trusted fixture only; patients cannot create replacement records.
     const [replacement] = await own(patient,`insert into public.treatment_schedules(patient_id,centre_id,kind,days,start_time,end_time,effective_from,effective_to,replaces_schedule_id,replaces_date)
@@ -830,7 +839,7 @@ test('automatic trip generation is coordinator-controlled, rolling, idempotent a
     await assert.rejects(own(coordinator,'select public.set_treatment_auto_generation($1,false,$2,0)',[replacement.id,replacement.version]),/original recurring/i);
     await local.query('select private.run_automatic_trip_generation()');
     assert.equal((await local.query('select count(*)::integer as n from public.trips where source_schedule_id=$1',[replacement.id])).rows[0].n,2);
-    assert.equal(await count(),12);
+    assert.equal(await count(),expected+2);
     const [other] = await own(patient,`insert into public.treatment_schedules(patient_id,centre_id,kind,days,start_time,end_time,effective_from,effective_to)
       select $1,$2,'single',array[extract(isodow from day)::integer],'15:00','16:00',day,day
       from (select (now() at time zone 'Asia/Singapore')::date+2 as day) d returning *`,[ids.patient,ids.centre]);
@@ -934,4 +943,134 @@ test('approved rescheduling and deletion reconcile future trips atomically and p
   await approve(await make(source.id,'delete',{}));
   assert.equal((await db.query('select count(*)::integer as count from public.trips where root_schedule_id=$1 and deleted_at is null and treatment_start>now()',[source.id])).rows[0].count,0);
   assert.deepEqual((await db.query('select * from public.trips where id=$1',[historical.id])).rows[0],historical);
+});
+
+async function assignmentFixture() {
+  const local = await databaseWithAuth();
+  await local.exec(schema);
+  await local.exec(`insert into public.accounts(auth_user_id,email,display_name,role) values
+    ('${patient}','patient@example.test','Patient','patient'),('${coordinator}','coordinator@example.test','Coordinator','coordinator'),('${driver}','driver@example.test','Driver','driver');
+    insert into public.patients(account_id,full_name,phone,pickup_address,mobility) select id,'Fixture Patient','81234567','Fixture home','ambulant' from public.accounts where role='patient';
+    insert into public.drivers(account_id,full_name,phone,birth_date,gender) select id,'Fixture Driver','82345678','1990-01-01','male' from public.accounts where role='driver';
+    insert into public.driver_vehicles(driver_id,licence_number,plate_number,make,model,passenger_capacity,wheelchair_accessible,status,reviewed_at,reviewed_by)
+      select account_id,'MOCK','TEST123','Fixture','Car',1,false,'approved',now(),(select id from public.accounts where role='coordinator') from public.drivers;
+    insert into public.driver_availability(driver_id,weekly_slots) select account_id,array(select generate_series(0,335)) from public.drivers;`);
+  const own = async (who, sql, params=[]) => {
+    await local.exec('begin; set local role authenticated;');
+    try { await local.query("select set_config('request.jwt.claim.sub',$1,true)",[who]); const result=await local.query(sql,params); await local.exec('commit');return result.rows; }
+    catch(error) {await local.exec('rollback');throw error;}
+  };
+  const [ids] = (await local.query(`select p.id as patient_id,d.account_id as driver_id,c.id as centre_id,
+    ((now() at time zone 'Asia/Singapore')::date+1)::text as first,((now() at time zone 'Asia/Singapore')::date+8)::text as last,
+    ((now() at time zone 'Asia/Singapore')::date+2)::text as moved from public.patients p cross join public.drivers d cross join public.dialysis_centres c limit 1`)).rows;
+  const [source] = await own(patient,`insert into public.treatment_schedules(patient_id,centre_id,days,start_time,end_time,effective_from,effective_to)
+    values($1,$2,array[extract(isodow from $3::date)::integer],'10:00','11:00',$3,$4) returning *`,[ids.patient_id,ids.centre_id,ids.first,ids.last]);
+  await own(coordinator,'select public.generate_treatment_trips($1,$2,$3,1)',[source.id,ids.first,ids.last]);
+  const trips=(await local.query('select * from public.trips where root_schedule_id=$1 order by session_date,direction',[source.id])).rows;
+  const assign=async trip=>(await own(coordinator,`select public.assign_trip($1,$2,case when $3='outbound' then $4::timestamptz-interval '30 minutes' else $5::timestamptz end,$6) as trip`,[trip.id,ids.driver_id,trip.direction,trip.arrival_by,trip.pickup_not_before,trip.version]))[0].trip;
+  return {local,own,ids,source,trips,assign};
+}
+
+test('assignment enforces eligibility, conflicts, ownership and fresh versions while resource changes flag retained trips', async () => {
+  const {local,own,ids,source,trips,assign}=await assignmentFixture();
+  try {
+    const trip=trips.find(item=>item.direction==='outbound');
+    const pickup=new Date(Date.parse(trip.arrival_by)-30*60000).toISOString();
+    await assert.rejects(own(patient,'select public.trip_assignment_options($1,$2)',[trip.id,pickup]),/Coordinator/);
+    await assert.rejects(own(driver,'select public.assign_trip($1,$2,$3,1)',[trip.id,ids.driver_id,pickup]),/Coordinator/);
+    await assert.rejects(own(coordinator,'select public.assign_trip($1,$2,$3,99)',[trip.id,ids.driver_id,pickup]),/changed/i);
+    await local.query("update public.driver_availability set weekly_slots='{}' where driver_id=$1",[ids.driver_id]);
+    assert.equal((await own(coordinator,'select public.trip_assignment_options($1,$2) as options',[trip.id,pickup]))[0].options.drivers.length,0);
+    await assert.rejects(assign(trip),/eligible/);
+    await local.query('update public.driver_availability set weekly_slots=array(select generate_series(0,335)) where driver_id=$1',[ids.driver_id]);
+    const assigned=await assign(trip);
+    assert.equal(assigned.status,'on-track');assert.equal(assigned.assignment.driver_name,'Fixture Driver');
+    assert.equal((await own(driver,'select id from public.trips')).length,1);
+    const week=(await local.query(`select ($1::date-extract(isodow from $1::date)::integer+1)::text as monday`,[ids.first])).rows[0].monday;
+    const dated=async()=>(await own(coordinator,'select public.get_driver_week($1,$2) as data',[ids.driver_id,week]))[0].data;
+    assert.equal((await dated()).trips.length,1);assert.equal((await dated()).availability.weekly_slots.length,336);
+    await assert.rejects(own(patient,'select public.get_driver_week($1,$2)',[ids.driver_id,week]),/denied/);
+    const driverList=(await own(driver,"select public.list_trips(1,$1,null) as data",[ids.first]))[0].data;
+    assert.equal(driverList.total,1);assert.equal(driverList.next_trip.id,assigned.id);
+    await assert.rejects(own(driver,"update public.trips set status='unfilled' where id=$1",[trip.id]),/permission denied/);
+    await assert.rejects(own(coordinator,'select public.delete_trip($1,$2)',[trip.id,assigned.version]),/unassigned/);
+    await local.query(`insert into public.trips(patient_id,patient_name,source_schedule_id,root_schedule_id,occurrence_key,original_session_date,session_date,direction,origin,destination,treatment_start,treatment_end,arrival_by,pickup_not_before,source_version,patient_version,created_by)
+      select patient_id,patient_name,source_schedule_id,root_schedule_id,'conflict-fixture',original_session_date,session_date,direction,origin,destination,treatment_start,treatment_end,arrival_by,pickup_not_before,source_version,patient_version,created_by from public.trips where id=$1`,[trip.id]);
+    const conflict=(await local.query("select * from public.trips where occurrence_key='conflict-fixture'")).rows[0];
+    await assert.rejects(assign(conflict),/eligible/);
+    await local.query("update public.patients set mobility='wheelchair',assistance_required=true,phone='83456789' where id=$1",[ids.patient_id]);
+    await own(coordinator,'select public.generate_treatment_trips($1,$2,$3,1)',[source.id,ids.first,ids.last]);
+    const retained=(await local.query('select * from public.trips where id=$1',[trip.id])).rows[0];
+    assert.equal(retained.assigned_driver_id,ids.driver_id);assert.equal(retained.status,'at-risk');assert.equal(retained.assignment.patient_phone,'83456789');
+    await local.query("update public.driver_vehicles set passenger_capacity=2,wheelchair_accessible=true,plate_number='NEW123',model='Updated car' where driver_id=$1",[ids.driver_id]);
+    const updated=(await local.query('select * from public.trips where id=$1',[trip.id])).rows[0];assert.equal(updated.status,'on-track');assert.equal(updated.assignment.plate,'NEW123');assert.equal(updated.assignment.model,'Updated car');
+    await assert.rejects(own(coordinator,'select public.unassign_trip($1,$2)',[trip.id,assigned.version]),/changed/);
+    await own(coordinator,'select public.unassign_trip($1,$2)',[trip.id,updated.version]);
+    assert.equal((await own(driver,'select id from public.trips')).length,0);
+    assert.equal((await own(driver,'select public.list_trips(1,$1,null) as data',[ids.first]))[0].data.next_trip,null);
+    assert.equal((await dated()).trips.length,0);assert.equal((await dated()).availability.weekly_slots.length,336);
+    await local.exec(schema);
+    assert.equal((await local.query('select status from public.trips where id=$1',[trip.id])).rows[0].status,'unfilled');
+  } finally {await local.close();}
+});
+
+test('schedule approval requires fresh assignment acknowledgement and releases only changed journeys', async () => {
+  const {local,own,ids,source,trips,assign}=await assignmentFixture();
+  try {
+    const originals=trips.filter(item=>item.session_date===ids.first);
+    for(const trip of originals) await assign(trip);
+    const unaffected=await assign(trips.find(item=>item.session_date===ids.last && item.direction==='outbound'));
+    const proposal={kind:'single',centre_id:ids.centre_id,days:[new Date(`${ids.moved}T00:00:00Z`).getUTCDay()||7],start_time:'10:00',end_time:'11:00',effective_from:ids.moved,effective_to:ids.moved};
+    const request=(await own(patient,"select public.request_treatment_change($1,'reschedule',$2::jsonb,$3,'Session moved',1) as request",[source.id,JSON.stringify(proposal),ids.first]))[0].request;
+    await assert.rejects(own(patient,'select public.treatment_assignment_impact($1)',[request.id]),/Coordinator/);
+    const impact=(await own(coordinator,'select public.treatment_assignment_impact($1) as impact',[request.id]))[0].impact;
+    assert.equal(impact.trips.length,2);
+    await assert.rejects(own(coordinator,"select public.review_treatment_change($1,'approved','',1)",[request.id]),/assignments changed/i);
+    await local.query('update public.trips set updated_at=now() where id=$1',[originals[0].id]);
+    await assert.rejects(own(coordinator,"select public.review_treatment_change($1,'approved','',1,$2)",[request.id,impact.token]),/assignments changed/i);
+    const fresh=(await own(coordinator,'select public.treatment_assignment_impact($1) as impact',[request.id]))[0].impact;
+    await own(coordinator,"select public.review_treatment_change($1,'approved','',1,$2)",[request.id,fresh.token]);
+    const changed=(await local.query('select * from public.trips where id=any($1::uuid[])',[originals.map(item=>item.id)])).rows;
+    assert.ok(changed.every(item=>item.assigned_driver_id===null && item.pickup_at===null && item.status==='unfilled' && item.session_date===ids.moved));
+    assert.equal((await local.query('select assigned_driver_id from public.trips where id=$1',[unaffected.id])).rows[0].assigned_driver_id,ids.driver_id);
+    assert.equal((await own(driver,'select id from public.trips')).length,1);
+    assert.equal((await local.query("select count(*)::integer as count from public.trip_history where event='unassigned'")).rows[0].count,2);
+  } finally {await local.close();}
+});
+
+test('driver week edits are owned, isolated, versioned and protect assigned windows until unassignment', async () => {
+  const {local,own,ids,trips,assign}=await assignmentFixture();
+  try {
+    const monday=(await local.query(`select ($1::date-extract(isodow from $1::date)::integer+1)::text as day`,[ids.first])).rows[0].day;
+    const weeks=(await local.query(`select ($1::date+7)::text as next,($1::date+14)::text as later,($1::date-28)::text as past`,[monday])).rows[0];
+    const get=async week=>(await own(driver,'select public.get_driver_week($1,$2) as data',[ids.driver_id,week]))[0].data;
+    const save=async(week,slots,version,template=1)=>(await own(driver,'select public.save_my_week_availability($1,$2, $3,$4) as data',[week,slots,version,template]))[0].data;
+    const original=await get(monday);assert.equal(original.availability.version,0);assert.equal(original.availability.weekly_slots.length,336);
+    await assert.rejects(own(patient,'select public.get_driver_week($1,$2)',[ids.driver_id,monday]),/denied/);
+    await assert.rejects(own(driver,'select public.get_driver_week($1,$2)',[ids.patient_id,monday]),/denied/);
+    await assert.rejects(own(patient,'select public.save_my_week_availability($1,$2,0,1)',[monday,[]]),/Driver/);
+    await assert.rejects(own(driver,'insert into public.driver_week_availability(driver_id,week_start,weekly_slots) values($1,$2,$3)',[ids.driver_id,monday,[]]),/permission/);
+    const booked=await assign(trips.find(trip=>trip.session_date===ids.first&&trip.direction==='outbound'));
+    await assert.rejects(save(monday,[],0),/Assigned trip times/);
+    await assert.rejects(own(driver,'select public.save_my_availability($1,1)',[[]]),/Assigned trip times/);
+    assert.equal((await get(monday)).availability.version,0);
+    const initial=await save(monday,original.availability.weekly_slots,0);assert.equal(initial.version,1);
+    await assert.rejects(save(monday,[],1),/Assigned trip times/);
+    await own(coordinator,'select public.unassign_trip($1,$2)',[booked.id,booked.version]);
+    await save(monday,[],1);
+    assert.deepEqual((await get(monday)).availability.weekly_slots,[]);
+    assert.equal((await get(weeks.next)).availability.weekly_slots.length,336);
+    assert.equal((await get(weeks.later)).availability.version,0);
+    await assert.rejects(save(weeks.later,[],0,999),/changed/);
+    await save(weeks.next,[18,19],0);
+    assert.deepEqual((await get(weeks.next)).availability.weekly_slots,[18,19]);
+    assert.deepEqual((await get(monday)).availability.weekly_slots,[]);
+    await assert.rejects(save(monday,[],1),/changed/);
+    await assert.rejects(save(weeks.past,[],0),/week/i);
+    const pickup=booked.pickup_at;
+    assert.equal((await own(coordinator,'select public.trip_assignment_options($1,$2) as data',[booked.id,pickup]))[0].data.drivers.length,0);
+    await local.exec(schema);
+    assert.equal((await get(monday)).availability.version,2);
+    assert.deepEqual((await get(weeks.next)).availability.weekly_slots,[18,19]);
+  } finally {await local.close();}
 });

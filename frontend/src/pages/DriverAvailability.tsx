@@ -1,17 +1,21 @@
+import DriverAvailabilityDialog, { type DriverCalendarSchedule } from '../components/DriverAvailabilityDialog';
+import { planningWindow, planningDateOffset } from '../lib/planningWindow';
 import { useEffect, useRef, useState } from 'react';
 import { ListError, Overlay, PageHeading } from '../components/DashboardUI';
 import { Toast, ToastRegion } from '../components/Toast';
-import { ApiError, apiGet, apiRequest } from '../lib/api';
+import { ApiError, apiRequest } from '../lib/api';
 
 import WeeklyAvailabilityView, { availabilityDays as days, availabilityTime as time, availabilityDayRanges as dayRanges, useAvailabilityClock, type TimeRange } from '../components/WeeklyAvailabilityView';
 
-interface Availability { weekly_slots: number[]; version: number }
-const empty: Availability = { weekly_slots: [], version: 0 };
+interface Availability { weekly_slots: number[]; version: number; template_version?: number }
+const weekLabel = (date:string) => new Intl.DateTimeFormat('en-SG',{day:'numeric',month:'short',year:'numeric',timeZone:'UTC'}).format(new Date(`${date}T00:00:00Z`));
+const empty: Availability = { weekly_slots: [], version: 0, template_version: 0 };
 function message(reason: unknown) {
   if (reason instanceof ApiError) {
+    if (reason.code === 'availability_booked') return 'Booked times cannot be removed. Ask your coordinator to unassign the trip first.';
     if (reason.status === 409) return 'Availability changed in another session. Reload the latest availability before saving.';
     if (reason.status === 403) return 'Vehicle approval is required to manage availability.';
-    if (reason.status === 400) return 'Check the selected weekly slots.';
+    if (reason.status === 400) return 'Check the selected week and availability slots.';
   }
   return 'Availability could not be saved or loaded. Please try again.';
 }
@@ -23,7 +27,10 @@ export default function DriverAvailability({ notify, onSessionExpired, onViewVeh
   const [draft, setDraft] = useState<Availability>(empty);
   const [eligible, setEligible] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState('');
+  const [week, setWeek] = useState(() => planningWindow().weekStart);
+  const [loadedWeek, setLoadedWeek] = useState<string | null>(null);
+  const [editingWeek, setEditingWeek] = useState(week);
+  const currentWeek = useRef(week); currentWeek.current = week;
   const [error, setError] = useState('');
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -43,20 +50,15 @@ export default function DriverAvailability({ notify, onSessionExpired, onViewVeh
   const rangeId = useRef(0);
   const alive = useRef(false);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
-  useEffect(() => {
-    let active = true;
-    setLoading(true); setLoadError('');
-    apiGet<{ eligible: boolean; availability: Availability | null }>('/drivers/me/availability').then(result => {
-      if (!active) return;
-      setEligible(result.eligible); setSaved(result.availability ?? empty); setDraft(result.availability ?? empty);
-      setEditing(false); setConflict(false); setError('');
-    }).catch(reason => {
-      if (!active) return;
-      if (reason instanceof ApiError && reason.status === 401) onSessionExpired();
-      setLoadError(message(reason));
-    }).finally(() => { if (active) setLoading(false); });
-    return () => { active = false; };
-  }, [reload, onSessionExpired]);
+  function receiveCalendar(result: DriverCalendarSchedule, loaded: string) {
+    setEligible(result.eligible); setLoadedWeek(loaded);
+    setSaved(result.availability ?? empty);
+    if (!result.eligible) { setEditing(false); setRangeEditor(null); setChoosingDay(false); }
+    if (!editing || !result.eligible) { setDraft(result.availability ?? empty); setConflict(false); }
+  }
+  const canStartEditing = eligible && !loading && loadedWeek === week;
+  function cancelEditing() { setDraft(saved); setEditing(false); setRangeEditor(null); setChoosingDay(false); setConflict(false); setError(''); setRangeError(''); }
+  function reloadAvailability() { setEditing(false); setRangeEditor(null); setConflict(false); setError(''); setReload(value => value + 1); }
   const selected = new Set(draft.weekly_slots);
   const editable = editing && !saving && !conflict;
   function openDay(day: number) {
@@ -86,9 +88,10 @@ export default function DriverAvailability({ notify, onSessionExpired, onViewVeh
     if (!editable) return false;
     setSaving(true); setError(''); setRangeError('');
     try {
-      const result = await apiRequest<Availability>('/drivers/me/availability', 'PATCH', { weekly_slots: slots, version: draft.version });
+      const result = await apiRequest<Availability>('/drivers/me/availability', 'PATCH', { weekly_slots: slots, version: draft.version, week_start:editingWeek, template_version:draft.template_version ?? 0 });
       if (!alive.current) return false;
-      setSaved(result); setDraft(result); setEditing(false); notify('Availability saved.');
+      if (editingWeek === currentWeek.current) { setSaved(result); setDraft(result); }
+      setEditing(false); setReload(value => value + 1); notify('Availability saved for this week.');
       return true;
     } catch (reason) {
       if (!alive.current) return false;
@@ -101,11 +104,9 @@ export default function DriverAvailability({ notify, onSessionExpired, onViewVeh
   }
   return <section className="dashboard-trips patients-panel page-panel availability-panel" aria-labelledby="availability-title">
     <PageHeading id="availability-title" title="Weekly Availability"
-      eyebrow={!loading && !loadError && eligible ? <span className="availability-hours">Hours per week: {draft.weekly_slots.length / 2}h</span> : 'Driver Schedule'}
-      actions={!mobile && !loading && !loadError && eligible ? <div className="patient-actions availability-edit-actions">{editing && !mobile ? <><button className="patient-primary" type="button" disabled={!editable} onClick={() => void save()}>{saving ? 'Saving…' : 'Save availability'}</button><button type="button" disabled={saving} onClick={() => { setDraft(saved); setEditing(false); setConflict(false); setError(''); }}>Cancel</button></> : <button className="patient-primary" type="button" disabled={saving} onClick={() => { setError(''); if (mobile) { setChosenDay(clock.day); setChoosingDay(true); } else setEditing(true); }}>Edit availability</button>}{conflict && !mobile && <button type="button" disabled={saving} onClick={() => setReload(value => value + 1)}>Reload latest availability</button>}</div> : undefined} />
-    {loading ? <div className="account-loading patients-loading" role="status"><span className="account-spinner" aria-hidden="true" /><span>Loading...</span></div>
-      : loadError ? <ListError title="Availability could not be loaded" message={loadError} onRetry={() => setReload(value => value + 1)} />
-      : !eligible ? <section className="availability-approval" aria-labelledby="availability-approval-title">
+      eyebrow={eligible ? <span className="availability-hours">Hours this week: {draft.weekly_slots.length / 2}h</span> : 'Driver Schedule'}
+      actions={!mobile && eligible ? <div className="patient-actions availability-edit-actions">{editing && !mobile ? <><button className="patient-primary" type="button" disabled={!editable} onClick={() => void save()}>{saving ? 'Saving…' : 'Save availability'}</button><button type="button" disabled={saving} onClick={cancelEditing}>Cancel</button></> : <button className="patient-primary" type="button" disabled={saving || !canStartEditing} onClick={() => { setEditingWeek(week); setError(''); if (mobile) { setChosenDay(clock.day); setChoosingDay(true); } else setEditing(true); }}>Edit availability</button>}{conflict && !mobile && <button type="button" disabled={saving} onClick={reloadAvailability}>Reload latest availability</button>}</div> : undefined} />
+    {!loading && !eligible && !vehicleRegistered ? <section className="availability-approval" aria-labelledby="availability-approval-title">
           <div className="availability-approval-icon" aria-hidden="true"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="m5 7 1.5-4h11L19 7M4 14H3V9a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v3M6 17v2H3v-5h9M6 11h2m8 0h2" /><circle cx="18" cy="18" r="4" /><path d="M18 16v2l1 1" /></svg></div>
           <h2 id="availability-approval-title">Vehicle approval required</h2>
           <p>Once your vehicle is approved, you can set your weekly availability.</p>
@@ -113,17 +114,18 @@ export default function DriverAvailability({ notify, onSessionExpired, onViewVeh
         </section>
       : <div className={`patient-profile-form${editing ? ' patient-editing' : ''}`} aria-busy={saving}>
         <div className="panel-scroll availability-content">
-          <WeeklyAvailabilityView slots={draft.weekly_slots} clock={clock} editable={editable} onChange={slots => setDraft(current => ({ ...current, weekly_slots: slots }))} />
+          <div hidden={editing}><DriverAvailabilityDialog inline own weekStart={week} onWeekChange={setWeek} refreshKey={reload} onLoad={receiveCalendar} onLoading={setLoading} onSessionExpired={onSessionExpired} /></div>
+          {editing && <><p className="availability-eligibility">Editing week: {weekLabel(editingWeek)} – {weekLabel(planningDateOffset(editingWeek,6))}</p><WeeklyAvailabilityView slots={draft.weekly_slots} clock={clock} editable={editable} onChange={slots => setDraft(current => ({ ...current, weekly_slots: slots }))} /></>}
         </div>
-        <div className="patient-actions availability-mobile-actions">
-          {editing && !rangeEditor ? <><button className="patient-primary" type="button" disabled={!editable} onClick={() => void save()}>{saving ? 'Saving…' : 'Save availability'}</button><button type="button" disabled={saving} onClick={() => { setDraft(saved); setEditing(false); setConflict(false); setError(''); }}>Cancel</button></> : <button className="patient-primary" type="button" disabled={saving} onClick={() => { setError(''); setChosenDay(clock.day); setChoosingDay(true); }}>Edit availability</button>}
-          {conflict && !rangeEditor && <button type="button" disabled={saving} onClick={() => setReload(value => value + 1)}>Reload latest availability</button>}
-        </div>
+        {eligible && <div className="patient-actions availability-mobile-actions">
+          {editing && !rangeEditor ? <><button className="patient-primary" type="button" disabled={!editable} onClick={() => void save()}>{saving ? 'Saving…' : 'Save availability'}</button><button type="button" disabled={saving} onClick={cancelEditing}>Cancel</button></> : <button className="patient-primary" type="button" disabled={saving || !canStartEditing} onClick={() => { setEditingWeek(week); setError(''); setChosenDay(clock.day); setChoosingDay(true); }}>Edit availability</button>}
+          {conflict && !rangeEditor && <button type="button" disabled={saving} onClick={reloadAvailability}>Reload latest availability</button>}
+        </div>}
       </div>}
-    {choosingDay && <Overlay title="Edit availability" className="list-options-dialog availability-day-picker" onClose={() => setChoosingDay(false)} onSubmit={event => { event.preventDefault(); openDay(chosenDay); }} footer={<><button className="patient-primary" type="submit">Continue</button><button type="button" onClick={() => setChoosingDay(false)}>Cancel</button></>}>
+    {choosingDay && <Overlay title="Edit availability" description={`Week of ${weekLabel(editingWeek)}`} className="list-options-dialog availability-day-picker" onClose={() => setChoosingDay(false)} onSubmit={event => { event.preventDefault(); openDay(chosenDay); }} footer={<><button className="patient-primary" type="submit">Continue</button><button type="button" onClick={() => setChoosingDay(false)}>Cancel</button></>}>
       <div className="patient-form-fields"><div className="patient-field patient-form-wide"><label className="patient-required" htmlFor="availability-edit-day">Day</label><select id="availability-edit-day" required value={chosenDay} onChange={event => setChosenDay(Number(event.target.value))}>{days.map((day, index) => <option value={index} key={day}>{day}</option>)}</select></div></div>
     </Overlay>}
-    {rangeEditor && <Overlay title={`${days[rangeEditor.day]} availability`} className="list-options-dialog" busy={saving} onClose={() => { setRangeEditor(null); setEditing(false); setConflict(false); }} error={rangeError} onDismissError={() => setRangeError('')} onSubmit={event => { event.preventDefault(); void applyRanges(); }} footer={<>{conflict ? <button className="patient-primary" type="button" onClick={() => { setRangeEditor(null); setEditing(false); setReload(value => value + 1); }}>Reload latest availability</button> : <button className="patient-primary" type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save availability'}</button>}<button type="button" disabled={saving} onClick={() => { setRangeEditor(null); setEditing(false); setConflict(false); }}>Cancel</button></>}>
+    {rangeEditor && <Overlay title={`${days[rangeEditor.day]} availability`} className="list-options-dialog" busy={saving} onClose={cancelEditing} error={rangeError} onDismissError={() => setRangeError('')} onSubmit={event => { event.preventDefault(); void applyRanges(); }} footer={<>{conflict ? <button className="patient-primary" type="button" onClick={() => { setRangeEditor(null); setEditing(false); setReload(value => value + 1); }}>Reload latest availability</button> : <button className="patient-primary" type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save availability'}</button>}<button type="button" disabled={saving} onClick={cancelEditing}>Cancel</button></>}>
       <div className="availability-range-editor">
         {rangeEditor.ranges.map((range, index) => <fieldset className="patient-form-fields availability-range-fields" disabled={saving || conflict} key={range.id}><legend className="sr-only">Time range {index + 1}</legend>
           <div className="availability-range-heading"><span aria-hidden="true">Time range {index + 1}</span><button className="overlay-delete availability-remove-range" type="button" aria-label={`Remove time range ${index + 1}`} title="Delete time range" disabled={saving || conflict} onClick={() => setRangeEditor({ ...rangeEditor, ranges: rangeEditor.ranges.filter(item => item.id !== range.id) })}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 6h18M9 6V4h6v2M5 6l1 14h12l1-14M10 10v6m4-6v6" /></svg></button></div>

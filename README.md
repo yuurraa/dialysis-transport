@@ -42,7 +42,7 @@ Sign-in uses Google through Supabase Auth; enable the Google provider and apply 
 
 ## Testing scope
 
-The entire suite has a shared ceiling of approximately **70 tests**, including future features. The current source declares **53 tests**: **17 frontend, 16 backend and 20 database**, including the optional local PostgreSQL concurrency test. This leaves 17 cases for remaining implementation. Counts include every parameterized variant and optional test; do not hide cases in giant combined tests to meet the limit.
+The entire suite has a shared ceiling of approximately **70 tests**, including future features. The current source declares **59 tests**: **19 frontend, 17 backend and 23 database**, including the optional local PostgreSQL concurrency test. This leaves 11 cases for remaining implementation. Counts include every parameterized variant and optional test; do not hide cases in giant combined tests to meet the limit.
 
 Keep each concern at its strongest layer: frontend for a few real user workflows; backend for HTTP/session boundaries, request validation and error mapping; database for RLS, atomic updates, uniqueness, deletion/restoration and concurrency. Before adding a test, remove or replace lower-value overlap. Cosmetic changes do not warrant a new case.
 
@@ -54,14 +54,14 @@ Keep each concern at its strongest layer: frontend for a few real user workflows
 | Frontend `patients.spec.ts` | 1 | Coordinator patient editing |
 | Frontend `account.spec.ts` | 1 | Patient profile editing and cancellation |
 | Frontend `schedules.spec.ts` | 4 | Creation confirmation, protected schedules, change-request decisions and auto-generation settings |
-| Frontend `drivers.spec.ts` | 3 | Vehicle submission, coordinator review and availability editing |
-| Frontend `trips.spec.ts` | 3 | Patient journey details, generation recovery and bulk deletion |
+| Frontend `drivers.spec.ts` | 4 | Vehicle submission/review, availability editing and dated coordinator calendar |
+| Frontend `trips.spec.ts` | 4 | Patient journey details, assignment across roles, generation recovery and bulk deletion |
 | Backend `accounts.test.ts` | 3 | Verified identities, signup privileges and provider failures |
 | Backend `patients.test.ts` | 3 | Role access, coordinator field restrictions and owned profiles |
 | Backend `drivers.test.ts` | 3 | Role access, vehicle review and availability validation |
-| Backend `treatments.test.ts` | 6 | Treatment validation/access, change requests, trip requests and auto-generation permissions |
+| Backend `treatments.test.ts` | 7 | Treatment validation/access, change requests, assignment validation and trip-generation permissions |
 | Backend `cors.test.ts` | 1 | Actual startup and browser-origin CORS |
-| Database `accounts.test.mjs` | 20 | Storage permissions, atomic approvals, trip reconciliation, current features and concurrency |
+| Database `accounts.test.mjs` | 23 | Storage permissions, assignment eligibility/ownership, atomic approvals, reconciliation and concurrency |
 
 `support/fixtures.ts` holds shared synthetic session data, existing interaction helpers and explicit API/Auth mocks. Feature-specific responses stay in the specs. Browser tests exercise React and its requests against mocked services; they do not establish server authorisation or database integrity.
 

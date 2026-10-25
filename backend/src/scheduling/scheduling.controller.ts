@@ -23,6 +23,9 @@ export class SchedulingController {
   @Get(':id/change-request')
   changeRequest(@Headers('authorization') header: string | undefined, @Param('id') id: string) { return this.service.changeRequest(header, id); }
 
+  @Get('change-requests/:id/assignments')
+  assignmentImpact(@Headers('authorization') header: string | undefined, @Param('id') id: string) { return this.service.assignmentImpact(header, id); }
+
   @Patch('change-requests/:id/review')
   reviewChange(@Headers('authorization') header: string | undefined, @Param('id') id: string, @Body() body: unknown) { return this.service.reviewChange(header, id, body); }
 

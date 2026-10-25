@@ -39,6 +39,14 @@ test('trip generation permits only bounded versioned coordinator commands and ma
   assert.equal(calls.length,0);
   assert.deepEqual(await service.generateTrips('Bearer fixture',body),{created:2,updated:0,unchanged:0,total:2});
   assert.deepEqual(calls,[['generate_treatment_trips',{target:details.centre_id,from_date:'2026-10-21',until_date:'2026-10-21',expected_version:1}]]);
+  await service.generateTrips('Bearer fixture',{...body,until_date:'2026-11-15'});
+  await assert.rejects(service.generateTrips('Bearer fixture',{...body,until_date:'2026-11-16'}));
+  context.mock.timers.setTime(new Date('2026-10-25T15:59:00Z').getTime());
+  const nextWeek={...body,from_date:'2026-10-26',until_date:'2026-11-22'};
+  await assert.rejects(service.generateTrips('Bearer fixture',nextWeek));
+  context.mock.timers.setTime(new Date('2026-10-25T16:00:00Z').getTime());
+  await service.generateTrips('Bearer fixture',nextWeek);
+  context.mock.timers.setTime(new Date('2026-10-20T17:00:00Z').getTime());
   for(const [errorCode,status] of [['42501',403],['40001',409],['22023',400],['23514',400],['22P02',400],['P0002',404],['unknown',503]] as const) {
     code=errorCode;
     await assert.rejects(service.generateTrips('Bearer fixture',body),error=>(error as {status:number}).status===status);
@@ -46,7 +54,8 @@ test('trip generation permits only bounded versioned coordinator commands and ma
   }
 });
 
-test('trip HTTP routes authenticate and map list filters and generation bodies into atomic RPC operations', async () => {
+test('trip HTTP routes authenticate and map list filters and generation bodies into atomic RPC operations', async context => {
+  context.mock.timers.enable({apis:['Date'],now:new Date('2089-12-31T16:00:00Z')});
   const calls:unknown[]=[];
   const service=new TripsService(
     {verifyIdentity:async(token:string)=>{assert.equal(token,'fixture');return {account:{role:'coordinator',status:'active'}};}} as unknown as AuthService,
@@ -103,4 +112,23 @@ test('schedule-change requests and decisions enforce roles, strict proposals and
   assert.equal(calls.at(-1)?.[0], 'review_treatment_change');
   assert.equal(calls.at(-1)?.[1].note, '');
   code = '40001'; await assert.rejects(service.reviewChange('Bearer fixture', id, { decision: 'approved', version: 1 }), /changed/);
+});
+
+test('assignment endpoints enforce coordinator writes and validate identifiers, pickup instants and versions', async () => {
+  let role='coordinator'; let code:string|undefined;
+  const calls:Array<[string,Record<string,unknown>]> = [];
+  const service=new TripsService(
+    {verifyIdentity:async()=>({account:{role,status:'active'}})} as unknown as AuthService,
+    {forUser:()=>({rpc:async(name:string,args:Record<string,unknown>)=>{calls.push([name,args]);return {data:{id:details.centre_id},error:code?{code}:null};}})} as unknown as SupabaseService);
+  const id=details.centre_id;
+  const pickup=new Date(Math.ceil((Date.now()+86400000)/60000)*60000).toISOString();
+  const body={driver_id:id,pickup_at:pickup,version:1};
+  for(const other of ['patient','driver','caregiver']) {role=other;await assert.rejects(service.assignmentOptions('Bearer fixture',id,pickup),/access denied/);await assert.rejects(service.assignTrip('Bearer fixture',id,body),/access denied/);await assert.rejects(service.unassignTrip('Bearer fixture',id,{version:1}),/access denied/);}
+  role='coordinator';
+  for(const invalid of [null,{}, {...body,driver_id:'bad'}, {...body,pickup_at:'tomorrow'}, {...body,pickup_at:'2020-01-01T00:00:00.000Z'}, {...body,version:0}, {...body,version:1.5}, {...body,vehicle_id:id}]) await assert.rejects(service.assignTrip('Bearer fixture',id,invalid));
+  assert.equal(calls.length,0);
+  await service.assignmentOptions('Bearer fixture',id,pickup);await service.assignTrip('Bearer fixture',id,body);await service.unassignTrip('Bearer fixture',id,{version:2});
+  assert.deepEqual(calls,[['trip_assignment_options',{target:id,starts:pickup}],['assign_trip',{target:id,driver:id,starts:pickup,expected_version:1}],['unassign_trip',{target:id,expected_version:2}]]);
+  code='40001';await assert.rejects(service.assignTrip('Bearer fixture',id,body),/changed/);
+  role='driver';code=undefined;await service.listTrips('Bearer fixture');assert.equal(calls.at(-1)?.[0],'list_trips');
 });

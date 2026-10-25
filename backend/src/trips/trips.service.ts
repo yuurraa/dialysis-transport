@@ -12,7 +12,7 @@ export class TripsService {
     const token = header?.match(/^Bearer (\S+)$/i)?.[1];
     if (!token) throw new UnauthorizedException('Sign-in required.');
     const { account } = await this.auth.verifyIdentity(token);
-    if (!account || account.status !== 'active' || !(write ? ['coordinator'] : ['patient', 'coordinator']).includes(account.role)) {
+    if (!account || account.status !== 'active' || !(write ? ['coordinator'] : ['patient', 'coordinator', 'driver']).includes(account.role)) {
       throw new ForbiddenException('Trip access denied.');
     }
     return this.database.forUser(token);
@@ -22,7 +22,7 @@ export class TripsService {
     if (!error) return;
     if (error.code === '42501') throw new ForbiddenException('Trip access denied.');
     if (error.code === '40001') throw new ConflictException(`${resource} changed. Reload before trying again.`);
-    if (['22023', '23514', '22P02'].includes(error.code ?? '')) throw new BadRequestException('Invalid trip request.');
+    if (['22023', '23514', '22P02', '22007', '22008'].includes(error.code ?? '')) throw new BadRequestException('Invalid trip request.');
     if (error.code === 'P0002') throw new NotFoundException(`${resource} not found.`);
     throw new ServiceUnavailableException('Trips are unavailable. Please try again.');
   }
@@ -41,7 +41,10 @@ export class TripsService {
   private window(from: unknown, until: unknown) {
     const start = this.date(from);
     const end = this.date(until);
-    if (end < start || end - start > 89 * 24 * 60 * 60 * 1000) throw new BadRequestException('Choose a trip window of up to 90 days.');
+    const today = this.today();
+    const weekday = new Date(`${today}T00:00:00Z`).getUTCDay() || 7;
+    const horizon = Date.parse(`${today}T00:00:00Z`) + (28-weekday)*86400000;
+    if (end < start || end > horizon) throw new BadRequestException('Choose dates from today through the fourth Sunday.');
   }
 
   /** Database pagination and patient ownership checks run before returning trip records. */
@@ -87,6 +90,46 @@ export class TripsService {
     if ((input.from_date as string) < this.today()) throw new BadRequestException('Trip generation cannot start in the past.');
     const result = await client.rpc('generate_treatment_trips', { target: input.schedule_id, from_date: input.from_date, until_date: input.until_date, expected_version: input.version });
     this.check(result.error);
+    return result.data;
+  }
+
+  private assignmentId(id: unknown): asserts id is string {
+    if (typeof id !== 'string' || !/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(id)) throw new BadRequestException('Invalid trip or driver.');
+  }
+
+  private pickup(value: unknown, future = true): asserts value is string {
+    if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:00\.000Z$/.test(value) || !Number.isFinite(Date.parse(value))
+      || new Date(value).toISOString() !== value || (future && Date.parse(value) <= Date.now())) throw new BadRequestException('Choose an upcoming pickup time.');
+  }
+
+  async assignmentOptions(header: string | undefined, id: string, pickupAt: unknown) {
+    const client = await this.access(header, true);
+    this.assignmentId(id); this.pickup(pickupAt, false);
+    const result = await client.rpc('trip_assignment_options', { target: id, starts: pickupAt });
+    this.check(result.error, 'Trip');
+    return result.data;
+  }
+
+  async assignTrip(header: string | undefined, id: string, body: unknown) {
+    const client = await this.access(header, true);
+    this.assignmentId(id);
+    if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some(key => !['driver_id','pickup_at','version'].includes(key))) throw new BadRequestException('Invalid assignment.');
+    const input = body as Record<string, unknown>;
+    this.assignmentId(input.driver_id); this.pickup(input.pickup_at);
+    if (!Number.isSafeInteger(input.version) || (input.version as number)<1 || (input.version as number)>2147483647) throw new BadRequestException('A valid trip version is required.');
+    const result = await client.rpc('assign_trip', { target: id, driver: input.driver_id, starts: input.pickup_at, expected_version: input.version });
+    this.check(result.error, 'Trip');
+    return result.data;
+  }
+
+  async unassignTrip(header: string | undefined, id: string, body: unknown) {
+    const client = await this.access(header, true);
+    this.assignmentId(id);
+    if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some(key => key !== 'version')) throw new BadRequestException('Invalid assignment.');
+    const version = (body as Record<string, unknown>).version;
+    if (!Number.isSafeInteger(version) || (version as number)<1 || (version as number)>2147483647) throw new BadRequestException('A valid trip version is required.');
+    const result = await client.rpc('unassign_trip', { target: id, expected_version: version });
+    this.check(result.error, 'Trip');
     return result.data;
   }
 

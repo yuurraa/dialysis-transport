@@ -44,8 +44,9 @@ test('patient signup stays in the landing box until final submission and Back pr
   expect(submissions).toBe(1);
 });
 
-test('driver signup collects personal details, preserves Back state and opens vehicle registration', async ({ page }) => {
+test('driver signup collects personal details, preserves Back state and opens Trips', async ({ page }) => {
   await seedSession(page);
+  await page.route('**/api/trips?*',route=>route.fulfill({json:{trips:[],total:0,page:1,pageSize:10,counts:{unfilled:0},next_trip:null}}));
   const profile = { full_name: 'Fixture Driver', phone: '+65 81234567', birth_date: '1990-04-12', gender: 'prefer-not-to-say' };
   let registrations = 0;
   await page.route('**/api/auth/register', route => {
@@ -69,9 +70,10 @@ test('driver signup collects personal details, preserves Back state and opens ve
   await expect(page.getByLabel('Full name', { exact: true })).toHaveValue(profile.full_name);
   await expect(page.getByLabel('Date of birth', { exact: true })).toHaveValue(profile.birth_date);
   await submitSignup(page);
-  await expect(page).toHaveURL(/\/dashboard\/vehicle$/);
-  await expect(page.getByRole('heading', { name: 'Register Vehicle', exact: true })).toBeVisible();
-  await expect(page.getByRole('link', { name: 'Trips', exact: true })).toHaveCount(0);
+  await expect(page).toHaveURL(/\/dashboard\/trips$/);
+  await expect(page.getByRole('heading', { name: 'Trips', exact: true })).toBeVisible();
+  await expect(page.getByText('No trips assigned.',{exact:true})).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Register Vehicle', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Account', exact: true }).click();
   await page.getByRole('link', { name: 'My Account', exact: true }).click();
   await expect(page.getByLabel('Full name', { exact: true })).toHaveValue(profile.full_name);

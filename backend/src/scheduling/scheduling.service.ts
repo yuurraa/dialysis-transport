@@ -103,12 +103,22 @@ export class SchedulingService {
     const { client, account } = await this.access(header);
     if (account.role !== 'coordinator') throw new ForbiddenException('Coordinator access required.');
     this.target(id);
-    if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some(key => !['decision','note','version'].includes(key))) throw new BadRequestException('Invalid review.');
+    if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some(key => !['decision','note','version','assignment_token'].includes(key))) throw new BadRequestException('Invalid review.');
     const input = body as Record<string, unknown>;
     const version = this.version(body);
     const note = input.note ?? '';
     if (!['approved','rejected'].includes(input.decision as string) || typeof note !== 'string' || note.length>1000 || (input.decision==='rejected' && !note.trim())) throw new BadRequestException('Choose a decision and provide a rejection reason.');
-    const result = await client.rpc('review_treatment_change', { target: id, decision: input.decision, note: note.trim(), expected_version: version });
+    if (input.assignment_token !== undefined && (typeof input.assignment_token !== 'string' || !/^[a-f0-9]{32}$/.test(input.assignment_token))) throw new BadRequestException('Invalid assignment confirmation.');
+    const result = await client.rpc('review_treatment_change', { target: id, decision: input.decision, note: note.trim(), expected_version: version, assignment_token: input.assignment_token ?? null });
+    this.check(result.error);
+    return result.data;
+  }
+
+  async assignmentImpact(header: string | undefined, id: string) {
+    const { client, account } = await this.access(header);
+    if (account.role !== 'coordinator') throw new ForbiddenException('Coordinator access required.');
+    this.target(id);
+    const result = await client.rpc('treatment_assignment_impact', { target: id });
     this.check(result.error);
     return result.data;
   }

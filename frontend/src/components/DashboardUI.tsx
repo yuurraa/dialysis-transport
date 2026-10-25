@@ -20,6 +20,9 @@ export function PageHeading({ id, title, description, eyebrow, actions, level = 
   </header>;
 }
 
+const openOverlays = new Set<HTMLDialogElement>();
+let overflowBeforeOverlays = '';
+
 /** Native modal with one scrolling body, persistent controls, and restored keyboard focus. */
 export function Overlay({ title, description, children, footer, onClose, onSubmit, busy = false, className = '', noValidate = false, error, onDismissError }: {
   title: string; description?: ReactNode; children: ReactNode; footer?: ReactNode;
@@ -33,14 +36,16 @@ export function Overlay({ title, description, children, footer, onClose, onSubmi
   useLayoutEffect(() => {
     const element = dialog.current!;
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const previousOverflow = document.body.style.overflow;
+    if (openOverlays.size === 0) overflowBeforeOverlays = document.body.style.overflow;
     element.showModal();
+    openOverlays.add(element);
     heading.current?.focus();
     document.body.style.overflow = 'hidden';
     return () => {
       releaseDialogToasts(element);
       if (element.open) element.close();
-      document.body.style.overflow = previousOverflow;
+      openOverlays.delete(element);
+      document.body.style.overflow = openOverlays.size ? 'hidden' : overflowBeforeOverlays;
       if (opener?.isConnected) opener.focus();
     };
   }, []);

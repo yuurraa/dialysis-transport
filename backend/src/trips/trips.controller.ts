@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Headers, Inject, Param, Post, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Headers, Inject, Param, Patch, Post, Query } from '@nestjs/common';
 import { TripsService } from './trips.service';
 
 /** UC-04, UC-05, UC-05.1 and UC-09 to UC-12: operations, recovery and patient actions. */
@@ -19,4 +19,19 @@ export class TripsController {
   remove(@Headers('authorization') header: string | undefined, @Param('id') id: string, @Body() body: unknown) {
     return this.service.deleteTrip(header, id, body);
   }
+  @Get(':id/assignment-options')
+  assignmentOptions(@Headers('authorization') header: string | undefined, @Param('id') id: string, @Query('pickup_at') pickupAt?: string) {
+    return this.service.assignmentOptions(header, id, pickupAt);
+  }
+
+  @Post(':id/assignment')
+  assign(@Headers('authorization') header: string | undefined, @Param('id') id: string, @Body() body: unknown) {
+    return this.service.assignTrip(header, id, body);
+  }
+
+  @Patch(':id/unassign')
+  unassign(@Headers('authorization') header: string | undefined, @Param('id') id: string, @Body() body: unknown) {
+    return this.service.unassignTrip(header, id, body);
+  }
+
 }

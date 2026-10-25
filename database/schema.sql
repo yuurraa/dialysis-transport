@@ -647,6 +647,14 @@ begin
     or not (0<=all(slots) and 335>=all(slots)) or (select count(distinct x) from unnest(slots) x)<>cardinality(slots)
     or expected_version is null or expected_version<0 then
     raise exception 'Invalid availability.' using errcode='22023'; end if;
+  if exists(select 1 from public.trips t cross join lateral generate_series(
+      date_trunc('hour',t.pickup_at at time zone 'Asia/Singapore')+floor(extract(minute from t.pickup_at at time zone 'Asia/Singapore')/30)*interval '30 minutes',
+      (t.dropoff_at-interval '1 microsecond') at time zone 'Asia/Singapore',interval '30 minutes') slot
+    where t.assigned_driver_id=owner_id and t.deleted_at is null and t.dropoff_at>now()
+      and not exists(select 1 from public.driver_week_availability w where w.driver_id=owner_id and w.week_start=slot::date-extract(isodow from slot)::integer+1)
+      and ((extract(isodow from slot)::integer-1)*48+extract(hour from slot)::integer*2+extract(minute from slot)::integer/30)<>all(slots)) then
+    raise exception 'Assigned trip times must remain available until a coordinator unassigns the trip.' using errcode='P0001';
+  end if;
   select * into saved from public.driver_availability where driver_id=owner_id for update;
   if (found and saved.version<>expected_version) or (not found and expected_version<>0) then
     raise exception 'Availability changed. Reload before saving.' using errcode='40001'; end if;
@@ -1126,7 +1134,7 @@ create table if not exists public.trip_history (
 );
 create index if not exists trip_history_trip on public.trip_history(trip_id,created_at,id);
 alter table public.trip_history drop constraint if exists trip_history_event_check;
-alter table public.trip_history add constraint trip_history_event_check check (event in ('generated','refreshed','requirements_changed','deleted','restored','schedule_change_approved'));
+alter table public.trip_history add constraint trip_history_event_check check (event in ('generated','refreshed','requirements_changed','deleted','restored','schedule_change_approved','assigned','unassigned'));
 alter table public.trips enable row level security;
 alter table public.trip_history enable row level security;
 revoke all on public.trips,public.trip_history from public,anon,authenticated;
@@ -1137,6 +1145,185 @@ create policy trips_read on public.trips for select to authenticated
 drop policy if exists trip_history_read on public.trip_history;
 create policy trip_history_read on public.trip_history for select to authenticated
   using (exists(select 1 from public.trips t where t.id=trip_id));
+
+-- A driver owns one approved vehicle; every journey reserves the whole mock driving window.
+alter table public.trips add column if not exists assigned_driver_id uuid references public.accounts(id) on delete restrict;
+alter table public.trips add column if not exists assigned_vehicle_id uuid references public.driver_vehicles(id) on delete restrict;
+alter table public.trips add column if not exists dropoff_at timestamptz;
+alter table public.trips add column if not exists assignment jsonb;
+alter table public.trips drop constraint if exists trips_pickup_at_check;
+alter table public.trips drop constraint if exists trips_status_check;
+alter table public.trips add constraint trips_status_check check (status in ('unfilled','on-track','at-risk'));
+alter table public.trips drop constraint if exists trips_assignment_check;
+alter table public.trips add constraint trips_assignment_check check (
+  (assigned_driver_id is null and assigned_vehicle_id is null and pickup_at is null and dropoff_at is null and assignment is null and status='unfilled')
+  or (assigned_driver_id is not null and assigned_vehicle_id is not null and pickup_at is not null and dropoff_at=pickup_at+interval '30 minutes'
+    and assignment is not null and jsonb_typeof(assignment)='object' and status in ('on-track','at-risk')
+    and ((direction='outbound' and dropoff_at<=arrival_by) or (direction='return' and pickup_at>=pickup_not_before)))
+);
+create index if not exists trips_driver_window on public.trips(assigned_driver_id,pickup_at,dropoff_at) where deleted_at is null;
+drop policy if exists trips_read on public.trips;
+create policy trips_read on public.trips for select to authenticated using (
+  (select private.is_coordinator()) or private.owns_active_patient(patient_id)
+  or (assigned_driver_id=(select private.driver_account_id()) and deleted_at is null));
+
+-- Recurring slots remain the default template; an override affects one dated Monday only.
+create table if not exists public.driver_week_availability (
+  driver_id uuid not null references public.drivers(account_id) on delete restrict,
+  week_start date not null check (isfinite(week_start) and extract(isodow from week_start)=1),
+  weekly_slots integer[] not null check (cardinality(weekly_slots)<=336 and 0<=all(weekly_slots) and 335>=all(weekly_slots) and array_position(weekly_slots,null) is null),
+  version integer not null default 1 check (version>0), updated_at timestamptz not null default now(),
+  primary key(driver_id,week_start)
+);
+alter table public.driver_week_availability enable row level security;
+revoke all on public.driver_week_availability from public,anon,authenticated;
+grant select on public.driver_week_availability to authenticated;
+drop policy if exists driver_week_read on public.driver_week_availability;
+create policy driver_week_read on public.driver_week_availability for select to authenticated
+  using ((select private.is_coordinator()) or driver_id=(select private.driver_account_id()));
+create or replace function private.effective_driver_slots(driver uuid,day date) returns integer[]
+language sql stable security definer set search_path='' as $$
+  select coalesce((select w.weekly_slots from public.driver_week_availability w where w.driver_id=driver and w.week_start=day-extract(isodow from day)::integer+1),
+    (select a.weekly_slots from public.driver_availability a where a.driver_id=driver),'{}'::integer[]);
+$$;
+revoke all on function private.effective_driver_slots(uuid,date) from public,anon,authenticated;
+
+-- Internal eligibility predicate; callers must enforce role and lock resources before writes.
+create or replace function private.driver_fits_trip(driver uuid,target public.trips,starts timestamptz) returns boolean
+language sql stable security definer set search_path='' as $$
+  select starts is not null and isfinite(starts) and starts>now() and target.deleted_at is null
+    and not target.review_required
+    and (starts at time zone 'Asia/Singapore')::date=(case when target.direction='outbound' then target.arrival_by-interval '30 minutes' else target.pickup_not_before end at time zone 'Asia/Singapore')::date
+    and case when target.direction='outbound' then starts+interval '30 minutes'<=target.arrival_by else starts>=target.pickup_not_before end
+    and exists(select 1 from public.patients p join public.accounts pa on pa.id=p.account_id
+      where p.id=target.patient_id and p.status='active' and pa.status='active' and pa.role='patient')
+    and exists(select 1 from public.accounts a join public.drivers d on d.account_id=a.id
+      join public.driver_vehicles v on v.driver_id=a.id
+      join public.patients p on p.id=target.patient_id
+      where a.id=driver and a.status='active' and a.role='driver' and v.status='approved'
+      and v.passenger_capacity>=1
+      and (p.mobility<>'wheelchair' or v.wheelchair_accessible)
+      and not exists(select 1 from generate_series(
+        date_trunc('hour',starts at time zone 'Asia/Singapore') + floor(extract(minute from starts at time zone 'Asia/Singapore')/30)*interval '30 minutes',
+        (starts+interval '30 minutes'-interval '1 microsecond') at time zone 'Asia/Singapore',interval '30 minutes') slot
+        where ((extract(isodow from slot)::integer-1)*48+extract(hour from slot)::integer*2+extract(minute from slot)::integer/30)<>all(private.effective_driver_slots(a.id,slot::date))))
+    and not exists(select 1 from public.trips other where other.assigned_driver_id=driver and other.id<>target.id and other.deleted_at is null
+      and other.pickup_at<starts+interval '30 minutes' and other.dropoff_at>starts);
+$$;
+revoke all on function private.driver_fits_trip(uuid,public.trips,timestamptz) from public,anon,authenticated;
+
+create or replace function private.trip_assignment_options(target uuid,starts timestamptz) returns jsonb
+language plpgsql stable security definer set search_path='' as $$
+declare chosen public.trips; result jsonb;
+begin
+  if not private.is_coordinator() then raise exception 'Coordinator access required.' using errcode='42501'; end if;
+  select * into chosen from public.trips where id=target and deleted_at is null;
+  if not found then raise exception 'Trip not found.' using errcode='P0002'; end if;
+  if starts is null or not isfinite(starts) then raise exception 'Choose a pickup time.' using errcode='22023'; end if;
+  select jsonb_build_object('trip',to_jsonb(chosen),'duration_minutes',30,
+    'drivers',coalesce(jsonb_agg(jsonb_build_object('id',a.id,'name',d.full_name,'phone',d.phone,'vehicle_id',v.id,'plate',v.plate_number,
+      'make',v.make,'model',v.model,'passenger_capacity',v.passenger_capacity,'wheelchair_accessible',v.wheelchair_accessible) order by d.full_name,a.id),'[]'::jsonb))
+    into result from public.accounts a join public.drivers d on d.account_id=a.id join public.driver_vehicles v on v.driver_id=a.id
+    where private.driver_fits_trip(a.id,chosen,starts);
+  return result;
+end;
+$$;
+create or replace function public.trip_assignment_options(target uuid,starts timestamptz) returns jsonb
+language sql stable security invoker set search_path='' as $$ select private.trip_assignment_options(target,starts); $$;
+revoke all on function private.trip_assignment_options(uuid,timestamptz),public.trip_assignment_options(uuid,timestamptz) from public,anon;
+grant execute on function private.trip_assignment_options(uuid,timestamptz),public.trip_assignment_options(uuid,timestamptz) to authenticated;
+
+create or replace function private.assign_trip(target uuid,driver uuid,starts timestamptz,expected_version integer) returns jsonb
+language plpgsql security definer set search_path='' as $$
+declare chosen public.trips; saved public.trips; snapshot jsonb; actor uuid;
+begin
+  if not private.is_coordinator() then raise exception 'Coordinator access required.' using errcode='42501'; end if;
+  select * into chosen from public.trips where id=target and deleted_at is null;
+  if not found then raise exception 'Trip not found.' using errcode='P0002'; end if;
+  -- All competing assignments to this driver serialize, including assignments for other patients.
+  perform 1 from public.patients where id=chosen.patient_id for update;
+  perform 1 from public.accounts where id=driver and role='driver' and status='active' for update;
+  if not found then raise exception 'Driver is no longer eligible.' using errcode='40001'; end if;
+  perform 1 from public.driver_vehicles where driver_id=driver for share;
+  perform 1 from public.driver_availability where driver_id=driver for share;
+  select * into chosen from public.trips where id=target and deleted_at is null for update;
+  if not found then raise exception 'Trip not found.' using errcode='P0002'; end if;
+  if expected_version is null or chosen.version<>expected_version then raise exception 'Trip changed.' using errcode='40001'; end if;
+  if chosen.assigned_driver_id is not null then raise exception 'Unassign the current driver first.' using errcode='22023'; end if;
+  if not private.driver_fits_trip(driver,chosen,starts) then raise exception 'Driver is no longer eligible for this pickup time.' using errcode='40001'; end if;
+  select jsonb_build_object('driver_name',d.full_name,'driver_phone',d.phone,'vehicle_id',v.id,'plate',v.plate_number,'make',v.make,'model',v.model,
+    'passenger_capacity',v.passenger_capacity,'wheelchair_accessible',v.wheelchair_accessible,'patient_phone',p.phone,'mobility',p.mobility,'assistance_required',p.assistance_required) into snapshot
+    from public.drivers d join public.driver_vehicles v on v.driver_id=d.account_id cross join public.patients p where d.account_id=driver and p.id=chosen.patient_id;
+  select id into actor from public.accounts where auth_user_id=(select auth.uid());
+  update public.trips set assigned_driver_id=driver,assigned_vehicle_id=(snapshot->>'vehicle_id')::uuid,assignment=snapshot,
+    pickup_at=starts,dropoff_at=starts+interval '30 minutes',status='on-track',updated_at=now() where id=target returning * into saved;
+  insert into public.trip_history(trip_id,actor_id,event,details) values(target,actor,'assigned',jsonb_build_object('driver_id',driver,'pickup_at',starts,'dropoff_at',saved.dropoff_at));
+  return to_jsonb(saved);
+end;
+$$;
+create or replace function public.assign_trip(target uuid,driver uuid,starts timestamptz,expected_version integer) returns jsonb
+language sql security invoker set search_path='' as $$ select private.assign_trip(target,driver,starts,expected_version); $$;
+revoke all on function private.assign_trip(uuid,uuid,timestamptz,integer),public.assign_trip(uuid,uuid,timestamptz,integer) from public,anon;
+grant execute on function private.assign_trip(uuid,uuid,timestamptz,integer),public.assign_trip(uuid,uuid,timestamptz,integer) to authenticated;
+
+create or replace function private.unassign_trip(target uuid,expected_version integer) returns jsonb
+language plpgsql security definer set search_path='' as $$
+declare chosen public.trips; actor uuid;
+begin
+  if not private.is_coordinator() then raise exception 'Coordinator access required.' using errcode='42501'; end if;
+  select * into chosen from public.trips where id=target and deleted_at is null;
+  if not found then raise exception 'Trip not found.' using errcode='P0002'; end if;
+  perform 1 from public.patients where id=chosen.patient_id for update;
+  select * into chosen from public.trips where id=target and deleted_at is null for update;
+  if not found then raise exception 'Trip not found.' using errcode='P0002'; end if;
+  if expected_version is null or chosen.version<>expected_version then raise exception 'Trip changed.' using errcode='40001'; end if;
+  if chosen.assigned_driver_id is null or chosen.pickup_at<=now() then raise exception 'Only upcoming assigned trips may be unassigned.' using errcode='22023'; end if;
+  select id into actor from public.accounts where auth_user_id=(select auth.uid());
+  insert into public.trip_history(trip_id,actor_id,event,details) values(target,actor,'unassigned',jsonb_build_object('driver_id',chosen.assigned_driver_id,'pickup_at',chosen.pickup_at,'reason','coordinator'));
+  update public.trips set assigned_driver_id=null,assigned_vehicle_id=null,assignment=null,pickup_at=null,dropoff_at=null,status='unfilled',updated_at=now() where id=target returning * into chosen;
+  return to_jsonb(chosen);
+end;
+$$;
+create or replace function public.unassign_trip(target uuid,expected_version integer) returns jsonb
+language sql security invoker set search_path='' as $$ select private.unassign_trip(target,expected_version); $$;
+revoke all on function private.unassign_trip(uuid,integer),public.unassign_trip(uuid,integer) from public,anon;
+grant execute on function private.unassign_trip(uuid,integer),public.unassign_trip(uuid,integer) to authenticated;
+
+-- Resource edits retain the assignment and flag it for coordinator attention when no longer feasible.
+create or replace function private.recheck_driver_trips() returns trigger
+language plpgsql security definer set search_path='' as $$
+declare owner_id uuid; journey public.trips; new_status text;
+begin
+  if tg_table_name='accounts' then
+    if new.role<>'driver' or new.status is not distinct from old.status then return null; end if;
+    owner_id:=new.id;
+  elsif tg_table_name='drivers' then owner_id:=new.account_id;
+  else owner_id:=new.driver_id;
+  end if;
+  for journey in select * from public.trips where assigned_driver_id=owner_id and deleted_at is null and pickup_at>now() order by id for update loop
+    new_status:=case when private.driver_fits_trip(owner_id,journey,journey.pickup_at) then 'on-track' else 'at-risk' end;
+    if journey.status<>new_status or tg_table_name in ('drivers','driver_vehicles') then
+      update public.trips set status=new_status,assignment=assignment || (select jsonb_build_object('driver_name',d.full_name,'driver_phone',d.phone) from public.drivers d where d.account_id=owner_id)
+        || coalesce((select jsonb_build_object('plate',v.plate_number,'make',v.make,'model',v.model,'passenger_capacity',v.passenger_capacity,'wheelchair_accessible',v.wheelchair_accessible)
+          from public.driver_vehicles v where v.driver_id=owner_id and v.status='approved'),'{}'::jsonb),updated_at=now() where id=journey.id;
+      insert into public.trip_history(trip_id,event,details) values(journey.id,'requirements_changed',jsonb_build_object('source',tg_table_name,'status',new_status));
+    end if;
+  end loop;
+  return null;
+end;
+$$;
+revoke all on function private.recheck_driver_trips() from public,anon,authenticated;
+drop trigger if exists driver_status_trip_check on public.accounts;
+create trigger driver_status_trip_check after update on public.accounts for each row execute function private.recheck_driver_trips();
+drop trigger if exists driver_contact_trip_check on public.drivers;
+create trigger driver_contact_trip_check after update on public.drivers for each row execute function private.recheck_driver_trips();
+drop trigger if exists driver_vehicle_trip_check on public.driver_vehicles;
+create trigger driver_vehicle_trip_check after update on public.driver_vehicles for each row execute function private.recheck_driver_trips();
+drop trigger if exists driver_availability_trip_check on public.driver_availability;
+create trigger driver_availability_trip_check after insert or update on public.driver_availability for each row execute function private.recheck_driver_trips();
+
+drop trigger if exists driver_week_trip_check on public.driver_week_availability;
+create trigger driver_week_trip_check after insert or update on public.driver_week_availability for each row execute function private.recheck_driver_trips();
 
 -- Every source mutation locks the Patient before touching Trips, just as explicit
 -- generation does. Source edits flag future journeys instead of silently treating
@@ -1156,7 +1343,15 @@ begin
       is not distinct from row(new.centre_id,new.days,new.start_time,new.end_time,new.effective_from,new.effective_to) then return null; end if;
     root := coalesce(new.replaces_schedule_id,new.id); original := new.replaces_date;
   end if;
-  for changed in update public.trips set review_required=true,updated_at=now()
+  -- Resource rechecks acquire trip rows by ID too; lock the patient set before multi-row changes.
+  if tg_table_name='patients' then
+    perform 1 from public.trips where deleted_at is null and patient_id=subject order by id for update;
+  elsif tg_op='DELETE' then
+    perform 1 from public.trips where deleted_at is null and patient_id=old.patient_id order by id for update;
+  else
+    perform 1 from public.trips where deleted_at is null and patient_id=new.patient_id order by id for update;
+  end if;
+  for changed in update public.trips set review_required=true,status=case when assigned_driver_id is null then status else 'at-risk' end,updated_at=now()
     where deleted_at is null and (coalesce(pickup_not_before,treatment_end) at time zone 'Asia/Singapore')::date >= (now() at time zone 'Asia/Singapore')::date
       and (subject is not null or treatment_start>now())
       and (patient_id=subject or (root_schedule_id=root and (original is null or original_session_date=original))) returning id
@@ -1174,6 +1369,56 @@ create trigger treatment_trip_review after insert or update or delete on public.
 drop trigger if exists patient_trip_review on public.patients;
 create trigger patient_trip_review after update on public.patients for each row execute function private.flag_trip_review();
 
+-- The shared planning horizon is Singapore's current Monday through the fourth Sunday.
+create or replace function private.planning_window_end() returns date
+language sql stable security invoker set search_path='' as $$
+  select least((now() at time zone 'Asia/Singapore')::date-extract(isodow from now() at time zone 'Asia/Singapore')::integer+28,date '9999-12-31');
+$$;
+revoke all on function private.planning_window_end() from public,anon;
+grant execute on function private.planning_window_end() to authenticated;
+
+create or replace function private.save_my_week_availability(target_week date,slots integer[],expected_version integer,expected_template_version integer) returns jsonb
+language plpgsql security definer set search_path='' as $$
+declare owner_id uuid; saved public.driver_week_availability; template_version integer; has_override boolean;
+  today date:=(now() at time zone 'Asia/Singapore')::date;
+begin
+  owner_id:=private.driver_account_id();
+  if owner_id is null then raise exception 'Driver access required.' using errcode='42501'; end if;
+  perform 1 from public.accounts where id=owner_id and status='active' and role='driver' for update;
+  if not found then raise exception 'Driver access required.' using errcode='42501'; end if;
+  perform 1 from public.driver_vehicles where driver_id=owner_id and status='approved' for share;
+  if not found then raise exception 'An approved vehicle is required.' using errcode='42501'; end if;
+  if target_week is null or not isfinite(target_week) or extract(isodow from target_week)<>1
+    or target_week<today-extract(isodow from today)::integer+1 or target_week>private.planning_window_end()
+    or slots is null or cardinality(slots)>336 or array_position(slots,null) is not null
+    or not (0<=all(slots) and 335>=all(slots)) or (select count(distinct x) from unnest(slots) x)<>cardinality(slots)
+    or expected_version is null or expected_version<0 or expected_template_version is null or expected_template_version<0 then
+    raise exception 'Check the week and availability slots.' using errcode='22023'; end if;
+  select a.version into template_version from public.driver_availability a where a.driver_id=owner_id for share;
+  template_version:=coalesce(template_version,0);
+  select * into saved from public.driver_week_availability where driver_id=owner_id and week_start=target_week for update;
+  has_override:=found;
+  if (has_override and saved.version<>expected_version) or (not has_override and (expected_version<>0 or template_version<>expected_template_version)) then
+    raise exception 'Availability changed. Reload before saving.' using errcode='40001'; end if;
+  -- Serialize with assignments on the same Driver account, including midnight crossings.
+  if exists(select 1 from public.trips t cross join lateral generate_series(
+      date_trunc('hour',t.pickup_at at time zone 'Asia/Singapore')+floor(extract(minute from t.pickup_at at time zone 'Asia/Singapore')/30)*interval '30 minutes',
+      (t.dropoff_at-interval '1 microsecond') at time zone 'Asia/Singapore',interval '30 minutes') slot
+    where t.assigned_driver_id=owner_id and t.deleted_at is null and t.dropoff_at>now()
+      and slot::date>=target_week and slot::date<target_week+7
+      and ((extract(isodow from slot)::integer-1)*48+extract(hour from slot)::integer*2+extract(minute from slot)::integer/30)<>all(slots)) then
+    raise exception 'Assigned trip times must remain available until a coordinator unassigns the trip.' using errcode='P0001';
+  end if;
+  insert into public.driver_week_availability(driver_id,week_start,weekly_slots) values(owner_id,target_week,array(select x from unnest(slots) x order by x))
+    on conflict(driver_id,week_start) do update set weekly_slots=excluded.weekly_slots,version=public.driver_week_availability.version+1,updated_at=now() returning * into saved;
+  return to_jsonb(saved)||jsonb_build_object('template_version',template_version);
+end;
+$$;
+create or replace function public.save_my_week_availability(target_week date,slots integer[],expected_version integer,expected_template_version integer) returns jsonb
+language sql security invoker set search_path='' as $$ select private.save_my_week_availability(target_week,slots,expected_version,expected_template_version); $$;
+revoke all on function private.save_my_week_availability(date,integer[],integer,integer),public.save_my_week_availability(date,integer[],integer,integer) from public,anon;
+grant execute on function private.save_my_week_availability(date,integer[],integer,integer),public.save_my_week_availability(date,integer[],integer,integer) to authenticated;
+
 create or replace function private.generate_treatment_trips_internal(target uuid,from_date date,until_date date,expected_version integer,actor uuid,restore_deleted boolean,approved_change boolean) returns jsonb
 language plpgsql security definer set search_path = '' as $$
 declare chosen public.treatment_schedules; person public.patients; old_trip public.trips; saved public.trips;
@@ -1183,8 +1428,8 @@ declare chosen public.treatment_schedules; person public.patients; old_trip publ
 begin
   if from_date is null or until_date is null or not isfinite(from_date) or not isfinite(until_date)
     or from_date<(now() at time zone 'Asia/Singapore')::date or until_date>date '9999-12-31'
-    or until_date<from_date or until_date-from_date>89 or expected_version is null or expected_version<1 then
-    raise exception 'Choose a future trip window of up to 90 days and a schedule version.' using errcode='22023';
+    or until_date<from_date or until_date-from_date>89 or (not approved_change and until_date>private.planning_window_end()) or expected_version is null or expected_version<1 then
+    raise exception 'Choose dates from today through the fourth Sunday and a schedule version.' using errcode='22023';
   end if;
   select * into chosen from public.treatment_schedules where id=target;
   if not found then raise exception 'Treatment schedule not found.' using errcode='P0002'; end if;
@@ -1200,6 +1445,7 @@ begin
       raise exception 'An active Patient account is required.' using errcode='42501';
     end if;
   end if;
+  perform 1 from public.trips where patient_id=chosen.patient_id and deleted_at is null order by id for update;
   for session in
     with sources as (
       select s.*,c.name as centre_name,c.address as centre_address,c.postal_code as centre_postal
@@ -1228,6 +1474,7 @@ begin
       due := case when leg='outbound' then session_start-interval '15 minutes' end;
       ready := case when leg='return' then session_end+interval '15 minutes' end;
       select * into old_trip from public.trips where root_schedule_id=source_root and occurrence_key=key and direction=leg for update;
+      if approved_change and session.actual_date>private.planning_window_end() and old_trip.id is null then skipped:=skipped+1; continue; end if;
       if found and old_trip.treatment_start<=now() then skipped:=skipped+1; continue; end if;
       if found and old_trip.deleted_at is not null and not restore_deleted and not old_trip.schedule_change_cancelled then skipped:=skipped+1; continue; end if;
       if found and old_trip.deleted_at is null and not old_trip.review_required and old_trip.source_version=session.version and old_trip.patient_version=person.version
@@ -1242,10 +1489,21 @@ begin
           session_start,session_end,due,ready,session.version,person.version,actor) returning * into saved;
         inserted:=inserted+1;
       else
+        if old_trip.assigned_driver_id is not null and (old_trip.origin<>origin_text or old_trip.destination<>destination_text
+          or old_trip.treatment_start<>session_start or old_trip.treatment_end<>session_end) then
+          if old_trip.pickup_at<=now() then skipped:=skipped+1; continue; end if;
+          insert into public.trip_history(trip_id,actor_id,event,details) values(old_trip.id,actor,'unassigned',jsonb_build_object('driver_id',old_trip.assigned_driver_id,'reason','requirements_changed'));
+          update public.trips set assigned_driver_id=null,assigned_vehicle_id=null,assignment=null,pickup_at=null,dropoff_at=null,status='unfilled' where id=old_trip.id;
+        end if;
         update public.trips set patient_name=person.full_name,source_schedule_id=session.id,session_date=session.actual_date,
           origin=origin_text,destination=destination_text,treatment_start=session_start,treatment_end=session_end,arrival_by=due,pickup_not_before=ready,
           source_version=session.version,patient_version=person.version,review_required=false,deleted_at=null,schedule_change_cancelled=false,updated_at=now()
           where id=old_trip.id returning * into saved;
+        if saved.assigned_driver_id is not null then
+          update public.trips set assignment=assignment || jsonb_build_object('patient_phone',person.phone,'mobility',person.mobility,'assistance_required',person.assistance_required),
+            status=case when private.driver_fits_trip(saved.assigned_driver_id,saved,saved.pickup_at) then 'on-track' else 'at-risk' end
+            where id=saved.id returning * into saved;
+        end if;
         refreshed:=refreshed+1;
       end if;
       insert into public.trip_history(trip_id,actor_id,event,details) values(saved.id,actor,
@@ -1317,12 +1575,8 @@ begin
     or chosen.effective_to not between date '0001-01-01' and date '9999-12-31' then
     return jsonb_build_object('status','unavailable','through',null);
   end if;
-  select greatest((now() at time zone 'Asia/Singapore')::date,
-    least(chosen.effective_from,coalesce(min(s.effective_from),chosen.effective_from))) into window_start
-    from public.treatment_schedules s where chosen.kind='recurring' and s.replaces_schedule_id=target
-      and s.effective_to>=(now() at time zone 'Asia/Singapore')::date
-      and s.effective_from between date '0001-01-01' and date '9999-12-31';
-  window_end:=least(window_start+89,date '9999-12-31');
+  window_start:=(now() at time zone 'Asia/Singapore')::date;
+  window_end:=private.planning_window_end();
   with sources as materialized (
     select s.*,p.version as current_patient_version from public.treatment_schedules s
     join public.patients p on p.id=s.patient_id
@@ -1372,7 +1626,7 @@ create or replace function private.list_trips(page_no integer,from_date date,unt
 language plpgsql stable security invoker set search_path = '' as $$
 declare result jsonb;
 begin
-  if not private.is_coordinator() and private.patient_account_id() is null then raise exception 'Trip access denied.' using errcode='42501'; end if;
+  if not private.is_coordinator() and private.patient_account_id() is null and private.driver_account_id() is null then raise exception 'Trip access denied.' using errcode='42501'; end if;
   if page_no is null or page_no<1 or page_no>1000000 or from_date is null or not isfinite(from_date)
     or from_date<date '0001-01-01' or from_date>date '9999-12-31'
     or (until_date is not null and (not isfinite(until_date) or until_date>date '9999-12-31' or until_date<from_date))
@@ -1403,11 +1657,12 @@ begin
     page as (select * from ordered order by list_order limit 10 offset ((page_no::bigint-1)*10))
   select jsonb_build_object('trips',(select coalesce(jsonb_agg(to_jsonb(p)-'list_order' order by list_order),'[]'::jsonb) from page p),
     'total',(select count(*) from filtered),'page',page_no,'pageSize',10,
-    'counts',jsonb_build_object('unfilled',(select count(*) from windowed where status='unfilled'),'at-risk',0,'on-track',0,'resolved',0),
+    'counts',jsonb_build_object('unfilled',(select count(*) from windowed where status='unfilled'),'at-risk',(select count(*) from windowed where status='at-risk'),'on-track',(select count(*) from windowed where status='on-track'),'resolved',0),
     'next_trip',(select to_jsonb(t) from public.trips t where deleted_at is null and (
-      (direction='outbound' and treatment_start>now()) or
-      (direction='return' and (pickup_not_before at time zone 'Asia/Singapore')::date >= (now() at time zone 'Asia/Singapore')::date))
-      order by session_date,coalesce(pickup_at,pickup_not_before,arrival_by),id limit 1)) into result;
+      (private.driver_account_id() is not null and pickup_at>now()) or
+      (private.driver_account_id() is null and ((direction='outbound' and treatment_start>now()) or
+      (direction='return' and (pickup_not_before at time zone 'Asia/Singapore')::date >= (now() at time zone 'Asia/Singapore')::date))))
+      order by case when private.driver_account_id() is not null then pickup_at end,session_date,coalesce(pickup_at,pickup_not_before,arrival_by),id limit 1)) into result;
   return result;
 end;
 $$;
@@ -1441,7 +1696,7 @@ begin
     on conflict(schedule_id) do update set enabled=excluded.enabled,enabled_by=excluded.enabled_by,
       version=public.treatment_trip_generation.version+1,updated_at=now(),last_error=null;
   if enabled then
-    perform private.generate_treatment_trips_internal(target,today,least(today+29,date '9999-12-31'),chosen.version,actor,false);
+    perform private.generate_treatment_trips_internal(target,today,private.planning_window_end(),chosen.version,actor,false);
     update public.treatment_trip_generation set last_run_at=now(),last_error=null where schedule_id=target;
   end if;
   return (select jsonb_build_object('enabled',g.enabled,'version',g.version,'last_run_at',g.last_run_at,'last_error',g.last_error)
@@ -1457,20 +1712,26 @@ grant execute on function private.set_treatment_auto_generation(uuid,boolean,int
 create or replace function private.run_automatic_trip_generation() returns jsonb
 language plpgsql security definer set search_path='' as $$
 declare item record; today date:=(now() at time zone 'Asia/Singapore')::date;
-  processed integer:=0; failed integer:=0;
+  processed integer:=0; failed integer:=0; patient_ids uuid[];
 begin
+  -- The batch retains locks across patients. Acquire every participating Patient first,
+  -- then their Trips in global ID order, matching driver-resource rechecks.
+  select coalesce(array_agg(distinct s.patient_id),'{}'::uuid[]) into patient_ids
+    from public.treatment_trip_generation g join public.treatment_schedules s on s.id=g.schedule_id where g.enabled;
+  perform 1 from public.patients where id=any(patient_ids) order by id for update;
+  perform 1 from public.trips where patient_id=any(patient_ids) and deleted_at is null order by id for update;
   for item in select s.id,s.version,p.id as patient_id,g.enabled_by from public.treatment_trip_generation g
     join public.treatment_schedules s on s.id=g.schedule_id
     join public.patients p on p.id=s.patient_id
     join public.accounts a on a.id=p.account_id
-    where g.enabled and p.status='active' and a.role='patient' and a.status='active'
+    where g.enabled and p.id=any(patient_ids) and p.status='active' and a.role='patient' and a.status='active'
       and exists(select 1 from public.treatment_schedules upcoming
         where (upcoming.id=s.id or upcoming.replaces_schedule_id=s.id)
-          and upcoming.effective_to>=today and upcoming.effective_from<=least(today+29,date '9999-12-31'))
+          and upcoming.effective_to>=today and upcoming.effective_from<=private.planning_window_end())
     order by p.id,s.id
   loop
     begin
-      perform private.generate_treatment_trips_internal(item.id,today,least(today+29,date '9999-12-31'),item.version,item.enabled_by,false);
+      perform private.generate_treatment_trips_internal(item.id,today,private.planning_window_end(),item.version,item.enabled_by,false);
       update public.treatment_trip_generation set last_run_at=now(),last_error=null where schedule_id=item.id and enabled;
       processed:=processed+1;
     exception when others then
@@ -1610,11 +1871,41 @@ language sql security invoker set search_path='' as $$ select private.withdraw_t
 revoke all on function private.withdraw_treatment_change(uuid,integer),public.withdraw_treatment_change(uuid,integer) from public,anon;
 grant execute on function private.withdraw_treatment_change(uuid,integer),public.withdraw_treatment_change(uuid,integer) to authenticated;
 
+-- Recompute the exact affected assignment set at review time; callers acknowledge its version token.
+create or replace function private.treatment_assignment_impact(target uuid) returns jsonb
+language plpgsql stable security definer set search_path='' as $$
+declare request public.treatment_change_requests; chosen public.treatment_schedules; result jsonb;
+begin
+  if not private.is_coordinator() then raise exception 'Coordinator access required.' using errcode='42501'; end if;
+  select * into request from public.treatment_change_requests where id=target;
+  if not found then raise exception 'Change request not found.' using errcode='P0002'; end if;
+  select * into chosen from public.treatment_schedules where id=request.schedule_id;
+  with affected as (select t.* from public.trips t where t.root_schedule_id=request.root_schedule_id and t.assigned_driver_id is not null
+    and t.deleted_at is null and t.treatment_start>now() and (
+      (request.action='delete' and (chosen.replaces_schedule_id is null or t.source_schedule_id=chosen.id))
+      or (request.action='reschedule' and t.original_session_date=request.original_date)
+      or (request.action='update' and t.source_schedule_id=chosen.id and (
+        (request.proposal->>'centre_id')::uuid<>chosen.centre_id
+        or (request.proposal->>'start_time')::time<>chosen.start_time or (request.proposal->>'end_time')::time<>chosen.end_time
+        or (chosen.kind='single' and (request.proposal->>'effective_from')::date<>chosen.effective_from)
+        or (chosen.kind='recurring' and (t.original_session_date not between (request.proposal->>'effective_from')::date and (request.proposal->>'effective_to')::date
+          or extract(isodow from t.original_session_date)::integer<>(request.proposal->'days'->>0)::integer))))))
+  select jsonb_build_object('token',md5(coalesce(string_agg(id::text||':'||version::text,',' order by id),'')),
+    'trips',coalesce(jsonb_agg(jsonb_build_object('id',id,'version',version,'direction',direction,'pickup_at',pickup_at,
+      'driver_name',assignment->>'driver_name') order by pickup_at,id),'[]'::jsonb)) into result from affected;
+  return result;
+end;
+$$;
+create or replace function public.treatment_assignment_impact(target uuid) returns jsonb
+language sql stable security invoker set search_path='' as $$ select private.treatment_assignment_impact(target); $$;
+revoke all on function private.treatment_assignment_impact(uuid),public.treatment_assignment_impact(uuid) from public,anon;
+grant execute on function private.treatment_assignment_impact(uuid),public.treatment_assignment_impact(uuid) to authenticated;
+
 -- Approval and all trip reconciliation occur in one transaction under Patient -> Schedule -> Request locks.
-create or replace function private.review_treatment_change(target uuid,decision text,note text,expected_version integer) returns jsonb
+create or replace function private.review_treatment_change(target uuid,decision text,note text,expected_version integer,assignment_token text) returns jsonb
 language plpgsql security definer set search_path='' as $$
 declare request public.treatment_change_requests; chosen public.treatment_schedules; root public.treatment_schedules;
-  candidate public.treatment_schedules; actor uuid; affected uuid; window_from date; window_until date; cursor_day date;
+  candidate public.treatment_schedules; actor uuid; affected uuid; impact jsonb; assigned public.trips; window_from date; window_until date; cursor_day date;
   today date:=(now() at time zone 'Asia/Singapore')::date;
 begin
   if not private.is_coordinator() then raise exception 'Coordinator access required.' using errcode='42501'; end if;
@@ -1624,6 +1915,7 @@ begin
   select * into request from public.treatment_change_requests where id=target;
   if not found then raise exception 'Change request not found.' using errcode='P0002'; end if;
   perform 1 from public.patients where id=request.patient_id for update;
+  perform 1 from public.trips where patient_id=request.patient_id and deleted_at is null order by id for update;
   select * into root from public.treatment_schedules where id=request.root_schedule_id for update;
   select * into chosen from public.treatment_schedules where id=request.schedule_id for update;
   select * into request from public.treatment_change_requests where id=target for update;
@@ -1637,8 +1929,15 @@ begin
       where p.id=request.patient_id and p.status='active' and a.role='patient' and a.status='active') then
       raise exception 'An active patient is required.' using errcode='42501';
     end if;
-    if exists(select 1 from public.trips where root_schedule_id=root.id and deleted_at is null and treatment_start>now() and (status<>'unfilled' or pickup_at is not null)) then
-      raise exception 'Assigned trips must be handled before approving this schedule change.' using errcode='22023';
+    impact:=private.treatment_assignment_impact(request.id);
+    if jsonb_array_length(impact->'trips')>0 then
+      if assignment_token is distinct from impact->>'token' then raise exception 'Affected assignments changed. Reload and confirm their release.' using errcode='40001'; end if;
+      for assigned in select * from public.trips where id in (select (item->>'id')::uuid from jsonb_array_elements(impact->'trips') item) for update loop
+        if assigned.version<>(select (item->>'version')::integer from jsonb_array_elements(impact->'trips') item where (item->>'id')::uuid=assigned.id) then raise exception 'Affected assignments changed. Reload before approving.' using errcode='40001'; end if;
+        if assigned.pickup_at<=now() then raise exception 'A journey that has started cannot be changed.' using errcode='22023'; end if;
+        insert into public.trip_history(trip_id,actor_id,event,details) values(assigned.id,actor,'unassigned',jsonb_build_object('driver_id',assigned.assigned_driver_id,'reason','schedule_change','request_id',request.id));
+        update public.trips set assigned_driver_id=null,assigned_vehicle_id=null,assignment=null,pickup_at=null,dropoff_at=null,status='unfilled',updated_at=now() where id=assigned.id;
+      end loop;
     end if;
     request.proposal:=private.validate_treatment_proposal(chosen,request.action,request.proposal,request.original_date);
     select min(session_date),max(session_date) into window_from,window_until from public.trips where root_schedule_id=root.id and (deleted_at is null or schedule_change_cancelled) and treatment_start>now();
@@ -1683,7 +1982,7 @@ begin
         end loop;
       end if;
       if exists(select 1 from public.treatment_trip_generation where schedule_id=root.id and enabled) then
-        perform private.generate_treatment_trips_internal(root.id,today,least(today+29,date '9999-12-31'),root.version,actor,false,true);
+        perform private.generate_treatment_trips_internal(root.id,today,private.planning_window_end(),root.version,actor,false,true);
       end if;
     end if;
   end if;
@@ -1692,10 +1991,45 @@ begin
   return to_jsonb(request);
 end;
 $$;
+create or replace function public.review_treatment_change(target uuid,decision text,note text,expected_version integer,assignment_token text) returns jsonb
+language sql security invoker set search_path='' as $$ select private.review_treatment_change(target,decision,note,expected_version,assignment_token); $$;
+revoke all on function private.review_treatment_change(uuid,text,text,integer,text),public.review_treatment_change(uuid,text,text,integer,text) from public,anon;
+grant execute on function private.review_treatment_change(uuid,text,text,integer,text),public.review_treatment_change(uuid,text,text,integer,text) to authenticated;
+
+-- Compatibility entry point still refuses to release assignments without acknowledgement.
+create or replace function private.review_treatment_change(target uuid,decision text,note text,expected_version integer) returns jsonb
+language sql security definer set search_path='' as $$ select private.review_treatment_change(target,decision,note,expected_version,null); $$;
 create or replace function public.review_treatment_change(target uuid,decision text,note text,expected_version integer) returns jsonb
 language sql security invoker set search_path='' as $$ select private.review_treatment_change(target,decision,note,expected_version); $$;
 revoke all on function private.review_treatment_change(uuid,text,text,integer),public.review_treatment_change(uuid,text,text,integer) from public,anon;
 grant execute on function private.review_treatment_change(uuid,text,text,integer),public.review_treatment_change(uuid,text,text,integer) to authenticated;
+
+-- Coordinators inspect any driver; active drivers inspect only themselves. Per-week slots override the default template.
+create or replace function private.get_driver_week(target uuid,week_start date) returns jsonb
+language plpgsql stable security definer set search_path='' as $$
+declare result jsonb; today date:=(now() at time zone 'Asia/Singapore')::date;
+begin
+  if target is null or (not private.is_coordinator() and private.driver_account_id() is distinct from target) then raise exception 'Calendar access denied.' using errcode='42501'; end if;
+  if week_start is null or not isfinite(week_start) or extract(isodow from week_start)<>1
+    or week_start<today-extract(isodow from today)::integer+1 or week_start>private.planning_window_end() then
+    raise exception 'Choose a week within the four-week planning window.' using errcode='22023';
+  end if;
+  if private.is_coordinator() then result:=private.get_driver_availability(target);
+  else result:=jsonb_build_object('eligible',private.approved_driver_id() is not null); end if;
+  result:=result || jsonb_build_object('availability',jsonb_build_object('weekly_slots',private.effective_driver_slots(target,week_start),
+    'version',coalesce((select version from public.driver_week_availability where driver_id=target and driver_week_availability.week_start=get_driver_week.week_start),0),
+    'template_version',coalesce((select version from public.driver_availability where driver_id=target),0)));
+  return result || jsonb_build_object('week_start',week_start,'planning_end',private.planning_window_end(),'trips',
+    (select coalesce(jsonb_agg(jsonb_build_object('id',t.id,'patient_name',t.patient_name,'direction',t.direction,'pickup_at',t.pickup_at,
+      'dropoff_at',t.dropoff_at,'origin',t.origin,'destination',t.destination,'status',t.status) order by t.pickup_at,t.id),'[]'::jsonb)
+      from public.trips t where t.assigned_driver_id=target and t.deleted_at is null
+        and t.pickup_at<((week_start+7)::timestamp at time zone 'Asia/Singapore') and t.dropoff_at>(week_start::timestamp at time zone 'Asia/Singapore')));
+end;
+$$;
+create or replace function public.get_driver_week(target uuid,week_start date) returns jsonb
+language sql stable security invoker set search_path='' as $$ select private.get_driver_week(target,week_start); $$;
+revoke all on function private.get_driver_week(uuid,date),public.get_driver_week(uuid,date) from public,anon;
+grant execute on function private.get_driver_week(uuid,date),public.get_driver_week(uuid,date) to authenticated;
 
 notify pgrst, 'reload schema';
 commit;

@@ -49,6 +49,21 @@ export class DriversService {
     this.check(result.error); return result.data;
   }
 
+  async week(header: string | undefined, id: string, start: unknown, own = false) {
+    const { client, account } = await this.access(header, own ? 'driver' : 'coordinator');
+    if (own) id = account.id;
+    if (!/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(id) || typeof start !== 'string'
+      || !/^(?!0000)\d{4}-\d{2}-\d{2}$/.test(start) || !Number.isFinite(Date.parse(`${start}T00:00:00Z`))
+      || new Date(`${start}T00:00:00Z`).toISOString().slice(0,10)!==start || new Date(`${start}T00:00:00Z`).getUTCDay()!==1) throw new BadRequestException('Choose a valid calendar week.');
+    const localToday = new Date(Date.now()+8*3600000).toISOString().slice(0,10);
+    const today = Date.parse(`${localToday}T00:00:00Z`);
+    const monday = today-((new Date(today).getUTCDay()||7)-1)*86400000;
+    const requested = Date.parse(`${start}T00:00:00Z`);
+    if (requested<monday || requested>monday+21*86400000) throw new BadRequestException('Choose a week within the four-week planning window.');
+    const result = await client.rpc('get_driver_week', { target:id, week_start:start });
+    this.check(result.error); return result.data;
+  }
+
   async submit(header: string | undefined, body: unknown) {
     const { client } = await this.access(header, 'driver');
     const input = this.input(body, ['licence_number', 'plate_number', 'make', 'model', 'passenger_capacity', 'wheelchair_accessible', 'version']);

@@ -1,9 +1,10 @@
+import { planningWindow } from '../lib/planningWindow';
 import TreatmentChangeDialog, { type TreatmentChangeRequest } from '../components/TreatmentChangeDialog';
 import { Dropdown } from '../components/Dropdown';
 import { InfoButton, Overlay, PageHeading, ListToolbar, ListPagination, ChoiceGroup, SortOverlay, ListError, ScheduleActionIcon, sortSummary } from '../components/DashboardUI';
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { ApiError, apiGet, apiRequest } from '../lib/api';
-import { addDays, singaporeToday } from './TripsPage';
+import { singaporeToday } from './TripsPage';
 
 interface Centre { id: string; name: string; address: string; postal_code: string }
 interface Details { kind: 'recurring' | 'single'; centre_id: string; days: number[]; start_time: string; end_time: string; effective_from: string; effective_to: string }
@@ -25,7 +26,7 @@ function GenerationStatus({ coverage }: { coverage?: TripCoverage }) {
   const status = coverage?.status ?? 'unavailable';
   const label = status === 'generated' ? 'Generated'
     : status === 'partial' ? 'Partially generated' : status === 'not_generated' ? 'Not generated'
-    : status === 'none' ? 'No upcoming sessions' : 'Coverage unavailable';
+    : status === 'none' ? 'No sessions in window' : 'Coverage unavailable';
   const window = coverage?.window_start && coverage.window_end ? `Coverage: ${formatDate(coverage.window_start)} – ${formatDate(coverage.window_end)}.` : 'Trip coverage could not be determined.';
   return <div className="treatment-generation"><span className="treatment-generation-label">Trips</span><div className="treatment-generation-summary"><span className={`treatment-generation-badge generation-${status}`} title={window}>{label}</span></div></div>;
 }
@@ -130,10 +131,11 @@ export default function TreatmentSchedules({ coordinator, notify, onSessionExpir
     quietReload.current = true; setReload(value => value + 1); notify(message);
   }
   function openGeneration(schedule: Schedule) {
-    const from = schedule.effective_from > singaporeToday() ? schedule.effective_from : singaporeToday();
+    const { today, end } = planningWindow();
+    const from = schedule.effective_from > today && schedule.effective_from <= end ? schedule.effective_from : today;
     setGeneratingSchedule(schedule); setGenerationError(''); setGenerationConflict(false);
     setAutoGenerationDraft(schedule.auto_generation?.enabled ?? false);
-    const until = schedule.kind === 'single' ? from : schedule.effective_to >= from && schedule.effective_to < addDays(from, 29) ? schedule.effective_to : addDays(from, 29);
+    const until = schedule.kind === 'single' && schedule.effective_from === from ? from : schedule.effective_to >= from && schedule.effective_to < end ? schedule.effective_to : end;
     setGenerationDates({ from, until });
   }
   async function reloadGeneration() {
@@ -180,7 +182,7 @@ export default function TreatmentSchedules({ coordinator, notify, onSessionExpir
     event.preventDefault();
     if (!generatingSchedule || generating || savingAutoGeneration || generationConflict) return;
     const { from, until } = generationDates;
-    if (!supportedDate(from) || !supportedDate(until) || from < singaporeToday() || until < from || until > addDays(from, 89)) { setGenerationError('Choose dates from today within a maximum of 90 days.'); return; }
+    if (!supportedDate(from) || !supportedDate(until) || from < singaporeToday() || until < from || until > planningWindow().end) { setGenerationError('Choose dates from today through the fourth Sunday.'); return; }
     setGenerating(true); setGenerationError('');
     try {
       const result = await apiRequest<{ created: number; updated: number; unchanged: number; skipped?: number; total: number }>('/trips/generate', 'POST', { schedule_id: generatingSchedule.id, from_date: from, until_date: until, version: generatingSchedule.version });
@@ -255,7 +257,8 @@ export default function TreatmentSchedules({ coordinator, notify, onSessionExpir
       </section>
       <GeneratedCoverage coverage={generatingSchedule.trip_generation} />
       </div>
-      <fieldset className="patient-form-fields trip-generation-dates" disabled={generating}><div className="patient-field"><label className="patient-required" htmlFor="generation-from">From date</label><input id="generation-from" required type="date" min={singaporeToday()} max={generationDates.until} value={generationDates.from} onChange={event => setGenerationDates(current => ({ ...current, from: event.target.value }))} /></div><div className="patient-field"><label className="patient-required" htmlFor="generation-until">Until date</label><input id="generation-until" required type="date" min={generationDates.from} max={supportedDate(generationDates.from) ? addDays(generationDates.from, 89) : undefined} value={generationDates.until} onChange={event => setGenerationDates(current => ({ ...current, until: event.target.value }))} /></div></fieldset>
+      <p className="treatment-hint">Generation window: {formatDate(singaporeToday())} – {formatDate(planningWindow().end)}</p>
+      <fieldset className="patient-form-fields trip-generation-dates" disabled={generating}><div className="patient-field"><label className="patient-required" htmlFor="generation-from">From date</label><input id="generation-from" required type="date" min={singaporeToday()} max={generationDates.until < planningWindow().end ? generationDates.until : planningWindow().end} value={generationDates.from} onChange={event => setGenerationDates(current => ({ ...current, from: event.target.value }))} /></div><div className="patient-field"><label className="patient-required" htmlFor="generation-until">Until date</label><input id="generation-until" required type="date" min={generationDates.from} max={planningWindow().end} value={generationDates.until} onChange={event => setGenerationDates(current => ({ ...current, until: event.target.value }))} /></div></fieldset>
       <dl className="generation-timing"><div><dt>Outbound arrival</dt><dd>15 min before session starts</dd></div><div><dt>Return pickup</dt><dd>15+ min after session ends</dd></div></dl>
     </Overlay>}
     {draft && !coordinator && <Overlay title={confirmingCreate ? 'Confirm treatment schedule' : 'Add Schedule'} className={confirmingCreate ? 'schedule-create-confirmation' : undefined} description={confirmingCreate ? 'Double-check your details before creating this schedule.' : undefined} onClose={close} onSubmit={save} busy={saving} noValidate error={error} onDismissError={() => setError('')}

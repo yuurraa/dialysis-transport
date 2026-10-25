@@ -118,12 +118,10 @@ export default function Dashboard({ account, avatarUrl, path, onNavigate, onSign
     return () => { active = false; };
   }, [driver, account.id, driverReload, vehicleChanged, onSessionExpired]);
 
+  const driverTripsPage = driver && path === '/dashboard/trips';
   const availabilityPage = driver && path === '/dashboard/availability';
   const driversPage = account.role === 'coordinator' && path === '/dashboard/drivers';
-  const home = driver ? driverRegistered ? '/dashboard/availability' : '/dashboard/vehicle' : '/dashboard/trips';
-  useEffect(() => {
-    if (driver && driverRegistered !== null && path === '/dashboard') onNavigate(home, true);
-  }, [driver, driverRegistered, path, home, onNavigate]);
+  const home = '/dashboard/trips';
   const patient = account.role === 'patient';
   const accountPage = path === '/dashboard/account';
   const profileResolved = useCallback((complete: boolean) => {
@@ -146,9 +144,11 @@ export default function Dashboard({ account, avatarUrl, path, onNavigate, onSign
   }
 
   const navigation = <nav className="dashboard-navigation" aria-label="Dashboard">
-    {driver ? driverRegistered !== null && <>
+    {driver ? <>
+      <a href="/dashboard/trips" onClick={event => follow(event, '/dashboard/trips')} aria-current={driverTripsPage ? 'page' : undefined}>Trips</a>
+      {driverRegistered !== null && <>
       {driverRegistered && <a href="/dashboard/availability" onClick={event => follow(event, '/dashboard/availability')} aria-current={availabilityPage ? 'page' : undefined}>Availability</a>}
-      <a href="/dashboard/vehicle" onClick={event => follow(event, '/dashboard/vehicle')} aria-current={path === '/dashboard/vehicle' ? 'page' : undefined}>{driverRegistered ? 'My Vehicle' : 'Register Vehicle'}</a>
+      <a href="/dashboard/vehicle" onClick={event => follow(event, '/dashboard/vehicle')} aria-current={path === '/dashboard/vehicle' ? 'page' : undefined}>{driverRegistered ? 'My Vehicle' : 'Register Vehicle'}</a></>}
     </> : <a href="/dashboard/trips" onClick={event => follow(event, '/dashboard/trips')} aria-current={path === '/dashboard/trips' ? 'page' : undefined}>Trips</a>}
     {['patient', 'coordinator'].includes(account.role) && <a href="/dashboard/schedules" onClick={event => follow(event, '/dashboard/schedules')} aria-current={schedulesPage ? 'page' : undefined}>Schedules</a>}
     {account.role === 'coordinator' && <a href="/dashboard/patients" onClick={event => follow(event, '/dashboard/patients')} aria-current={patientsPage ? 'page' : undefined}>Patients</a>}
@@ -167,7 +167,7 @@ export default function Dashboard({ account, avatarUrl, path, onNavigate, onSign
           <button className="dashboard-menu-toggle" ref={menuButton} type="button" aria-label="Open navigation" aria-haspopup="dialog" aria-expanded={menuOpen} aria-controls="dashboard-drawer" onClick={() => { setMenuOpen(true); setDropdown(null); }}>
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" /></svg>
           </button>
-          <span className="dashboard-mobile-mark" aria-label="Dialysis Transport">DT</span><span className="dashboard-mobile-title">{accountPage ? 'My Account' : driversPage ? 'Drivers' : availabilityPage ? 'Availability' : driver ? driverRegistered ? 'My Vehicle' : 'Register Vehicle' : patientsPage ? 'Patients' : schedulesPage ? 'Schedules' : 'Trips'}</span>
+          <span className="dashboard-mobile-mark" aria-label="Dialysis Transport">DT</span><span className="dashboard-mobile-title">{accountPage ? 'My Account' : driverTripsPage ? 'Trips' : driversPage ? 'Drivers' : availabilityPage ? 'Availability' : driver ? driverRegistered ? 'My Vehicle' : 'Register Vehicle' : patientsPage ? 'Patients' : schedulesPage ? 'Schedules' : 'Trips'}</span>
         </div>
         <div className="dashboard-account-actions" ref={headerActions}>
           <time className="dashboard-header-clock" dateTime={now.toISOString()} aria-label={`${date}, ${time} Singapore time`}><span className="dashboard-date-full">{date}</span><span className="dashboard-date-compact" aria-hidden="true">{compactDate}</span><span className="dashboard-clock">{time}</span></time>
@@ -200,7 +200,7 @@ export default function Dashboard({ account, avatarUrl, path, onNavigate, onSign
 
     <div className="dashboard-workspace">
     <main className="dashboard-main" id="dashboard-main" tabIndex={-1}>
-      {driver && !accountPage && driverLoadError ? <section className="dashboard-trips patients-panel page-panel"><ListError title="Driver dashboard could not be loaded" message="Your vehicle registration could not be loaded. Please try again." onRetry={() => setDriverReload(value => value + 1)} /></section> : driver && !accountPage && driverRegistered === null ? <div className="account-loading patients-loading" role="status"><span className="account-spinner" aria-hidden="true" /><span>Loading...</span></div> : driversPage ? <DriversPage notify={notify} onSessionExpired={onSessionExpired} /> : availabilityPage ? <DriverAvailability notify={notify} onSessionExpired={onSessionExpired} vehicleRegistered={Boolean(driverRegistered)} onViewVehicle={() => onNavigate('/dashboard/vehicle')} /> : driver && !accountPage ? <div className="patient-account-profile"><DriverRegistration notify={notify} onSessionExpired={onSessionExpired} registered={Boolean(driverRegistered)} onVehicleChange={vehicleChanged} /></div> : schedulesPage ? <TreatmentSchedules coordinator={account.role === 'coordinator'} notify={notify} onSessionExpired={onSessionExpired} /> : patientsPage ? <PatientsPage notify={notify} onSessionExpired={onSessionExpired} /> : accountPage && account.role === 'driver' ? <div className="patient-account-profile"><DriverProfile notify={notify} onSessionExpired={onSessionExpired} /></div> : accountPage ? <>{!patient && <section className="dashboard-trips" aria-labelledby={account.role === 'coordinator' ? 'account-details-title' : 'role-profile-title'}><PageHeading id={account.role === 'coordinator' ? 'account-details-title' : 'role-profile-title'} title="Account Details" eyebrow="Account Management" description={<span className="profile-id">{roleNames[account.role]} ID: {account.id}</span>} />{account.role === 'coordinator' && <fieldset className="patient-form-fields coordinator-account-fields" disabled aria-label="Coordinator account details">
+      {driver && !accountPage && !driverTripsPage && driverLoadError ? <section className="dashboard-trips patients-panel page-panel"><ListError title="Driver dashboard could not be loaded" message="Your vehicle registration could not be loaded. Please try again." onRetry={() => setDriverReload(value => value + 1)} /></section> : driver && !accountPage && !driverTripsPage && driverRegistered === null ? <div className="account-loading patients-loading" role="status"><span className="account-spinner" aria-hidden="true" /><span>Loading...</span></div> : driversPage ? <DriversPage notify={notify} onSessionExpired={onSessionExpired} /> : availabilityPage ? <DriverAvailability notify={notify} onSessionExpired={onSessionExpired} vehicleRegistered={Boolean(driverRegistered)} onViewVehicle={() => onNavigate('/dashboard/vehicle')} /> : driverTripsPage ? <TripsPage coordinator={false} driver onSessionExpired={onSessionExpired} /> : driver && !accountPage ? <div className="patient-account-profile"><DriverRegistration notify={notify} onSessionExpired={onSessionExpired} registered={Boolean(driverRegistered)} onVehicleChange={vehicleChanged} /></div> : schedulesPage ? <TreatmentSchedules coordinator={account.role === 'coordinator'} notify={notify} onSessionExpired={onSessionExpired} /> : patientsPage ? <PatientsPage notify={notify} onSessionExpired={onSessionExpired} /> : accountPage && account.role === 'driver' ? <div className="patient-account-profile"><DriverProfile notify={notify} onSessionExpired={onSessionExpired} /></div> : accountPage ? <>{!patient && <section className="dashboard-trips" aria-labelledby={account.role === 'coordinator' ? 'account-details-title' : 'role-profile-title'}><PageHeading id={account.role === 'coordinator' ? 'account-details-title' : 'role-profile-title'} title="Account Details" eyebrow="Account Management" description={<span className="profile-id">{roleNames[account.role]} ID: {account.id}</span>} />{account.role === 'coordinator' && <fieldset className="patient-form-fields coordinator-account-fields" disabled aria-label="Coordinator account details">
         <div className="patient-field"><label htmlFor="coordinator-username">Username</label><input id="coordinator-username" value={account.display_name} readOnly autoComplete="username" /></div>
         <div className="patient-field"><label htmlFor="coordinator-email">Email</label><input id="coordinator-email" type="email" value={account.email} readOnly autoComplete="email" /></div>
         <div className="patient-field"><label htmlFor="coordinator-role">Role</label><input id="coordinator-role" value={roleNames[account.role]} readOnly /></div>

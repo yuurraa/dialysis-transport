@@ -17,6 +17,7 @@ export interface TreatmentChangeRequest {
   before_snapshot: ChangeSource; reason: string; requested_at: string;
   status: 'pending' | 'approved' | 'rejected' | 'withdrawn'; review_note: string; reviewed_at: string | null;
 }
+interface AssignmentImpact { token: string; trips: { id: string; direction: string; pickup_at: string; driver_name: string }[] }
 interface Centre { id: string; name: string }
 const days = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
 const today = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Singapore', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
@@ -45,11 +46,26 @@ export default function TreatmentChangeDialog({ source, existing, coordinator, c
   const [original, setOriginal] = useState('');
   const [reason, setReason] = useState('');
   const [note, setNote] = useState('');
+  const [impact, setImpact] = useState<AssignmentImpact | null>(null);
+  const [impactError, setImpactError] = useState(false);
+  const [impactReload, setImpactReload] = useState(0);
+  const [releaseConfirmed, setReleaseConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [conflict, setConflict] = useState(false);
   const alive = useRef(false);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
+  useEffect(() => {
+    if (!coordinator || request?.status !== 'pending') return;
+    let active = true;
+    setImpact(null); setImpactError(false); setReleaseConfirmed(false);
+    apiGet<AssignmentImpact>(`/schedules/change-requests/${request.id}/assignments`).then(result => { if (active) setImpact(result); }).catch(reason => {
+      if (!active) return;
+      if (reason instanceof ApiError && reason.status === 401) onSessionExpired();
+      setImpactError(true);
+    });
+    return () => { active = false; };
+  }, [coordinator, request?.id, request?.version, request?.status, impactReload, onSessionExpired]);
   const pending = request?.status === 'pending';
   const editing = !coordinator && !pending;
   function changeAction(value: string) {
@@ -74,7 +90,7 @@ export default function TreatmentChangeDialog({ source, existing, coordinator, c
     try {
       const result = await apiGet<{ schedule: ChangeSource; request: TreatmentChangeRequest | null }>(`/schedules/${source.id}/change-request`);
       if (!alive.current) return;
-      setCurrent(result.schedule); setRequest(result.request); setDraft(draftFor(result.schedule)); setAction('update'); setOriginal(''); setNote(''); setConflict(false); setError('');
+      setCurrent(result.schedule); setRequest(result.request); setDraft(draftFor(result.schedule)); setAction('update'); setOriginal(''); setNote(''); setConflict(false); setError(''); setImpactReload(value => value + 1);
     } catch (value) { if (alive.current) failure(value); }
     finally { if (alive.current) setBusy(false); }
   }
@@ -94,10 +110,11 @@ export default function TreatmentChangeDialog({ source, existing, coordinator, c
   }
   async function decide(decision: 'approved' | 'rejected' | 'withdrawn') {
     if (!request || busy || conflict) return;
+    if (decision === 'approved' && (!impact || impactError || (impact.trips.length > 0 && !releaseConfirmed))) return;
     if (decision === 'rejected' && !note.trim()) { setError('Give a reason for rejecting this request.'); return; }
     setBusy(true); setError('');
     try {
-      const saved = await apiRequest<TreatmentChangeRequest>(`/schedules/change-requests/${request.id}/${decision === 'withdrawn' ? 'withdraw' : 'review'}`, 'PATCH', { version: request.version, ...(decision !== 'withdrawn' ? { decision, note: note.trim() } : {}) });
+      const saved = await apiRequest<TreatmentChangeRequest>(`/schedules/change-requests/${request.id}/${decision === 'withdrawn' ? 'withdraw' : 'review'}`, 'PATCH', { version: request.version, ...(decision !== 'withdrawn' ? { decision, note: note.trim(), ...(decision === 'approved' ? { assignment_token: impact!.token } : {}) } : {}) });
       if (alive.current) onChanged(saved, decision === 'approved' ? 'Change approved. The schedule and affected future trips have been updated.' : decision === 'rejected' ? 'Change request rejected. The schedule is unchanged.' : 'Change request withdrawn.');
     } catch (value) { if (alive.current) failure(value); }
     finally { if (alive.current) setBusy(false); }
@@ -105,7 +122,7 @@ export default function TreatmentChangeDialog({ source, existing, coordinator, c
   return <Overlay title={editing ? 'Request schedule change' : coordinator ? 'Review schedule change' : 'Schedule change request'} description={name} className="treatment-change-dialog" busy={busy} onClose={onClose} onSubmit={editing ? submit : undefined} noValidate error={error} onDismissError={() => setError('')}
     footer={<>{conflict ? <button className="patient-primary" type="button" disabled={busy} onClick={() => void reload()}>Reload request</button>
       : editing ? <button className="patient-primary" type="submit" disabled={busy}>{busy ? 'Submitting…' : 'Submit request'}</button>
-      : pending && coordinator ? <><button className={request.action === 'delete' ? 'button-danger' : 'patient-primary'} type="button" disabled={busy} onClick={() => void decide('approved')}>{busy ? 'Saving…' : 'Approve'}</button><button className="button-danger" type="button" disabled={busy} onClick={() => void decide('rejected')}>Reject</button></>
+      : pending && coordinator ? <><button className={request.action === 'delete' ? 'button-danger' : 'patient-primary'} type="button" disabled={busy || !impact || impactError || (impact.trips.length > 0 && !releaseConfirmed)} onClick={() => void decide('approved')}>{busy ? 'Saving…' : 'Approve'}</button><button className="button-danger" type="button" disabled={busy} onClick={() => void decide('rejected')}>Reject</button></>
       : pending ? <button type="button" disabled={busy} onClick={() => void decide('withdrawn')}>Withdraw request</button> : null}<button type="button" disabled={busy} onClick={onClose}>Close</button></>}>
     {editing ? <>
       {request?.status === 'rejected' && <p className="treatment-change-outcome">Previous request rejected: {request.review_note}</p>}
@@ -126,7 +143,7 @@ export default function TreatmentChangeDialog({ source, existing, coordinator, c
       {request.original_date && <p className="treatment-hint">Original session: {dateLabel(request.original_date)}</p>}
       <div className="treatment-change-comparison"><section><h3>Current schedule</h3><Summary details={request.before_snapshot} centres={centres} /></section><section><h3>Requested change</h3>{request.action === 'delete' ? <p>Delete this schedule{request.before_snapshot.replaces_schedule_id ? '.' : ' and its linked replacements.'}</p> : <Summary details={request.proposal} centres={centres} />}</section></div>
       <dl className="schedule-detail-fields"><div><dt>Reason for change</dt><dd>{request.reason}</dd></div>{request.review_note && <div><dt>Coordinator’s response</dt><dd>{request.review_note}</dd></div>}</dl>
-      {coordinator && pending && <><p className="treatment-hint">Approval updates affected future unfilled trips. Past trip history stays unchanged.</p><fieldset className="patient-form-fields" disabled={busy}><div className="patient-field patient-form-wide"><label className="patient-required" htmlFor="schedule-change-review">Review note (required to reject)</label><textarea id="schedule-change-review" rows={3} maxLength={1000} value={note} onChange={event => setNote(event.target.value)} /></div></fieldset></>}
+      {coordinator && pending && <>{impactError ? <p role="status">Affected assignments could not be loaded. <button type="button" onClick={() => setImpactReload(value => value + 1)}>Retry</button></p> : !impact ? <p role="status">Checking affected assignments…</p> : impact.trips.length > 0 && <section className="assignment-release-warning" aria-label="Affected assignments"><h3>Assignments to release</h3><ul>{impact.trips.map(trip => <li key={trip.id}><strong>{trip.driver_name}</strong><span>{new Intl.DateTimeFormat('en-SG',{dateStyle:'medium',timeStyle:'short',timeZone:'Asia/Singapore'}).format(new Date(trip.pickup_at))} · {trip.direction === 'outbound' ? 'Outbound' : 'Return'}</span></li>)}</ul><label><input type="checkbox" required checked={releaseConfirmed} disabled={busy} onChange={event => setReleaseConfirmed(event.target.checked)} /><span className="patient-required">I understand these drivers will be unassigned and the affected trips will need reassignment.</span></label></section>}<p className="treatment-hint">Approval updates affected future trips. Past trips and unaffected assignments stay unchanged.</p><fieldset className="patient-form-fields" disabled={busy}><div className="patient-field patient-form-wide"><label className="patient-required" htmlFor="schedule-change-review">Review note (required to reject)</label><textarea id="schedule-change-review" rows={3} maxLength={1000} value={note} onChange={event => setNote(event.target.value)} /></div></fieldset></>}
     </> : <p>No change request is awaiting review.</p>}
   </Overlay>;
 }

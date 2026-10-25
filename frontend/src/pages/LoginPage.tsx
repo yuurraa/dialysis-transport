@@ -52,8 +52,8 @@ export default function LoginPage() {
   useEffect(() => {
     if (checking) return;
     if (dashboardAccess && account?.role === 'patient' && path === '/dashboard/profile') { navigate('/dashboard/account', true); return; }
-    const home = account?.role === 'driver' ? '/dashboard' : '/dashboard/trips';
-    const allowed = [home, '/dashboard/account', ...(account?.role === 'driver' ? ['/dashboard/availability', '/dashboard/vehicle'] : []), ...(['patient', 'coordinator'].includes(account?.role ?? '') ? ['/dashboard/schedules'] : []), ...(account?.role === 'coordinator' ? ['/dashboard/patients', '/dashboard/drivers'] : [])];
+    const home = '/dashboard/trips';
+    const allowed = [home, '/dashboard/account', ...(account?.role === 'driver' ? ['/dashboard/trips', '/dashboard/availability', '/dashboard/vehicle'] : []), ...(['patient', 'coordinator'].includes(account?.role ?? '') ? ['/dashboard/schedules'] : []), ...(account?.role === 'coordinator' ? ['/dashboard/patients', '/dashboard/drivers'] : [])];
     if (dashboardAccess && !allowed.includes(path)) navigate(home, true);
     else if (path.startsWith('/dashboard') && (!user || (resolvedAccount?.userId === user.id && !dashboardAccess))) navigate('/', true);
   }, [checking, dashboardAccess, account?.role, path, user?.id, resolvedAccount, navigate]);
