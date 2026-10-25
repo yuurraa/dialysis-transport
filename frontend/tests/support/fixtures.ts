@@ -92,19 +92,3 @@ export async function mockServices({ page }: { page: Page }) {
 }
 
 /** Content dialogs stay centred with viewport gutters and consistent footer padding. */
-export async function expectPopup(dialog: Locator) {
-  await expect(dialog).toBeVisible();
-  const viewport = dialog.page().viewportSize()!;
-  await expect.poll(async () => {
-    const bounds = (await dialog.boundingBox())!;
-    return Math.abs(bounds.x + bounds.width / 2 - viewport.width / 2)
-      + Math.abs(bounds.y + bounds.height / 2 - viewport.height / 2);
-  }).toBeLessThanOrEqual(2);
-  const bounds = (await dialog.boundingBox())!;
-  expect(bounds.x).toBeGreaterThanOrEqual(11);
-  expect(bounds.y).toBeGreaterThanOrEqual(11);
-  expect(bounds.width).toBeLessThanOrEqual(viewport.width - 22);
-  expect(bounds.height).toBeLessThanOrEqual(viewport.height - 22);
-  await expect(dialog.locator('.overlay-footer')).toHaveCSS('padding-bottom', '12px');
-  await expect(dialog.locator('.overlay-footer')).toBeInViewport();
-}

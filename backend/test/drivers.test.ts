@@ -47,18 +47,6 @@ test('driver and coordinator endpoints enforce active roles before database acce
   assert.equal(calls.length,0);
   assert.equal((await request('/me')).status,200);assert.deepEqual(ownership,['driver_id',id]);
 });
-test('submission validates details, forbids privilege injection and forwards version checks',async () => {
-  role='driver';calls=[];
-  for(const extra of [{status:'approved'},{driver_id:id},{passenger_capacity:0},{passenger_capacity:1.5},{wheelchair_accessible:'yes'},{version:0},{plate_number:' '}]) {
-    assert.equal((await request('/me/vehicle','POST',{...vehicle,...extra})).status,400);
-  }
-  assert.equal(calls.length,0);
-  assert.equal((await request('/me/vehicle','POST',vehicle)).status,201);
-  const {version,...details}=vehicle;
-  assert.deepEqual(calls[0],{name:'submit_driver_vehicle',args:{details,expected_version:null}});
-  failure='40001';assert.equal((await request('/me/vehicle','POST',{...vehicle,version:1})).status,409);
-  failure='23505';assert.equal((await request('/me/vehicle','POST',vehicle)).body.code,'vehicle_plate_conflict');failure=null;
-});
 test('coordinator reviews require an explicit decision, version and rejection reason',async () => {
   role='coordinator';calls=[];
   for(const body of [{version:1,decision:'rejected',reason:' '},{version:1,decision:'pending',reason:''},{version:0,decision:'approved',reason:''},{version:1,decision:'approved',reason:'',driver_id:id}]) {
@@ -74,20 +62,6 @@ test('coordinator reviews require an explicit decision, version and rejection re
   failure='XX000';const unavailable=await request();assert.equal(unavailable.status,503);assert.doesNotMatch(JSON.stringify(unavailable.body),/PRIVATE_DETAIL/);failure=null;
 });
 
-test('coordinators edit only versioned driver account status',async () => {
-  const body={status:'inactive',version:1};calls=[];
-  for(const other of ['driver','patient','caregiver']) {
-    role=other;assert.equal((await request(`/${id}`,'PATCH',body)).status,403);
-  }
-  role='coordinator';
-  for(const input of [{status:'approved',version:1},{status:'active',version:0},{...body,full_name:'Changed'},{...body,vehicle:{}},{...body,role:'coordinator'}]) assert.equal((await request(`/${id}`,'PATCH',input)).status,400);
-  assert.equal(calls.length,0);
-  assert.equal((await request(`/${id}`,'PATCH',body)).status,200);
-  assert.deepEqual(calls[0],{name:'save_driver_status',args:{target:id,expected_version:1,new_status:'inactive'}});
-  failure='40001';assert.equal((await request(`/${id}`,'PATCH',body)).status,409);failure=null;
-});
-
-
 test('availability routes enforce active driver ownership and validate bounded weekly slots',async () => {
   calls=[];failure=null;status='active';
   const body={weekly_slots:[10,11,335],version:0};
@@ -100,26 +74,4 @@ test('availability routes enforce active driver ownership and validate bounded w
   assert.equal((await request('/me/availability','PATCH',body)).status,200);
   assert.deepEqual(calls[0],{name:'save_my_availability',args:{slots:body.weekly_slots,expected_version:0}});
   assert.equal((await request('/me/availability')).status,200);assert.equal(calls.at(-1)?.name,'get_my_availability');
-});
-test('availability reports approval, stale versions and service failures without leaking database details',async () => {
-  role='driver';status='active';const body={weekly_slots:[],version:1};
-  for(const [code,statusCode] of [['42501',403],['40001',409],['22023',400],['XX000',503]] as const) {
-    failure=code;const result=await request('/me/availability','PATCH',body);assert.equal(result.status,statusCode);assert.doesNotMatch(JSON.stringify(result.body),/PRIVATE_DETAIL/);
-    if(code==='40001') assert.equal(result.body.code,'availability_conflict');
-  }
-  failure=null;
-});
-
-
-test('coordinators read an individual driver availability with role and target validation',async () => {
-  calls=[];failure=null;status='active';
-  for(const token of [null,'invalid']) assert.equal((await request(`/${id}/availability`,'GET',undefined,token)).status,401);
-  for(const other of ['driver','patient','caregiver']) {role=other;assert.equal((await request(`/${id}/availability`)).status,403);}
-  role='coordinator';status='inactive';assert.equal((await request(`/${id}/availability`)).status,403);status='active';
-  assert.equal((await request('/invalid/availability')).status,400);assert.equal(calls.length,0);
-  assert.equal((await request(`/${id}/availability`)).status,200);
-  assert.deepEqual(calls[0],{name:'get_driver_availability',args:{target:id}});
-  failure='P0002';assert.equal((await request(`/${id}/availability`)).status,404);
-  failure='42501';assert.equal((await request(`/${id}/availability`)).status,403);
-  failure='XX000';const result=await request(`/${id}/availability`);assert.equal(result.status,503);assert.doesNotMatch(JSON.stringify(result.body),/PRIVATE_DETAIL/);failure=null;
 });

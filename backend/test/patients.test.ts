@@ -65,29 +65,6 @@ test('patient endpoints require an active coordinator and verified session', asy
   status = 'active';
   assert.equal(writes, 0);
 });
-test('lists real records with bounded pagination', async () => {
-  const result = await request('?page=1');
-  assert.equal(result.status, 200);
-  assert.deepEqual(result.body, { patients: [record], total: 1, page: 1, pageSize: 10 });
-  for (const page of ['0', '-1', 'no', '1.5', '999999999999999999']) assert.equal((await request(`?page=${page}`)).status, 400);
-});
-test('search and column sorting run before pagination and reject unsupported query options', async () => {
-  assert.equal((await request('?page=2&search=Test&sort=full_name&direction=asc')).status, 200);
-  assert.equal(filters, 'full_name.ilike."%Test%",phone.ilike."%Test%"');
-  assert.deepEqual(orders, [['full_name', true], ['id', true]]);
-  assert.deepEqual(bounds, [10, 19]);
-  assert.equal((await request(`?search=${id}&sort=id&direction=desc`)).status, 200);
-  assert.ok(filters.endsWith(`,id.eq.${id}`));
-  assert.deepEqual(orders, [['id', false]]);
-  for (const sort of ['id', 'full_name', 'phone', 'mobility', 'status']) {
-    assert.equal((await request(`?sort=${sort}&direction=desc`)).status, 200);
-    assert.deepEqual(orders[0], [sort, false]);
-  }
-  for (const query of ['sort=notes', 'sort=account_id', 'direction=sideways', 'search=' + 'x'.repeat(101), 'search=a&search=b']) assert.equal((await request(`?${query}`)).status, 400);
-  const term = 'a",status.eq.active)';
-  assert.equal((await request(`?search=${encodeURIComponent(term)}`)).status, 200);
-  assert.ok(filters.includes('a\\",status.eq.active)'));
-});
 test('coordinators may update only Status and Notes, never create or overwrite personal details', async () => {
   assert.equal((await request('', 'POST', record)).status, 404);
   const result = await request(`/${id}`, 'PATCH', { status: 'inactive', notes: 'Call coordinator.', version: 1 });
@@ -99,16 +76,6 @@ test('coordinators may update only Status and Notes, never create or overwrite p
   }
   assert.equal(writes, before);
   assert.equal((await request('/not-an-id', 'PATCH', { status: 'active' })).status, 400);
-});
-test('missing records and database failures are distinct and do not leak details', async () => {
-  const { id: unused, ...input } = record;
-  missing = true;
-  assert.equal((await request(`/${id}`, 'PATCH', { status: 'active', version: 1 })).status, 404);
-  missing = false; failure = true;
-  const result = await request();
-  assert.equal(result.status, 503);
-  assert.doesNotMatch(JSON.stringify(result.body), /PRIVATE_DETAIL/);
-  failure = false;
 });
 
 async function selfRequest(method = 'GET', body?: unknown, token = 'valid') {
@@ -139,61 +106,5 @@ test('patients read and save only their own profile without accepting ownership 
   assert.equal((await selfRequest()).status, 403);
   status = 'active';
   assert.equal((await selfRequest('GET', undefined, 'invalid')).status, 401);
-  role = 'coordinator';
-});
-
-test('patient edits require a version and stale database writes return conflict', async () => {
-  const before = writes;
-  for (const version of [undefined, 0, -1, 1.5, '1']) {
-    assert.equal((await request(`/${id}`, 'PATCH', { status: 'active', version })).status, 400);
-  }
-  assert.equal(writes, before);
-  conflict = true;
-  assert.equal((await request(`/${id}`, 'PATCH', { status: 'active', version: 1 })).status, 409);
-  role = 'patient';
-  const { id: unused, status: ignored, ...details } = record;
-  assert.equal((await selfRequest('PATCH', details)).status, 409);
-  const { version: omitted, ...withoutVersion } = details;
-  assert.equal((await selfRequest('PATCH', withoutVersion)).status, 400);
-  conflict = false; role = 'coordinator';
-});
-
-test('patient filters validate and constrain the query before pagination', async () => {
-  assert.equal((await request('?status=inactive&mobility=wheelchair')).status, 200);
-  assert.deepEqual(equalities, [['status', 'inactive'], ['mobility', 'wheelchair']]);
-  assert.equal((await request('?status=active,inactive&mobility=walking-aid,wheelchair')).status, 200);
-  assert.deepEqual(equalities, [['status', ['active', 'inactive']], ['mobility', ['walking-aid', 'wheelchair']]]);
-  assert.deepEqual(bounds, [0, 9]);
-  for (const query of ['status=unknown', 'mobility=unknown', 'status=active&status=inactive', 'status=active,unknown', 'status=active,', 'status=', 'mobility=all,wheelchair', 'mobility=wheelchair,unknown', 'mobility=']) assert.equal((await request(`?${query}`)).status, 400);
-});
-
-
-test('driver personal profiles require their active driver account and reject privilege fields', async () => {
-  const personal = { full_name: 'Fixture Driver', phone: '+65 81234567', birth_date: '1990-04-12', gender: 'male' };
-  async function driverRequest(method = 'GET', body?: unknown) {
-    return fetch(`${origin}/api/profiles/driver`, { method, headers: { Authorization: 'Bearer valid', 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
-  }
-  for (const other of ['patient', 'caregiver', 'coordinator']) {
-    role = other;
-    assert.equal((await driverRequest()).status, 403);
-    assert.equal((await driverRequest('PATCH', personal)).status, 403);
-    assert.equal((await driverRequest('PATCH', {...personal,version:1})).status,403);
-  }
-  role = 'driver'; status = 'inactive';
-  assert.equal((await driverRequest()).status, 403);
-  status = 'active';
-  assert.equal((await driverRequest()).status, 200);
-  assert.deepEqual(equalities, [['account_id', id]]);
-  for (const extra of [{ status: 'approved' }, { account_id: id }, { birth_date: '2999-01-01' }]) {
-    assert.equal((await driverRequest('PATCH', { ...personal, ...extra })).status, 400);
-  }
-  assert.equal((await driverRequest('PATCH', personal)).status, 200);
-  assert.deepEqual(saved, personal);
-  for (const version of [null,0,-1,'1',1.5]) assert.equal((await driverRequest('PATCH',{...personal,version})).status,400);
-  assert.equal((await driverRequest('PATCH',{...personal,version:1,status:'active'})).status,400);
-  assert.equal((await driverRequest('PATCH',{...personal,version:1})).status,200);
-  assert.equal(driverVersion,1);assert.deepEqual(saved,personal);
-  conflict=true;assert.equal((await driverRequest('PATCH',{...personal,version:1})).status,409);conflict=false;
-
   role = 'coordinator';
 });

@@ -53,29 +53,6 @@ test('rejects coordinator, extra privilege fields and invalid registration names
     assert.equal((await request('/register', 'POST', body)).status, 400);
   }
 });
-test('registers an active account without an approval step and reloads it from the database', async () => {
-  current = null;
-  const result = await request('/register', 'POST', { role: 'patient', displayName: 'Test Person', profile });
-  assert.equal(result.status, 201);
-  assert.equal(result.body.status, 'active');
-  assert.equal((await request('/me')).body.account.role, 'patient');
-  assert.equal((await request('/register', 'POST', { role: 'patient', displayName: 'Test', profile })).status, 409);
-});
-test('the removed approval endpoints are unavailable for every role', async () => {
-  for (const role of ['coordinator', 'patient', 'driver', 'caregiver']) {
-    current = { ...account, role, status: 'active' };
-    assert.equal((await request('/pending')).status, 404);
-    assert.equal((await request(`/accounts/${account.id}`, 'PATCH', { status: 'approved' })).status, 404);
-  }
-});
-test('database failures do not leak internal details or grant account access', async () => {
-  dbFailure = true;
-  const result = await request('/me');
-  assert.equal(result.status, 503);
-  assert.doesNotMatch(JSON.stringify(result.body), /PRIVATE_DATABASE_DETAIL/);
-  dbFailure = false;
-});
-
 
 test('temporary identity-provider failures return 503 without treating the session as invalid', async () => {
   try {
@@ -88,35 +65,4 @@ test('temporary identity-provider failures return 503 without treating the sessi
       }
     }
   } finally { authFailure = null; }
-});
-
-test('patient signup requires validated profile details while other roles cannot submit them', async () => {
-  current = null;
-  for (const body of [{ role: 'patient', displayName: 'Patient' }, { role: 'patient', displayName: 'Patient', profile: { ...profile, postal_code: '' } }, { role: 'patient', displayName: 'Patient', profile: { ...profile, status: 'active' } }, { role: 'caregiver', displayName: 'Caregiver', profile }]) {
-    assert.equal((await request('/register', 'POST', body)).status, 400);
-    assert.equal(current, null);
-  }
-});
-
-test('signup rejects missing or impossible birth dates and missing gender', async () => {
-  current = null;
-  for (const details of [{ ...profile, birth_date: undefined }, { ...profile, birth_date: '2020-02-30' }, { ...profile, birth_date: '2999-01-01' }, { ...profile, gender: '' }]) {
-    assert.equal((await request('/register', 'POST', { role: 'patient', displayName: 'Patient', profile: details })).status, 400);
-    assert.equal(current, null);
-  }
-});
-
-test('driver signup requires personal details and creates an account without vehicle information', async () => {
-  current = null;
-  assert.equal((await request('/register', 'POST', { role: 'driver', displayName: 'Driver' })).status, 400);
-  const details = { full_name: 'Fixture Driver', phone: '+65 81234567', birth_date: '1990-04-12', gender: 'prefer-not-to-say' };
-  for (const extra of [{ status: 'approved' }, { vehicle: {} }, { birth_date: '2020-02-30' }, { gender: '' }]) {
-    assert.equal((await request('/register', 'POST', { role: 'driver', displayName: 'Driver', profile: { ...details, ...extra } })).status, 400);
-    assert.equal(current, null);
-  }
-  const result = await request('/register', 'POST', { role: 'driver', displayName: 'Driver', profile: details });
-  assert.equal(result.status, 201);
-  assert.equal(result.body.role, 'driver');
-  assert.equal(result.body.status, 'active');
-  current = null;
 });

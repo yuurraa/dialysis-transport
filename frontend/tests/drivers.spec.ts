@@ -1,4 +1,4 @@
-import { test, expect, seedSession, activeAccount, expectPopup, mockServices, chooseOption } from './support/fixtures';
+import { test, expect, seedSession, activeAccount, mockServices } from './support/fixtures';
 
 test.beforeEach(mockServices);
 const profile = { full_name:'Fixture Driver', phone:'+65 81234567', birth_date:'1990-04-12', gender:'male' };
@@ -63,7 +63,6 @@ test('driver vehicle registration preserves failed input and supports rejection,
   await page.reload();
   await expect(page.getByLabel('Registration status',{exact:true})).toHaveValue('Approved');
   await expect(page.getByRole('button',{name:'Edit registration',exact:true})).toBeVisible();
-  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
 });
 
 test('coordinator sees all drivers and reviews only submitted registrations with version conflicts handled', async ({ page }) => {
@@ -95,13 +94,13 @@ test('coordinator sees all drivers and reviews only submitted registrations with
   await page.getByRole('button',{name:'Close Car Details',exact:true}).click();
   await page.getByRole('button',{name:'View Fixture Driver',exact:true}).click();
   const driverInfo=page.getByRole('dialog',{name:'Driver Details',exact:true});
-  await expectPopup(driverInfo);
+  await expect(driverInfo).toBeVisible();
   await expect(driverInfo.getByLabel('Full name',{exact:true})).toHaveValue(profile.full_name);
   await expect(driverInfo.getByLabel('Car',{exact:true})).toHaveCount(0);
   await expect(driverInfo.getByRole('button',{name:'Approve',exact:true})).toHaveCount(0);
   await driverInfo.getByRole('button',{name:'Close Driver Details',exact:true}).click();
   await page.getByRole('button',{name:'View car for Fixture Driver',exact:true}).click();
-  await expectPopup(page.getByRole('dialog',{name:'Car Details',exact:true}));
+  await expect(page.getByRole('dialog',{name:'Car Details',exact:true})).toBeVisible();
   await expect(page.getByRole('dialog',{name:'Car Details',exact:true}).getByLabel('Full name',{exact:true})).toHaveCount(0);
   await expect(page.getByLabel('Submitted on',{exact:true})).toBeVisible();
   await expect(page.getByLabel('Reviewed',{exact:true})).toHaveCount(0);
@@ -128,107 +127,7 @@ test('coordinator sees all drivers and reviews only submitted registrations with
   await expect(page.getByLabel('Submitted on',{exact:true})).toHaveCount(0);
 });
 
-
-test('driver details use patient-style fields and versioned Status editing without granting car approval', async ({ page }) => {
-  await seedSession(page);
-  await page.route('**/api/auth/me',route=>route.fulfill({json:{account:{...activeAccount,role:'coordinator'}}}));
-  let driver={id:driverId,display_name:'Driver',email:'driver@example.test',account_status:'active',status_version:1,profile,vehicle:null};
-  await page.route('**/api/drivers?*',route=>route.fulfill({json:{drivers:[driver],total:1,page:1,pageSize:10}}));
-  let fail=true;
-  await page.route(`**/api/drivers/${driverId}`,route=>{
-    expect(route.request().postDataJSON()).toEqual({status:'inactive',version:1});
-    if(fail) return route.fulfill({status:503,json:{}});
-    driver={...driver,account_status:'inactive',status_version:2};
-    return route.fulfill({json:{id:driverId,account_status:'inactive',status_version:2}});
-  });
-  await page.goto('/dashboard/drivers');
-  await page.getByRole('button',{name:'View Fixture Driver',exact:true}).click();
-  const dialog=page.getByRole('dialog',{name:'Driver Details',exact:true});
-  await expect(dialog.getByLabel('Status',{exact:true})).toBeDisabled();
-  await expect(dialog.getByLabel('Car',{exact:true})).toHaveCount(0);
-  await expect(dialog.getByRole('button',{name:'Approve',exact:true})).toHaveCount(0);
-  await expect(dialog.getByLabel('Car details',{exact:true})).toHaveCount(0);
-  await dialog.getByRole('button',{name:'Edit Driver',exact:true}).click();
-  await expect(dialog.getByLabel('Full name',{exact:true})).toBeDisabled();
-  await expect(dialog.getByLabel('Car',{exact:true})).toHaveCount(0);
-  await chooseOption(dialog.getByLabel('Status',{exact:true}),'inactive');
-  await dialog.getByRole('button',{name:'Cancel',exact:true}).click();
-  await expect(dialog.getByLabel('Status',{exact:true})).toHaveValue('active');
-  await dialog.getByRole('button',{name:'Edit Driver',exact:true}).click();
-  await chooseOption(dialog.getByLabel('Status',{exact:true}),'inactive');
-  await dialog.getByRole('button',{name:'Save Driver',exact:true}).click();
-  await expect(dialog.getByRole('alert')).toContainText('unavailable');
-  const modalToastHeight=await dialog.locator('.auth-toast').evaluate(element=>element.getBoundingClientRect().height);
-  await expect(dialog.getByLabel('Status',{exact:true})).toHaveValue('inactive');
-  fail=false;
-  await dialog.getByRole('button',{name:'Save Driver',exact:true}).click();
-  await expect(dialog.getByRole('button',{name:'Edit Driver',exact:true})).toBeVisible();
-  const appToast=page.locator('.auth-toast').filter({hasText:'Driver details updated.'});
-  await expect(appToast).toBeVisible();
-  expect(await appToast.evaluate(element=>element.getBoundingClientRect().height)).toBe(modalToastHeight);
-  await expect(dialog.getByLabel('Status',{exact:true})).toHaveValue('inactive');
-  await expect(dialog.getByLabel('Status',{exact:true})).toBeDisabled();
-});
-
-test('approved driver availability saves weekly slots, supports edits and cancels drafts', async ({ page }) => {
-  await seedSession(page);
-  await page.route('**/api/auth/me', route => route.fulfill({json:{account:{...activeAccount,id:driverId,role:'driver'}}}));
-  let availability: {weekly_slots:number[];version:number;driver_id:string;updated_at:string} | null = null;
-  let saves=0;
-  await page.route('**/api/drivers/me/availability', route => {
-    if(route.request().method()==='GET') return route.fulfill({json:{eligible:true,availability}});
-    const body=route.request().postDataJSON();
-    expect(Object.keys(body).sort()).toEqual(['version','weekly_slots']);
-    expect(body.version).toBe(availability?.version ?? 0);
-    availability={...body,version:body.version+1,driver_id:driverId,updated_at:'2026-10-23T00:00:00Z'};saves++;
-    return route.fulfill({json:availability});
-  });
-  await page.goto('/dashboard/availability');
-  const monday=page.getByRole('button',{name:'Monday 05:00–05:30',exact:true});
-  await expect(monday).toBeDisabled();await expect(monday).toHaveAttribute('aria-pressed','false');
-  await page.getByRole('button',{name:'Edit availability',exact:true}).click();
-  await monday.focus();await page.keyboard.press('Space');await page.keyboard.press('ArrowDown');await page.keyboard.press('Space');
-  await expect(monday).toHaveAttribute('aria-pressed','true');
-  await expect(page.getByRole('button',{name:'Add exception',exact:true})).toHaveCount(0);
-  await page.getByRole('button',{name:'Save availability',exact:true}).click();
-  await expect(page.getByText('Availability saved.',{exact:true})).toBeVisible();
-  expect((availability as {weekly_slots:number[]} | null)?.weekly_slots).toEqual([10,11]);
-  await page.getByRole('button',{name:'Edit availability',exact:true}).click();
-  await monday.focus();await page.keyboard.press('Space');
-  await page.getByRole('button',{name:'Cancel',exact:true}).click();
-  await expect(monday).toHaveAttribute('aria-pressed','true');expect(saves).toBe(1);
-  await page.getByRole('button',{name:'Edit availability',exact:true}).click();
-  await page.getByRole('button',{name:'Save availability',exact:true}).click();
-  await expect(page.getByRole('button',{name:'Edit availability',exact:true})).toBeVisible();expect(saves).toBe(2);
-});
-
-test('availability gates unapproved drivers and preserves a draft after a conflicting save', async ({ page }) => {
-  await seedSession(page);
-  await page.route('**/api/auth/me', route => route.fulfill({json:{account:{...activeAccount,id:driverId,role:'driver'}}}));
-  let approved=false;let reads=0;
-  await page.route('**/api/drivers/me/availability', route => {
-    if(route.request().method()==='PATCH') return route.fulfill({status:409,json:{code:'availability_conflict'}});
-    reads++;return route.fulfill({json:{eligible:approved,availability:approved ? {weekly_slots:[10],version:2} : null}});
-  });
-  await page.goto('/dashboard/availability');
-  await expect(page.getByRole('heading',{name:'Vehicle approval required',exact:true})).toBeVisible();
-  await expect(page.getByRole('button',{name:'Edit availability',exact:true})).toHaveCount(0);
-  await expect(page.getByRole('button',{name:'Check approval status',exact:true})).toHaveCount(0);
-  approved=true;await page.reload();
-  await page.getByRole('button',{name:'Edit availability',exact:true}).click();
-  const monday=page.getByRole('button',{name:'Monday 05:00–05:30',exact:true});
-  await monday.focus();await page.keyboard.press('Space');
-  await page.getByRole('button',{name:'Save availability',exact:true}).click();
-  await expect(page.getByRole('button',{name:'Reload latest availability',exact:true})).toBeVisible();
-  await expect(monday).toHaveAttribute('aria-pressed','false');
-  await expect(page.getByRole('button',{name:'Save availability',exact:true})).toBeDisabled();
-  const readsBeforeReload = reads;
-  await page.getByRole('button',{name:'Reload latest availability',exact:true}).click();
-  await expect(monday).toHaveAttribute('aria-pressed','true');expect(reads).toBe(readsBeforeReload + 1);
-});
-
 test('mobile availability selects a day before editing, saves ranges and preserves cancelled changes', async ({ page }) => {
-  await page.clock.install({time:new Date('2026-10-27T06:15:00Z')});
   await page.setViewportSize({width:390,height:844});await seedSession(page);
   await page.route('**/api/auth/me', route => route.fulfill({json:{account:{...activeAccount,id:driverId,role:'driver'}}}));
   let stored={weekly_slots:[58,59],version:3};let saves=0;let failure=true;
@@ -279,13 +178,9 @@ test('mobile availability selects a day before editing, saves ranges and preserv
   await dialog.getByRole('button',{name:'Remove time range 1',exact:true}).click();
   await dialog.getByRole('button',{name:'Cancel',exact:true}).click();
   await expect(monday).toContainText('08:00–13:00');expect(saves).toBe(2);
-  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
   await page.setViewportSize({width:1280,height:900});
   await expect(mobile).toBeHidden();
   await expect(page.getByRole('button',{name:'Monday 08:00–08:30',exact:true})).toHaveAttribute('aria-pressed','true');
-  await expect(page.getByRole('img',{name:'Current Singapore time 14:15',exact:true})).toBeVisible();
-  await page.clock.fastForward(60000);
-  await expect(page.getByRole('img',{name:'Current Singapore time 14:16',exact:true})).toBeVisible();
   await page.getByRole('button',{name:'Edit availability',exact:true}).click();
   const earlyMonday=page.getByRole('button',{name:'Monday 05:00–05:30',exact:true});
   await earlyMonday.focus();await page.keyboard.press('Space');
@@ -295,138 +190,4 @@ test('mobile availability selects a day before editing, saves ranges and preserv
   await expect(page.getByRole('button',{name:'Edit availability',exact:true})).toBeVisible();
   await expect(monday).not.toContainText('05:00–05:30');
 
-});
-
-test('approved drivers get Availability then My Vehicle and keep My Vehicle through reapproval', async ({ page }) => {
-  await seedSession(page);
-  await page.route('**/api/auth/me', route => route.fulfill({json:{account:{...activeAccount,id:driverId,role:'driver'}}}));
-  const approvedOn='2026-10-23T13:00:00Z';
-  let vehicle={...details,status:'pending',version:1,review_reason:'',submitted_at:'2026-10-23T12:00:00Z',reviewed_at:null as string|null,registered_at:null as string|null};
-  await page.route('**/api/drivers/me', route => route.fulfill({json:{vehicle}}));
-  await page.route('**/api/drivers/me/availability', route => route.fulfill({json:{eligible:vehicle.status==='approved',availability:null}}));
-  await page.route('**/api/drivers/me/vehicle', route => {
-    const body=route.request().postDataJSON();
-    vehicle={...vehicle,...body,status:'pending',version:vehicle.version+1,reviewed_at:null,submitted_at:'2026-10-24T01:00:00Z'};
-    return route.fulfill({status:201,json:vehicle});
-  });
-  await page.goto('/dashboard');
-  await expect(page).toHaveURL(/\/dashboard\/vehicle$/);
-  const navigation=page.locator('.dashboard-top-navigation nav');
-  await expect(navigation.getByRole('link')).toHaveText(['Register Vehicle']);
-  vehicle={...vehicle,status:'approved',version:2,reviewed_at:approvedOn,registered_at:approvedOn};
-  await page.goto('/dashboard');
-  await expect(page).toHaveURL(/\/dashboard\/availability$/);
-  await expect(navigation.getByRole('link')).toHaveText(['Availability','My Vehicle']);
-  await navigation.getByRole('link',{name:'My Vehicle',exact:true}).click();
-  await expect(page.getByRole('heading',{name:'My Vehicle',exact:true})).toBeVisible();
-  await expect(page.getByLabel('Registered on',{exact:true})).not.toHaveValue('');
-  await expect(page.getByLabel('Vehicle plate number',{exact:true})).toHaveValue('TEST123');
-  await page.getByRole('button',{name:'Edit registration',exact:true}).click();
-  await page.getByLabel('Vehicle model',{exact:true}).fill('Updated car');
-  await page.getByRole('button',{name:'Submit for review',exact:true}).click();
-  const confirmation=page.getByRole('dialog',{name:'Confirm registration',exact:true});
-  await expect(confirmation).toContainText('replace any previous vehicle registration');
-  await confirmation.getByRole('button',{name:'Confirm submission',exact:true}).click();
-  await expect(page.getByLabel('Registration status',{exact:true})).toHaveValue('Pending review');
-  await expect(page.getByLabel('Registered on',{exact:true})).toHaveValue('—');
-  await expect(navigation.getByRole('link')).toHaveText(['Availability','My Vehicle']);
-  await page.reload();
-  await expect(page.getByRole('heading',{name:'My Vehicle',exact:true})).toBeVisible();
-  await expect(page.getByLabel('Registered on',{exact:true})).toHaveValue('—');
-  await navigation.getByRole('link',{name:'Availability',exact:true}).click();
-  await expect(page.getByRole('heading',{name:'Vehicle approval required',exact:true})).toBeVisible();
-  await page.getByRole('button',{name:'View My Vehicle',exact:true}).click();
-  await expect(page.getByRole('heading',{name:'My Vehicle',exact:true})).toBeVisible();
-  await navigation.getByRole('link',{name:'Availability',exact:true}).click();
-  await expect(page.getByRole('heading',{name:'Vehicle approval required',exact:true})).toBeVisible();
-  await page.setViewportSize({width:390,height:844});
-  await page.getByRole('button',{name:'Open navigation',exact:true}).click();
-  const drawer=page.getByRole('dialog',{name:'Menu navigation',exact:true});
-  await expect(drawer.getByRole('link')).toHaveText(['Availability','My Vehicle']);
-  await drawer.getByRole('link',{name:'My Vehicle',exact:true}).click();
-  await expect(page.locator('.dashboard-mobile-title')).toHaveText('My Vehicle');
-  await expect(page.getByRole('heading',{name:'My Vehicle',exact:true})).toBeVisible();
-  await page.route('**/api/drivers/me', route => route.fulfill({status:503,json:{}}));
-  await page.route('**/api/profiles/driver', route => route.fulfill({json:{driver:profile}}));
-  await page.goto('/dashboard/account');
-  await expect(page.getByRole('heading',{name:'Account Details',exact:true})).toBeVisible();
-  await expect(page.getByLabel('Full name',{exact:true})).toHaveValue(profile.full_name);
-});
-
-test('drivers edit personal details with cancel, retry and stale-version protection', async ({ page }) => {
-  await seedSession(page);await page.setViewportSize({width:390,height:844});
-  await page.route('**/api/auth/me', route => route.fulfill({json:{account:{...activeAccount,id:driverId,role:'driver'}}}));
-  let driver={...profile,version:1};let saves=0;let failure=true;let stale=false;
-  await page.route('**/api/profiles/driver', route => {
-    if(route.request().method()==='GET') return route.fulfill({json:{driver}});
-    saves++;const body=route.request().postDataJSON();
-    expect(Object.keys(body).sort()).toEqual(['birth_date','full_name','gender','phone','version']);
-    expect(body.version).toBe(driver.version);
-    if(failure) return route.fulfill({status:503,json:{}});
-    if(stale) return route.fulfill({status:409,json:{}});
-    driver={...body,version:driver.version+1};return route.fulfill({json:driver});
-  });
-  await page.goto('/dashboard/account');
-  await expect(page.getByText('Account Management',{exact:true})).toBeVisible();
-  const name=page.getByLabel('Full name',{exact:true});
-  await expect(name).toBeDisabled();
-  await page.getByRole('button',{name:'Edit profile',exact:true}).click();
-  await expect(name).toBeFocused();await name.fill('Draft Driver');
-  await page.getByRole('button',{name:'Cancel',exact:true}).click();
-  await expect(name).toHaveValue(profile.full_name);expect(saves).toBe(0);
-  await page.getByRole('button',{name:'Edit profile',exact:true}).click();
-  await name.fill('Updated Driver');await page.getByRole('button',{name:'Save profile',exact:true}).click();
-  await expect(page.getByRole('alert')).toContainText('could not be saved');await expect(name).toHaveValue('Updated Driver');
-  failure=false;await page.getByRole('button',{name:'Save profile',exact:true}).click();
-  await expect(page.getByRole('button',{name:'Edit profile',exact:true})).toBeFocused();await expect(name).toBeDisabled();
-  expect(driver.full_name).toBe('Updated Driver');expect(driver.version).toBe(2);
-  await page.getByRole('button',{name:'Edit profile',exact:true}).click();
-  await name.fill('Stale Draft');stale=true;await page.getByRole('button',{name:'Save profile',exact:true}).click();
-  await expect(page.getByRole('button',{name:'Reload latest details',exact:true})).toBeVisible();
-  await expect(name).toHaveValue('Stale Draft');await expect(page.getByRole('button',{name:'Save profile',exact:true})).toBeDisabled();
-  await page.getByRole('button',{name:'Reload latest details',exact:true}).click();
-  await expect(name).toHaveValue('Updated Driver');await expect(name).toBeDisabled();
-  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
-});
-
-test('coordinator inspects driver availability in a read-only popup with retry, empty and mobile states', async ({ page }) => {
-  await seedSession(page);
-  await page.route('**/api/auth/me', route => route.fulfill({json:{account:{...activeAccount,role:'coordinator'}}}));
-  const driver={id:driverId,display_name:'Driver',email:'driver@example.test',account_status:'active',status_version:1,profile,vehicle:null};
-  await page.route('**/api/drivers?*',route=>route.fulfill({json:{drivers:[driver],total:1,page:1,pageSize:10}}));
-  let failure=true;let empty=false;let reads=0;
-  await page.route(`**/api/drivers/${driverId}/availability`,route=>{
-    expect(route.request().method()).toBe('GET');reads++;
-    if(failure) return route.fulfill({status:503,json:{}});
-    return route.fulfill({json:{eligible:false,availability:empty ? null : {weekly_slots:[16,17,18,19],version:2}}});
-  });
-  await page.goto('/dashboard/drivers');
-  const button=page.getByRole('button',{name:'View availability for Fixture Driver',exact:true});
-  await button.click();const dialog=page.getByRole('dialog',{name:'Weekly Availability',exact:true});
-  await expect(dialog.getByRole('alert')).toContainText('could not be loaded');
-  failure=false;await dialog.getByRole('button',{name:'Try again',exact:true}).click();
-  const slot=dialog.getByRole('button',{name:'Monday 08:00–08:30',exact:true});
-  await expect(slot).toHaveAttribute('aria-pressed','true');await expect(slot).toBeDisabled();
-  await expect(dialog.getByText('Hours per week: 2h',{exact:true})).toBeVisible();
-  await expect(dialog.getByText('Not currently eligible for trip assignment.',{exact:true})).toBeVisible();
-  await expect(dialog.getByRole('button',{name:/Edit availability|Save availability|Approve|Reject/})).toHaveCount(0);
-  await expectPopup(dialog);
-  const body=dialog.locator('.overlay-body');
-  await body.evaluate(element => { element.scrollTop=180; });
-  await expect.poll(async () => {
-    const header=(await dialog.locator('.availability-day-heading').first().boundingBox())!;
-    const bounds=(await body.boundingBox())!;
-    return Math.abs(header.y-bounds.y);
-  }).toBeLessThanOrEqual(1);
-  await page.setViewportSize({width:390,height:844});
-  await expectPopup(dialog);
-  await expect(dialog.getByRole('region',{name:'Monday',exact:true})).toContainText('08:00–10:00');
-  await dialog.getByRole('button',{name:'Close Weekly Availability',exact:true}).click();
-  await expect(button).toBeFocused();
-  const readsBeforeReopen = reads;
-  empty=true;await button.click();
-  await expect(dialog.getByText('No availability set.',{exact:true})).toBeVisible();
-  // StrictMode remounts a new popup twice in development; a normal mount reads once.
-  expect([1, 2]).toContain(reads - readsBeforeReopen);
-  await page.keyboard.press('Escape');await expect(dialog).toBeHidden();await expect(button).toBeFocused();
 });

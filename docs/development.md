@@ -31,11 +31,13 @@ On the Static Site, add a **Rewrite** from `/*` to `/index.html` so `/auth/callb
 
 ## Tests
 
+The shared budget is approximately 70 tests across frontend, backend and database, not 70 per layer. Current source counts are 16 + 15 + 20 = 51 (including the optional concurrency test); see the README for scope and allocation. Reserve the remaining budget for unimplemented features, and replace duplicate or low-value coverage before adding cases.
+
 Run `npm test` after installing dependencies. It runs:
 
 - Disposable PostgreSQL tests for SQL functions, RLS, role restrictions and database updates.
 - Backend HTTP tests for account requests and CORS, including actual backend startup.
-- Browser tests for Google callback handling, signup, role views, errors and sign-out.
+- A small browser suite for login/signup, editing, driver review/availability, trips and sign-out.
 
 Tests use fictional identities and do not connect to the hosted Supabase project. Real Google consent and Render configuration still need checking on the deployed app.
 
