@@ -1,11 +1,11 @@
 import DriverAvailabilityDialog, { type DriverCalendarSchedule } from '../components/DriverAvailabilityDialog';
-import { planningWindow, planningDateOffset } from '../lib/planningWindow';
+import { planningWindow } from '../lib/planningWindow';
 import { useEffect, useRef, useState } from 'react';
 import { ListError, Overlay, PageHeading } from '../components/DashboardUI';
 import { Toast, ToastRegion } from '../components/Toast';
 import { ApiError, apiRequest } from '../lib/api';
 
-import WeeklyAvailabilityView, { availabilityDays as days, availabilityTime as time, availabilityDayRanges as dayRanges, useAvailabilityClock, type TimeRange } from '../components/WeeklyAvailabilityView';
+import { availabilityDays as days, availabilityTime as time, availabilityDayRanges as dayRanges, useAvailabilityClock, type TimeRange } from '../components/WeeklyAvailabilityView';
 
 interface Availability { weekly_slots: number[]; version: number; template_version?: number }
 const weekLabel = (date:string) => new Intl.DateTimeFormat('en-SG',{day:'numeric',month:'short',year:'numeric',timeZone:'UTC'}).format(new Date(`${date}T00:00:00Z`));
@@ -114,8 +114,7 @@ export default function DriverAvailability({ notify, onSessionExpired, onViewVeh
         </section>
       : <div className={`patient-profile-form${editing ? ' patient-editing' : ''}`} aria-busy={saving}>
         <div className="panel-scroll availability-content">
-          <div hidden={editing}><DriverAvailabilityDialog inline own weekStart={week} onWeekChange={setWeek} refreshKey={reload} onLoad={receiveCalendar} onLoading={setLoading} onSessionExpired={onSessionExpired} /></div>
-          {editing && <><p className="availability-eligibility">Editing week: {weekLabel(editingWeek)} – {weekLabel(planningDateOffset(editingWeek,6))}</p><WeeklyAvailabilityView slots={draft.weekly_slots} clock={clock} editable={editable} onChange={slots => setDraft(current => ({ ...current, weekly_slots: slots }))} /></>}
+          <DriverAvailabilityDialog inline own weekStart={week} onWeekChange={setWeek} refreshKey={reload} onLoad={receiveCalendar} onLoading={setLoading} onSessionExpired={onSessionExpired} editor={editing ? { slots: draft.weekly_slots, editable, onChange: slots => setDraft(current => ({ ...current, weekly_slots: slots })) } : undefined} />
         </div>
         {eligible && <div className="patient-actions availability-mobile-actions">
           {editing && !rangeEditor ? <><button className="patient-primary" type="button" disabled={!editable} onClick={() => void save()}>{saving ? 'Saving…' : 'Save availability'}</button><button type="button" disabled={saving} onClick={cancelEditing}>Cancel</button></> : <button className="patient-primary" type="button" disabled={saving || !canStartEditing} onClick={() => { setEditingWeek(week); setError(''); setChosenDay(clock.day); setChoosingDay(true); }}>Edit availability</button>}

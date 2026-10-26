@@ -9,7 +9,8 @@ interface CalendarView { schedule: DriverCalendarSchedule; week: string; driverI
 const dateLabel = (value: string) => new Intl.DateTimeFormat('en-SG',{day:'numeric',month:'short',year:'numeric',timeZone:'UTC'}).format(new Date(`${value}T00:00:00Z`));
 const timestamp = (value: string) => new Intl.DateTimeFormat('en-SG',{dateStyle:'medium',timeStyle:'short',timeZone:'Asia/Singapore'}).format(new Date(value));
 /** Dated coordinator inspection overlays actual assignments onto recurring weekly availability. */
-export default function DriverAvailabilityDialog({ driverId, name = '', onClose = () => {}, onSessionExpired, own = false, inline = false, weekStart, onWeekChange, refreshKey = 0, onLoad, onLoading }: {
+export default function DriverAvailabilityDialog({ driverId, name = '', onClose = () => {}, onSessionExpired, own = false, inline = false, weekStart, onWeekChange, refreshKey = 0, onLoad, onLoading, editor }: {
+  editor?: { slots: number[]; editable: boolean; onChange: (slots: number[]) => void };
   driverId?: string; name?: string; onClose?: () => void; onSessionExpired: () => void; own?: boolean; inline?: boolean; weekStart?: string; onWeekChange?: (week:string) => void; refreshKey?: number; onLoad?: (schedule:DriverCalendarSchedule, week:string) => void; onLoading?: (loading:boolean) => void;
 }) {
   const ownerKey = own ? 'me' : driverId ?? '';
@@ -77,10 +78,10 @@ export default function DriverAvailabilityDialog({ driverId, name = '', onClose 
     return () => globalThis.window.clearTimeout(timer);
   }, [previous]);
   function calendar(value: CalendarView) {
-    return <>{!value.schedule.eligible && <p className="availability-eligibility" role="status">Not currently eligible for trip assignment.</p>}<WeeklyAvailabilityView slots={value.schedule.availability?.weekly_slots ?? []} clock={clock} weekStart={value.week} bookings={value.schedule.trips} onBooking={setSelected} onBookingGroup={setGroup} />{!value.schedule.availability && <p className="availability-unavailable">No recurring availability set.</p>}</>;
+    return <>{!value.schedule.eligible && <p className="availability-eligibility" role="status">Not currently eligible for trip assignment.</p>}<WeeklyAvailabilityView slots={editor?.slots ?? value.schedule.availability?.weekly_slots ?? []} editable={editor?.editable} onChange={editor?.onChange} clock={clock} weekStart={value.week} bookings={value.schedule.trips} onBooking={setSelected} onBookingGroup={setGroup} />{!value.schedule.availability && <p className="availability-unavailable">No recurring availability set.</p>}</>;
   }
   const calendarContent = <>
-      <div className="driver-calendar-toolbar"><div className="driver-calendar-week"><button className="list-tool-button" type="button" aria-label="Previous week" disabled={shownWeek <= horizon.weekStart} onClick={() => changeWeek(planningDateOffset(shownWeek,-7))}>‹</button><strong aria-live="polite">{dateLabel(current?.week ?? shownWeek)} – {dateLabel(planningDateOffset(current?.week ?? shownWeek,6))}</strong><button className="list-tool-button" type="button" aria-label="Next week" disabled={planningDateOffset(shownWeek,7) > horizon.end} onClick={() => changeWeek(planningDateOffset(shownWeek,7))}>›</button></div></div>
+      <div className={`driver-calendar-toolbar${editor ? ' availability-editor-toolbar' : ''}`}><div className="driver-calendar-week"><button className="list-tool-button" type="button" aria-label="Previous week" disabled={!!editor || shownWeek <= horizon.weekStart} onClick={() => changeWeek(planningDateOffset(shownWeek,-7))}>‹</button><strong aria-live="polite">{editor && 'Editing week: '}{dateLabel(current?.week ?? shownWeek)} – {dateLabel(planningDateOffset(current?.week ?? shownWeek,6))}</strong><button className="list-tool-button" type="button" aria-label="Next week" disabled={!!editor || planningDateOffset(shownWeek,7) > horizon.end} onClick={() => changeWeek(planningDateOffset(shownWeek,7))}>›</button></div></div>
         {error && <ListError title="Week could not be loaded" message="Please reload to view current assignments." onRetry={() => setRetry(value => value + 1)} />}
         {!current ? loading && <div className="account-loading patients-loading" role="status"><span className="account-spinner" aria-hidden="true" /><span>Loading...</span></div>
           : <div className="driver-calendar-viewport" style={{minHeight:size.height || undefined}} aria-busy={loading} data-slide={previous ? view.direction : undefined}>

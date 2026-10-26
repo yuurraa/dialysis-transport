@@ -55,6 +55,7 @@ export default function WeeklyAvailabilityView({ slots, clock, editable = false,
   const grid = useRef<HTMLDivElement>(null);
   const drag = useRef<{ start: number; base: Set<number>; available: boolean } | null>(null);
   function toggle(slot: number) {
+    if (booked.has(slot)) return;
     const next = new Set(selected);
     if (next.has(slot)) next.delete(slot); else next.add(slot);
     onChange?.([...next].sort((a, b) => a - b));
@@ -66,13 +67,14 @@ export default function WeeklyAvailabilityView({ slots, clock, editable = false,
     const next = new Set(state.base);
     for (let day = Math.min(Math.floor(state.start / 48), Math.floor(end / 48)); day <= Math.max(Math.floor(state.start / 48), Math.floor(end / 48)); day++) {
       for (let slot = Math.min(state.start % 48, end % 48); slot <= Math.max(state.start % 48, end % 48); slot++) {
+        if (booked.has(day * 48 + slot)) continue;
         if (state.available) next.add(day * 48 + slot); else next.delete(day * 48 + slot);
       }
     }
     onChange?.([...next].sort((a, b) => a - b));
   }
   function pointerDown(event: PointerEvent<HTMLButtonElement>, slot: number) {
-    if (!editable || event.pointerType !== 'mouse' || event.button !== 0) return;
+    if (booked.has(slot) || !editable || event.pointerType !== 'mouse' || event.button !== 0) return;
     event.preventDefault(); event.currentTarget.focus();
     drag.current = { start: slot, base: selected, available: !selected.has(slot) };
     grid.current?.setPointerCapture(event.pointerId); paint(slot);

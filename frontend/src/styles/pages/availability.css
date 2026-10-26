@@ -60,7 +60,7 @@
 }
 
 /* The live marker is visual only and never intercepts slot selection. */
-.availability-today .availability-day-heading { background: color-mix(in srgb, var(--ui-accent) 18%, var(--ui-surface)); color: var(--ui-text); font-weight: 700; gap: 6px; }
+.availability-today .availability-day-heading { background: color-mix(in srgb, var(--ui-accent) 18%, var(--ui-surface)); color: var(--ui-text); font-weight: 700; }
 .availability-now-marker { position: absolute; left: 68px; right: 0; height: 2px; transform: translateY(-1px); z-index: 2; pointer-events: none; }
 .availability-now-line { position: absolute; left: 0; right: 0; top: 0; border-top: 2px solid var(--ui-accent); }
 .availability-now-marker::before, .availability-now-marker::after { content: ''; position: absolute; top: -5px; border-top: 6px solid transparent; border-bottom: 6px solid transparent; }
@@ -132,3 +132,5 @@
   .driver-calendar-outgoing { display: none; }
 }
 .driver-calendar-inline .driver-calendar-toolbar { padding-top: 0; }
+
+.availability-editor-toolbar { padding-top: 0; min-height: 44px; }
