@@ -80,6 +80,11 @@ export async function expectHeaderContext(page: Page) {
 
 // API/Auth boundaries use fixtures; React runs unchanged and unexpected Auth traffic is denied.
 export async function mockServices({ page }: { page: Page }) {
+  await page.route('https://www.onemap.gov.sg/**', route => route.fulfill({ contentType: 'image/png', body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a7p8AAAAASUVORK5CYII=', 'base64') }));
+  await page.route('**/api/trips/*/traffic', route => route.fulfill({ status: 503, json: {} }));
+  await page.route('**/api/trips/*/progress', route => route.fulfill({ status: 503, json: {} }));
+  await page.route('**/api/trips/*/route', route => route.fulfill({ status: 503, json: { code: 'route_unavailable' } }));
+  await page.route('**/api/trips/notifications?*', route => route.fulfill({ json: { notifications: [], unread: 0, total: 0, page: 1, pageSize: 10 } }));
   await page.route('**/api/drivers/me', route => route.fulfill({ json: { vehicle: null } }));
   await page.route('**/api/trips?*', route => route.fulfill({ status: 503, json: {} }));
   await page.route('**/api/profiles/patient', route => route.fulfill({ json: { patient: { id: session.user.id, full_name: 'Test Patient', birth_date: '1990-04-12', gender: 'female', phone: '+65 81234567', pickup_address: 'Test street', unit_no: '', postal_code: '560123', notes: '', mobility: 'ambulant', assistance_required: false, status: 'active' } } }));

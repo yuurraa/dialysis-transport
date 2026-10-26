@@ -19,6 +19,7 @@ export async function apiRequest<T>(path: string, method: 'GET' | 'POST' | 'PATC
   try {
     const response = await fetch(`${origin}/api${path}`, {
       method,
+      cache: 'no-store',
       signal: controller.signal,
       headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
       body: body === undefined ? undefined : JSON.stringify(body),

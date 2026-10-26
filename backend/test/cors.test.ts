@@ -14,7 +14,7 @@ test('a frontend URL with a trailing slash still allows the browser origin on ac
   const port = address.port;
   await new Promise<void>(resolve => reservation.close(() => resolve()));
   const child = spawn(process.execPath, ['--import', 'tsx', fileURLToPath(new URL('../src/main.ts', import.meta.url))], {
-    env: { ...process.env, PORT: String(port), FRONTEND_ORIGIN: 'https://frontend.example.test/' },
+    env: { ...process.env, NODE_ENV: 'test', PORT: String(port), FRONTEND_ORIGIN: 'https://frontend.example.test/' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   let logs = '';

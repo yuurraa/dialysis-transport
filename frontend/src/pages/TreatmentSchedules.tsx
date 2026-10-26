@@ -1,3 +1,4 @@
+import { useDashboardViewState } from '../components/DashboardViewState';
 import { planningWindow } from '../lib/planningWindow';
 import TreatmentChangeDialog, { type TreatmentChangeRequest } from '../components/TreatmentChangeDialog';
 import { Dropdown } from '../components/Dropdown';
@@ -46,7 +47,6 @@ export default function TreatmentSchedules({ coordinator, notify, onSessionExpir
   const [viewingSchedule, setViewingSchedule] = useState<Schedule | null>(null);
   const [changingSchedule, setChangingSchedule] = useState<Schedule | null>(null);
   const [reload, setReload] = useState(0);
-  const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [generatingSchedule, setGeneratingSchedule] = useState<Schedule | null>(null);
   const [generationDates, setGenerationDates] = useState({ from: '', until: '' });
@@ -56,7 +56,8 @@ export default function TreatmentSchedules({ coordinator, notify, onSessionExpir
   const [generationError, setGenerationError] = useState('');
   const [generationConflict, setGenerationConflict] = useState(false);
   const [autoGenerationDraft, setAutoGenerationDraft] = useState(false);
-  const [filters, setFilters] = useState({ page: 1, search: '', kind: 'all', centre: 'all', sort: 'effective_from', order: 'asc' });
+  const [filters, setFilters] = useDashboardViewState('schedules',{ page: 1, search: '', kind: 'all', centre: 'all', sort: 'effective_from', order: 'asc' });
+  const [search, setSearch] = useState(filters.search);
   const [sorting, setSorting] = useState(false);
   const [filterDraft, setFilterDraft] = useState<{ kind: string; centre: string } | null>(null);
   useEffect(() => {
@@ -264,7 +265,7 @@ export default function TreatmentSchedules({ coordinator, notify, onSessionExpir
     {draft && !coordinator && <Overlay title={confirmingCreate ? 'Confirm treatment schedule' : 'Add Schedule'} className={confirmingCreate ? 'schedule-create-confirmation' : undefined} description={confirmingCreate ? 'Double-check your details before creating this schedule.' : undefined} onClose={close} onSubmit={save} busy={saving} noValidate error={error} onDismissError={() => setError('')}
       footer={<><button className="patient-primary" type="submit" disabled={saving}>{saving ? 'Creating…' : 'Create Schedule'}</button><button type="button" disabled={saving} onClick={confirmingCreate ? () => { setConfirmingCreate(false); setError(''); } : close}>{confirmingCreate ? 'Back' : 'Cancel'}</button></>}>
       {confirmingCreate ? <>
-        <p className="schedule-create-warning">Once created, any changes, rescheduling or deletion require coordinator approval, whether or not trips have been generated.</p>
+        <p className="schedule-create-warning">Once created, any changes, rescheduling or deletion require coordinator approval.</p>
         <dl className="schedule-detail-fields">
           <div><dt>Schedule</dt><dd>{draft.kind === 'single' ? 'Single Session' : `Every ${draft.days.map(day => weekdays[day - 1]).join(', ')}`}</dd></div>
           <div><dt>{draft.kind === 'single' ? 'Session date' : 'Date range'}</dt><dd>{draft.kind === 'single' ? formatDate(draft.effective_from) : `${formatDate(draft.effective_from)} – ${formatDate(draft.effective_to)}`}</dd></div>

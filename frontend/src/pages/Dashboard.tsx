@@ -1,3 +1,5 @@
+import TripNotifications from '../components/TripNotifications';
+import { DashboardViewStateProvider } from '../components/DashboardViewState';
 import { ApiError, apiGet } from '../lib/api';
 import { ListError, PageHeading } from '../components/DashboardUI';
 import ThemeControl from '../components/ThemeControl';
@@ -67,6 +69,8 @@ export default function Dashboard({ account, avatarUrl, path, onNavigate, onSign
       if (menuButton.current?.getClientRects().length) menuButton.current.focus();
     };
   }, [drawerVisible]);
+  const [unreadNotifications, setUnreadNotifications] = useState(0);
+  useEffect(() => setUnreadNotifications(0), [account.id, account.role]);
   const [dropdown, setDropdown] = useState<'account' | 'notifications' | null>(null);
   const [avatarFailed, setAvatarFailed] = useState(false);
   const headerActions = useRef<HTMLDivElement>(null);
@@ -118,7 +122,8 @@ export default function Dashboard({ account, avatarUrl, path, onNavigate, onSign
     return () => { active = false; };
   }, [driver, account.id, driverReload, vehicleChanged, onSessionExpired]);
 
-  const driverTripsPage = driver && path === '/dashboard/trips';
+  const tripDetailsId=path.match(/^\/dashboard\/trips\/([0-9a-f-]{36})$/i)?.[1]?.toLowerCase();
+  const driverTripsPage = driver && (path === '/dashboard/trips'||!!tripDetailsId);
   const availabilityPage = driver && path === '/dashboard/availability';
   const driversPage = account.role === 'coordinator' && path === '/dashboard/drivers';
   const home = '/dashboard/trips';
@@ -149,13 +154,13 @@ export default function Dashboard({ account, avatarUrl, path, onNavigate, onSign
       {driverRegistered !== null && <>
       {driverRegistered && <a href="/dashboard/availability" onClick={event => follow(event, '/dashboard/availability')} aria-current={availabilityPage ? 'page' : undefined}>Availability</a>}
       <a href="/dashboard/vehicle" onClick={event => follow(event, '/dashboard/vehicle')} aria-current={path === '/dashboard/vehicle' ? 'page' : undefined}>{driverRegistered ? 'My Vehicle' : 'Register Vehicle'}</a></>}
-    </> : <a href="/dashboard/trips" onClick={event => follow(event, '/dashboard/trips')} aria-current={path === '/dashboard/trips' ? 'page' : undefined}>Trips</a>}
+    </> : <a href="/dashboard/trips" onClick={event => follow(event, '/dashboard/trips')} aria-current={path === '/dashboard/trips'||tripDetailsId ? 'page' : undefined}>Trips</a>}
     {['patient', 'coordinator'].includes(account.role) && <a href="/dashboard/schedules" onClick={event => follow(event, '/dashboard/schedules')} aria-current={schedulesPage ? 'page' : undefined}>Schedules</a>}
     {account.role === 'coordinator' && <a href="/dashboard/patients" onClick={event => follow(event, '/dashboard/patients')} aria-current={patientsPage ? 'page' : undefined}>Patients</a>}
     {account.role === 'coordinator' && <a href="/dashboard/drivers" onClick={event => follow(event, '/dashboard/drivers')} aria-current={driversPage ? 'page' : undefined}>Drivers</a>}
   </nav>;
 
-  return <div className="dashboard-page">
+  return <DashboardViewStateProvider><div className="dashboard-page">
     <a className="dashboard-skip" href="#dashboard-main">Skip to content</a>
     <header className="dashboard-header">
       <div className="dashboard-header-inner">
@@ -167,21 +172,21 @@ export default function Dashboard({ account, avatarUrl, path, onNavigate, onSign
           <button className="dashboard-menu-toggle" ref={menuButton} type="button" aria-label="Open navigation" aria-haspopup="dialog" aria-expanded={menuOpen} aria-controls="dashboard-drawer" onClick={() => { setMenuOpen(true); setDropdown(null); }}>
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" /></svg>
           </button>
-          <span className="dashboard-mobile-mark" aria-label="Dialysis Transport">DT</span><span className="dashboard-mobile-title">{accountPage ? 'My Account' : driverTripsPage ? 'Trips' : driversPage ? 'Drivers' : availabilityPage ? 'Availability' : driver ? driverRegistered ? 'My Vehicle' : 'Register Vehicle' : patientsPage ? 'Patients' : schedulesPage ? 'Schedules' : 'Trips'}</span>
+          <span className="dashboard-mobile-mark" aria-label="Dialysis Transport">DT</span><span className="dashboard-mobile-title">{tripDetailsId?'Trip details':accountPage ? 'My Account' : driverTripsPage ? 'Trips' : driversPage ? 'Drivers' : availabilityPage ? 'Availability' : driver ? driverRegistered ? 'My Vehicle' : 'Register Vehicle' : patientsPage ? 'Patients' : schedulesPage ? 'Schedules' : 'Trips'}</span>
         </div>
         <div className="dashboard-account-actions" ref={headerActions}>
           <time className="dashboard-header-clock" dateTime={now.toISOString()} aria-label={`${date}, ${time} Singapore time`}><span className="dashboard-date-full">{date}</span><span className="dashboard-date-compact" aria-hidden="true">{compactDate}</span><span className="dashboard-clock">{time}</span></time>
           <ThemeControl />
           <button className="dashboard-icon-button" ref={notificationsButton} type="button" aria-label="Notifications" aria-expanded={dropdown === 'notifications'} aria-controls="dashboard-notifications" onClick={() => toggleDropdown('notifications')}>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4" /></svg>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4" /></svg>{unreadNotifications > 0 && <span className="notification-unread-dot" aria-label={`${unreadNotifications} unread notifications`} />}
           </button>
           <button className="dashboard-icon-button" ref={accountButton} type="button" aria-label="Account" aria-expanded={dropdown === 'account'} aria-controls="dashboard-account-menu" onClick={() => toggleDropdown('account')}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9" /><circle cx="12" cy="9" r="3" /><path d="M6 19a6 6 0 0 1 12 0" /></svg>
           </button>
-          {dropdown === 'notifications' && <section className="dashboard-dropdown" id="dashboard-notifications" aria-label="Notifications">
-            <h2>Notifications</h2>
-            <p className="dashboard-notification-status">Notifications are currently unavailable.</p>
+          {account.role !== 'caregiver' && <section className="dashboard-dropdown dashboard-notifications" id="dashboard-notifications" aria-label="Notifications" style={{display: dropdown === 'notifications' ? undefined : 'none'}}>
+            <TripNotifications key={account.id} open={dropdown === 'notifications'} onUnread={setUnreadNotifications} onError={notify} onSessionExpired={onSessionExpired} onOpenTrip={trip=>{setDropdown(null);notificationsButton.current?.focus();onNavigate(`/dashboard/trips/${trip.id}`);}} />
           </section>}
+          {account.role === 'caregiver' && dropdown === 'notifications' && <section className="dashboard-dropdown dashboard-notifications" id="dashboard-notifications" aria-label="Notifications"><h2>Notifications</h2><p className="dashboard-notification-status">Patient notifications will be available after caregiver linking is enabled.</p></section>}
           {dropdown === 'account' && <section className="dashboard-dropdown" id="dashboard-account-menu" aria-label="Account">
             <div className="dashboard-profile">
               <span className="dashboard-profile-avatar" aria-hidden="true">{avatarUrl?.startsWith('https://') && !avatarFailed
@@ -200,12 +205,12 @@ export default function Dashboard({ account, avatarUrl, path, onNavigate, onSign
 
     <div className="dashboard-workspace">
     <main className="dashboard-main" id="dashboard-main" tabIndex={-1}>
-      {driver && !accountPage && !driverTripsPage && driverLoadError ? <section className="dashboard-trips patients-panel page-panel"><ListError title="Driver dashboard could not be loaded" message="Your vehicle registration could not be loaded. Please try again." onRetry={() => setDriverReload(value => value + 1)} /></section> : driver && !accountPage && !driverTripsPage && driverRegistered === null ? <div className="account-loading patients-loading" role="status"><span className="account-spinner" aria-hidden="true" /><span>Loading...</span></div> : driversPage ? <DriversPage notify={notify} onSessionExpired={onSessionExpired} /> : availabilityPage ? <DriverAvailability notify={notify} onSessionExpired={onSessionExpired} vehicleRegistered={Boolean(driverRegistered)} onViewVehicle={() => onNavigate('/dashboard/vehicle')} /> : driverTripsPage ? <TripsPage coordinator={false} driver onSessionExpired={onSessionExpired} /> : driver && !accountPage ? <div className="patient-account-profile"><DriverRegistration notify={notify} onSessionExpired={onSessionExpired} registered={Boolean(driverRegistered)} onVehicleChange={vehicleChanged} /></div> : schedulesPage ? <TreatmentSchedules coordinator={account.role === 'coordinator'} notify={notify} onSessionExpired={onSessionExpired} /> : patientsPage ? <PatientsPage notify={notify} onSessionExpired={onSessionExpired} /> : accountPage && account.role === 'driver' ? <div className="patient-account-profile"><DriverProfile notify={notify} onSessionExpired={onSessionExpired} /></div> : accountPage ? <>{!patient && <section className="dashboard-trips" aria-labelledby={account.role === 'coordinator' ? 'account-details-title' : 'role-profile-title'}><PageHeading id={account.role === 'coordinator' ? 'account-details-title' : 'role-profile-title'} title="Account Details" eyebrow="Account Management" description={<span className="profile-id">{roleNames[account.role]} ID: {account.id}</span>} />{account.role === 'coordinator' && <fieldset className="patient-form-fields coordinator-account-fields" disabled aria-label="Coordinator account details">
+      {driver && !accountPage && !driverTripsPage && driverLoadError ? <section className="dashboard-trips patients-panel page-panel"><ListError title="Driver dashboard could not be loaded" message="Your vehicle registration could not be loaded. Please try again." onRetry={() => setDriverReload(value => value + 1)} /></section> : driver && !accountPage && !driverTripsPage && driverRegistered === null ? <div className="account-loading patients-loading" role="status"><span className="account-spinner" aria-hidden="true" /><span>Loading...</span></div> : driversPage ? <DriversPage notify={notify} onSessionExpired={onSessionExpired} /> : availabilityPage ? <DriverAvailability notify={notify} onSessionExpired={onSessionExpired} vehicleRegistered={Boolean(driverRegistered)} onViewVehicle={() => onNavigate('/dashboard/vehicle')} /> : driverTripsPage ? <TripsPage coordinator={false} driver tripId={tripDetailsId} onNavigate={onNavigate} onSessionExpired={onSessionExpired} /> : driver && !accountPage ? <div className="patient-account-profile"><DriverRegistration notify={notify} onSessionExpired={onSessionExpired} registered={Boolean(driverRegistered)} onVehicleChange={vehicleChanged} /></div> : schedulesPage ? <TreatmentSchedules coordinator={account.role === 'coordinator'} notify={notify} onSessionExpired={onSessionExpired} /> : patientsPage ? <PatientsPage notify={notify} onSessionExpired={onSessionExpired} /> : accountPage && account.role === 'driver' ? <div className="patient-account-profile"><DriverProfile notify={notify} onSessionExpired={onSessionExpired} /></div> : accountPage ? <>{!patient && <section className="dashboard-trips" aria-labelledby={account.role === 'coordinator' ? 'account-details-title' : 'role-profile-title'}><PageHeading id={account.role === 'coordinator' ? 'account-details-title' : 'role-profile-title'} title="Account Details" eyebrow="Account Management" description={<span className="profile-id">{roleNames[account.role]} ID: {account.id}</span>} />{account.role === 'coordinator' && <fieldset className="patient-form-fields coordinator-account-fields" disabled aria-label="Coordinator account details">
         <div className="patient-field"><label htmlFor="coordinator-username">Username</label><input id="coordinator-username" value={account.display_name} readOnly autoComplete="username" /></div>
         <div className="patient-field"><label htmlFor="coordinator-email">Email</label><input id="coordinator-email" type="email" value={account.email} readOnly autoComplete="email" /></div>
         <div className="patient-field"><label htmlFor="coordinator-role">Role</label><input id="coordinator-role" value={roleNames[account.role]} readOnly /></div>
         <div className="patient-field"><label htmlFor="coordinator-status">Status</label><input id="coordinator-status" value={account.status === 'active' ? 'Active' : 'Inactive'} readOnly /></div>
-      </fieldset>}</section>}{patient && <div className="patient-account-profile"><PatientProfile notify={notify} onSessionExpired={onSessionExpired} onProfileResolved={profileResolved} /></div>}</> : ['coordinator', 'patient'].includes(account.role) ? <TripsPage coordinator={account.role === 'coordinator'} onSessionExpired={onSessionExpired} /> : <div className="patient-home">
+      </fieldset>}</section>}{patient && <div className="patient-account-profile"><PatientProfile notify={notify} onSessionExpired={onSessionExpired} onProfileResolved={profileResolved} /></div>}</> : ['coordinator', 'patient'].includes(account.role) ? <TripsPage coordinator={account.role === 'coordinator'} tripId={tripDetailsId} onNavigate={onNavigate} onSessionExpired={onSessionExpired} /> : <div className="patient-home">
         <div className="patient-overview-top">
           <section className="dashboard-trips patient-next-pickup trip-next-summary" aria-labelledby="patient-pickup-title">
             <h2 id="patient-pickup-title">Next pickup</h2>
@@ -245,5 +250,5 @@ export default function Dashboard({ account, avatarUrl, path, onNavigate, onSign
       <p className="dashboard-eyebrow">Menu</p>
       {navigation}
     </dialog>
-  </div>;
+  </div></DashboardViewStateProvider>;
 }

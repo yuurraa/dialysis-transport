@@ -42,7 +42,7 @@ Sign-in uses Google through Supabase Auth; enable the Google provider and apply 
 
 ## Testing scope
 
-The entire suite has a shared ceiling of approximately **70 tests**, including future features. The current source declares **59 tests**: **19 frontend, 17 backend and 23 database**, including the optional local PostgreSQL concurrency test. This leaves 11 cases for remaining implementation. Counts include every parameterized variant and optional test; do not hide cases in giant combined tests to meet the limit.
+The entire suite has a shared ceiling of approximately **70 tests**, including future features. The current source declares **69 tests**: **19 frontend, 20 backend and 30 database**, including the optional local PostgreSQL concurrency test. This leaves 1 case for remaining implementation. Counts include every parameterized variant and optional test; do not hide cases in giant combined tests to meet the limit.
 
 Keep each concern at its strongest layer: frontend for a few real user workflows; backend for HTTP/session boundaries, request validation and error mapping; database for RLS, atomic updates, uniqueness, deletion/restoration and concurrency. Before adding a test, remove or replace lower-value overlap. Cosmetic changes do not warrant a new case.
 
@@ -53,15 +53,16 @@ Keep each concern at its strongest layer: frontend for a few real user workflows
 | Frontend `dashboard.spec.ts` | 1 | Mobile navigation and focus/dismissal |
 | Frontend `patients.spec.ts` | 1 | Coordinator patient editing |
 | Frontend `account.spec.ts` | 1 | Patient profile editing and cancellation |
-| Frontend `schedules.spec.ts` | 4 | Creation confirmation, protected schedules, change-request decisions and auto-generation settings |
+| Frontend `schedules.spec.ts` | 3 | Creation confirmation, protected schedules, change-request decisions and auto-generation settings |
 | Frontend `drivers.spec.ts` | 4 | Vehicle submission/review, availability editing and dated coordinator calendar |
-| Frontend `trips.spec.ts` | 4 | Patient journey details, assignment across roles, generation recovery and bulk deletion |
+| Frontend `trips.spec.ts` | 5 | Patient journey details, assignment across roles, generation recovery, bulk deletion, patient pickup actions and explicit driver execution/tracking |
 | Backend `accounts.test.ts` | 3 | Verified identities, signup privileges and provider failures |
 | Backend `patients.test.ts` | 3 | Role access, coordinator field restrictions and owned profiles |
 | Backend `drivers.test.ts` | 3 | Role access, vehicle review and availability validation |
 | Backend `treatments.test.ts` | 7 | Treatment validation/access, change requests, assignment validation and trip-generation permissions |
+| Backend `routing.test.ts` | 3 | OneMap validation/token handling, LTA complete-feed caching/deadlines and directional route-traffic matching |
 | Backend `cors.test.ts` | 1 | Actual startup and browser-origin CORS |
-| Database `accounts.test.mjs` | 23 | Storage permissions, assignment eligibility/ownership, atomic approvals, reconciliation and concurrency |
+| Database `accounts.test.mjs` | 30 | Storage permissions, assignment eligibility/ownership, atomic approvals, reconciliation, recipient-only notifications/history, disruption reporting, route feasibility, active-trip location scope, trusted traffic-risk persistence, recovery approval and concurrency |
 
 `support/fixtures.ts` holds shared synthetic session data, existing interaction helpers and explicit API/Auth mocks. Feature-specific responses stay in the specs. Browser tests exercise React and its requests against mocked services; they do not establish server authorisation or database integrity.
 
@@ -69,7 +70,9 @@ Detailed input/date validation and role restrictions belong in `backend/test/`. 
 
 Cosmetic-only changes do not need new frontend tests. Keep browser coverage short and focused on user workflows; avoid pixel measurements, animation internals, DOM-identity checks and repeated assertions already covered by another feature test.
 
-Tests are run manually by the user. Agents may update tests but must not execute them without an explicit request. The TypeScript check is static and does not run browser tests.
+Tests run only on an explicit user request. Agents may update tests, but implementation or review requests alone do not authorise execution. The TypeScript check is static and does not run browser tests.
+
+The latest requested combined run passed **68 tests**, with the optional local PostgreSQL concurrency case skipped. Both production builds passed. See [verified checkpoint and remaining setup](docs/development.md#verified-stopping-point) for scope, limitations and the routing/traffic values still needed.
 
 ## Project structure
 
@@ -84,5 +87,5 @@ docs/      Setup, deployment and requirements reference
 
 - [Development and deployment](docs/development.md)
 - [Authentication](docs/authentication.md)
-- [Use-case coverage](docs/use-case-map.md)
+- [Use-case coverage and ordered implementation priorities](docs/use-case-map.md)
 - [Integrations and responsive design](docs/apis-and-responsive-design.md)

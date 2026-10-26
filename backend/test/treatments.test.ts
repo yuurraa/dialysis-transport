@@ -1,3 +1,4 @@
+import type { TripRoutingService } from '../src/trips/trip-routing.service';
 import 'reflect-metadata';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -33,7 +34,7 @@ test('trip generation permits only bounded versioned coordinator commands and ma
   const calls:unknown[]=[];let code:string|undefined;
   const service=new TripsService(
     {verifyIdentity:async()=>({account:{role:'coordinator',status:'active'}})} as unknown as AuthService,
-    {forUser:()=>({rpc:async(...args:unknown[])=>{calls.push(args);return {data:{created:2,updated:0,unchanged:0,total:2},error:code?{code}:null};}})} as unknown as SupabaseService);
+    {forUser:()=>({rpc:async(...args:unknown[])=>{calls.push(args);return {data:{created:2,updated:0,unchanged:0,total:2},error:code?{code}:null};}})} as unknown as SupabaseService, { prepare: async () => undefined } as unknown as TripRoutingService);
   const body={schedule_id:details.centre_id,from_date:'2026-10-21',until_date:'2026-10-21',version:1};
   for(const invalid of [null,{}, {...body,schedule_id:'bad'}, {...body,version:0},{...body,version:1.5},{...body,version:2147483648},{...body,patient_id:'other'},{...body,from_date:'2026-10-20'},{...body,until_date:'2027-01-19'},{...body,until_date:'2026-10-20'},{...body,until_date:'2026-02-30'}]) await assert.rejects(service.generateTrips('Bearer fixture',invalid),error=>(error as {status:number}).status===400);
   assert.equal(calls.length,0);
@@ -59,7 +60,7 @@ test('trip HTTP routes authenticate and map list filters and generation bodies i
   const calls:unknown[]=[];
   const service=new TripsService(
     {verifyIdentity:async(token:string)=>{assert.equal(token,'fixture');return {account:{role:'coordinator',status:'active'}};}} as unknown as AuthService,
-    {forUser:()=>({rpc:async(...args:unknown[])=>{calls.push(args);return {data:{created:2,total:2},error:null};}})} as unknown as SupabaseService);
+    {forUser:()=>({rpc:async(...args:unknown[])=>{calls.push(args);return {data:{created:2,total:2},error:null};}})} as unknown as SupabaseService, { prepare: async () => undefined } as unknown as TripRoutingService);
   @Module({controllers:[TripsController],providers:[{provide:TripsService,useValue:service}]}) class TestModule {}
   const app=await NestFactory.create(TestModule,{logger:false});
   app.setGlobalPrefix('api');await app.listen(0,'127.0.0.1');
@@ -114,12 +115,12 @@ test('schedule-change requests and decisions enforce roles, strict proposals and
   code = '40001'; await assert.rejects(service.reviewChange('Bearer fixture', id, { decision: 'approved', version: 1 }), /changed/);
 });
 
-test('assignment endpoints enforce coordinator writes and validate identifiers, pickup instants and versions', async () => {
+test('trip commands enforce role boundaries and validate identifiers, pickup instants and versions', async () => {
   let role='coordinator'; let code:string|undefined;
   const calls:Array<[string,Record<string,unknown>]> = [];
   const service=new TripsService(
     {verifyIdentity:async()=>({account:{role,status:'active'}})} as unknown as AuthService,
-    {forUser:()=>({rpc:async(name:string,args:Record<string,unknown>)=>{calls.push([name,args]);return {data:{id:details.centre_id},error:code?{code}:null};}})} as unknown as SupabaseService);
+    {forUser:()=>({rpc:async(name:string,args:Record<string,unknown>)=>{calls.push([name,args]);return {data:{id:details.centre_id},error:code?{code}:null};}})} as unknown as SupabaseService, { prepare: async () => undefined } as unknown as TripRoutingService);
   const id=details.centre_id;
   const pickup=new Date(Math.ceil((Date.now()+86400000)/60000)*60000).toISOString();
   const body={driver_id:id,pickup_at:pickup,version:1};
@@ -131,4 +132,31 @@ test('assignment endpoints enforce coordinator writes and validate identifiers, 
   assert.deepEqual(calls,[['trip_assignment_options',{target:id,starts:pickup}],['assign_trip',{target:id,driver:id,starts:pickup,expected_version:1}],['unassign_trip',{target:id,expected_version:2}]]);
   code='40001';await assert.rejects(service.assignTrip('Bearer fixture',id,body),/changed/);
   role='driver';code=undefined;await service.listTrips('Bearer fixture');assert.equal(calls.at(-1)?.[0],'list_trips');
+  for (const other of ['driver','coordinator','caregiver']) {
+    role=other;
+    await assert.rejects(service.confirmTrip('Bearer fixture',id,{version:1}),/access denied/);
+    await assert.rejects(service.cancelTrip('Bearer fixture',id,{version:1}),/access denied/);
+  }
+  role='patient';
+  await assert.rejects(service.confirmTrip(undefined,id,{version:1}),/Sign-in/);
+  for (const input of [null,{}, {version:0},{version:1.5},{version:2147483648},{version:1,patient_id:id}]) {
+    await assert.rejects(service.confirmTrip('Bearer fixture',id,input));
+    await assert.rejects(service.cancelTrip('Bearer fixture',id,input));
+  }
+  await service.confirmTrip('Bearer fixture',id,{version:3});await service.cancelTrip('Bearer fixture',id,{version:4});
+  assert.deepEqual(calls.slice(-2),[['confirm_trip',{target:id,expected_version:3}],['cancel_trip',{target:id,expected_version:4}]]);
+  code='40001';await assert.rejects(service.cancelTrip('Bearer fixture',id,{version:4}),/changed/);
+  code=undefined;
+  for(const other of ['patient','coordinator','caregiver']) {role=other;await assert.rejects(service.reportUnavailability('Bearer fixture',id,{version:4}),/access denied/);}
+  role='driver';await service.reportUnavailability('Bearer fixture',id,{version:5});
+  assert.deepEqual(calls.at(-1),['report_driver_unavailability',{target:id,expected_version:5}]);
+  for(const other of ['patient','coordinator','caregiver']){role=other;await assert.rejects(service.executeTrip('Bearer fixture',id,{version:1},'start'),/access denied/);await assert.rejects(service.beginSharing('Bearer fixture',id,{}),/access denied/);}
+  role='driver';await service.executeTrip('Bearer fixture',id,{version:6},'start');
+  assert.deepEqual(calls.at(-1),['execute_trip',{target:id,expected_version:6,action:'start'}]);
+  for(const body of [null,{}, {sharing_id:id,latitude:91,longitude:103.8,accuracy_metres:10,recorded_at:new Date().toISOString()},{sharing_id:id,latitude:1.3,longitude:103.8,accuracy_metres:-1,recorded_at:new Date().toISOString()}])await assert.rejects(service.updateLocation('Bearer fixture',id,body));
+  await service.clearLocation('Bearer fixture',id,{sharing_id:id});
+  assert.deepEqual(calls.at(-1),['clear_trip_location',{target:id,session_id:id}]);
+
+
+
 });

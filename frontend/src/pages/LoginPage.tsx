@@ -54,7 +54,8 @@ export default function LoginPage() {
     if (dashboardAccess && account?.role === 'patient' && path === '/dashboard/profile') { navigate('/dashboard/account', true); return; }
     const home = '/dashboard/trips';
     const allowed = [home, '/dashboard/account', ...(account?.role === 'driver' ? ['/dashboard/trips', '/dashboard/availability', '/dashboard/vehicle'] : []), ...(['patient', 'coordinator'].includes(account?.role ?? '') ? ['/dashboard/schedules'] : []), ...(account?.role === 'coordinator' ? ['/dashboard/patients', '/dashboard/drivers'] : [])];
-    if (dashboardAccess && !allowed.includes(path)) navigate(home, true);
+    const tripDetails=['patient','coordinator','driver'].includes(account?.role??'')&&/^\/dashboard\/trips\/[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(path);
+    if (dashboardAccess && !allowed.includes(path) && !tripDetails) navigate(home, true);
     else if (path.startsWith('/dashboard') && (!user || (resolvedAccount?.userId === user.id && !dashboardAccess))) navigate('/', true);
   }, [checking, dashboardAccess, account?.role, path, user?.id, resolvedAccount, navigate]);
 

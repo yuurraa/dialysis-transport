@@ -7,4 +7,6 @@ export interface AssignmentInput { tripId: string; driverId: string; vehicleId: 
 /** WGS84 decimal degrees; OneMap expects latitude,longitude in this order. */
 export interface Coordinates { latitude: number; longitude: number }
 export interface LocationInput extends Coordinates { recordedAt: string; accuracyMetres?: number }
-// TODO: Agree lifecycle, risk and confirmation states before adding status types.
+// Journey progress and patient acknowledgement are separate from operational risk.
+export type TripLifecycle = 'scheduled' | 'in-progress' | 'completed' | 'cancelled';
+export type TripOperationalStatus = 'unfilled' | 'on-track' | 'at-risk' | 'resolved';

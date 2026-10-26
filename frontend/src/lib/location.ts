@@ -20,21 +20,29 @@ export function watchDriverLocation(
   }
 
   let stopped = false;
-  const watchId = navigator.geolocation.watchPosition(
-    position => {
-      if (stopped || document.visibilityState !== 'visible') return;
-      onLocation({
-        latitude: position.coords.latitude,
-        longitude: position.coords.longitude,
-        accuracyMetres: position.coords.accuracy,
-        recordedAt: new Date(position.timestamp).toISOString(),
-      });
-    },
-    error => {
-      if (!stopped) onError(error.code === 1 ? 'Location permission was denied.' : 'Your location is temporarily unavailable.');
-    },
-    { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 },
-  );
+  let watchId: number;
+  try {
+    watchId = navigator.geolocation.watchPosition(
+      position => {
+        if (stopped || document.visibilityState !== 'visible') return;
+        if (![position.coords.latitude, position.coords.longitude, position.coords.accuracy, position.timestamp].every(Number.isFinite)) { onError('Your location is temporarily unavailable.'); return; }
+        onLocation({
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+          accuracyMetres: position.coords.accuracy,
+          recordedAt: new Date(position.timestamp).toISOString(),
+        });
+      },
+      error => {
+        if (!stopped) onError(error.code === 1 ? 'Location permission was denied.' : 'Your location is temporarily unavailable.');
+      },
+      { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 },
+    );
+  } catch {
+    stopped = true;
+    onError('Location sharing is unavailable in this browser.');
+    return () => {};
+  }
 
   return () => {
     stopped = true;

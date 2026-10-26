@@ -1,3 +1,4 @@
+import { useDashboardViewState } from '../components/DashboardViewState';
 import { InfoButton, Overlay, PageHeading, ListToolbar, ListPagination, ChoiceGroup, SortOverlay, ListError, sortSummary } from '../components/DashboardUI';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { PersonalFields } from '../components/PersonalFields';
@@ -31,11 +32,11 @@ export const mobilityLabels = { ambulant: 'Ambulant', 'walking-aid': 'Walking ai
 
 /** UC-02: operational patient records; this form never creates or approves a login account. */
 export default function PatientsPage({ notify, onSessionExpired }: { notify: (message: string) => void; onSessionExpired: () => void }) {
-  const [filters, setFilters] = useState<{ page: number; search: string; sort: PatientSort; direction: 'asc' | 'desc'; status: string; mobility: string }>({ page: 1, search: '', sort: 'created_at', direction: 'desc', status: 'all', mobility: 'all' });
+  const [filters, setFilters] = useDashboardViewState<{ page: number; search: string; sort: PatientSort; direction: 'asc' | 'desc'; status: string; mobility: string }>('patients',{ page: 1, search: '', sort: 'created_at', direction: 'desc', status: 'all', mobility: 'all' });
   const { page, search, sort, direction, status, mobility } = filters;
   const [filterDraft, setFilterDraft] = useState<{ status: string; mobility: string } | null>(null);
   const [sorting, setSorting] = useState(false);
-  const [searchText, setSearchText] = useState('');
+  const [searchText, setSearchText] = useState(filters.search);
   useEffect(() => {
     const timer = window.setTimeout(() => setFilters(current => current.search === searchText.trim() ? current : { ...current, page: 1, search: searchText.trim() }), 300);
     return () => window.clearTimeout(timer);

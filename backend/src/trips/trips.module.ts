@@ -1,7 +1,10 @@
 import { Module } from '@nestjs/common';
 import { TripsController } from './trips.controller';
 import { TripsService } from './trips.service';
+import { TripRoutingService } from './trip-routing.service';
+import { TrafficMonitorService } from './traffic-monitor.service';
+import { IntegrationsModule } from '../integrations/integrations.module';
 import { AuthModule } from '../auth/auth.module';
 
-@Module({ imports: [AuthModule], controllers: [TripsController], providers: [TripsService], exports: [TripsService] })
+@Module({ imports: [AuthModule, IntegrationsModule], controllers: [TripsController], providers: [TripsService, TripRoutingService, TrafficMonitorService], exports: [TripsService] })
 export class TripsModule {}

@@ -93,11 +93,11 @@ export default function DriverAvailabilityDialog({ driverId, name = '', onClose 
   return <>
     {inline ? <div className="driver-calendar-inline">{calendarContent}</div> : <Overlay title="Driver calendar" className="driver-availability-dialog" description={name} onClose={onClose}>{calendarContent}</Overlay>}
     {group && <Overlay title="Assigned trips" description={name} onClose={() => setGroup(null)}>
-      <ul className="driver-calendar-trip-choices">{group.map(trip => <li key={trip.id}><button type="button" onClick={() => setSelected(trip)}><strong>{trip.patient_name} · {trip.direction === 'outbound' ? 'Outbound' : 'Return'}</strong><span>{timestamp(trip.pickup_at)} – {timestamp(trip.dropoff_at)}</span></button></li>)}</ul>
+      <ul className="driver-calendar-trip-choices">{group.map(trip => <li key={trip.id}><button type="button" onClick={() => setSelected(trip)}><strong>{trip.patient_name} · {trip.kind === 'transfer' ? 'Travel to pickup' : trip.direction === 'outbound' ? 'Outbound' : 'Return'}</strong><span>{timestamp(trip.pickup_at)} – {timestamp(trip.dropoff_at)}</span></button></li>)}</ul>
     </Overlay>}
-    {selected && <Overlay title="Assigned trip" className="trip-details-dialog" description={name} onClose={() => setSelected(null)}>
-      <h3>{selected.patient_name} · {selected.direction === 'outbound' ? 'Outbound' : 'Return'}</h3>
-      <dl className="schedule-detail-fields"><div><dt>Pickup</dt><dd>{timestamp(selected.pickup_at)}</dd></div><div><dt>Arrival</dt><dd>{timestamp(selected.dropoff_at)}</dd></div><div><dt>From</dt><dd>{selected.origin}</dd></div><div><dt>To</dt><dd>{selected.destination}</dd></div><div><dt>Status</dt><dd>{selected.status === 'at-risk' ? 'At-Risk' : 'On-Track'}</dd></div></dl>
+    {selected && <Overlay title={selected.kind === 'transfer' ? 'Travel to pickup' : 'Assigned trip'} className="trip-details-dialog" description={name} onClose={() => setSelected(null)}>
+      <h3>{selected.patient_name} · {selected.kind === 'transfer' ? 'Travel to pickup' : selected.direction === 'outbound' ? 'Outbound' : 'Return'}</h3>
+      <dl className="schedule-detail-fields"><div><dt>Pickup</dt><dd>{timestamp(selected.pickup_at)}</dd></div><div><dt>{selected.kind === 'transfer' ? 'Pickup ready' : selected.lifecycle === 'in-progress' ? 'Estimated arrival' : 'Arrival'}</dt><dd>{timestamp(selected.dropoff_at)}</dd></div><div><dt>From</dt><dd>{selected.origin}</dd></div><div><dt>To</dt><dd>{selected.destination}</dd></div><div><dt>Status</dt><dd>{selected.lifecycle === 'completed' ? 'Completed' : selected.lifecycle === 'in-progress' ? selected.status === 'at-risk' ? 'In progress · At-Risk' : 'In progress' : selected.status === 'at-risk' ? 'At-Risk' : 'On-Track'}</dd></div></dl>
     </Overlay>}
   </>;
 }

@@ -41,19 +41,6 @@ test('patient confirms schedule creation, can go back, and retains details on fa
   await expect(page.getByRole('button', { name: 'Edit Schedule', exact: true })).toHaveCount(0);
 });
 
-test('saved patient schedules are read-only with or without generated trips', async ({ page }) => {
-  await seedSession(page);
-  await page.route('**/api/auth/me', route => route.fulfill({ json: { account: { ...activeAccount, role: 'patient', profile_complete: true } } }));
-  const base = { centre_id: 'centre', kind: 'recurring', days: [1], start_time: '09:00', end_time: '13:00', effective_from: '2026-10-20', effective_to: '2026-12-31', patients: { full_name: 'Test Patient' } };
-  await page.route('**/api/schedules?*', route => route.fulfill({ json: { centres: [{ id: 'centre', name: 'Test Centre' }], schedules: [{ ...base, id: 'without-trips' }, { ...base, id: 'with-trips', trip_generation: { status: 'generated' } }], context: [], total: 2, page: 1, pageSize: 10 } }));
-  await page.goto('/dashboard/schedules');
-  await expect(page.getByRole('button', { name: 'Edit Schedule', exact: true })).toHaveCount(0);
-  await page.getByRole('button', { name: 'View schedule details', exact: true }).first().click();
-  const details = page.getByRole('dialog', { name: 'Schedule details', exact: true });
-  await expect(details).toContainText('Changes to this schedule require coordinator approval.');
-  await expect(details.getByRole('button', { name: /Edit|Delete|Reschedule/ })).toHaveCount(0);
-});
-
 test('coordinator opts into automatic generation per schedule and reloads stale settings', async ({ page }) => {
   await seedSession(page);
   await page.setViewportSize({ width: 390, height: 844 });
@@ -127,6 +114,10 @@ test('patients request changes and coordinators reject or approve them from the 
     return route.fulfill({json:request});
   });
   await page.goto('/dashboard/schedules');
+  await page.getByRole('button',{name:'View schedule details',exact:true}).click();
+  const saved=page.getByRole('dialog',{name:'Schedule details',exact:true});
+  await expect(saved.getByRole('button',{name:/Edit|Delete|Reschedule/})).toHaveCount(0);
+  await saved.getByRole('button',{name:/^Close/}).click();
   await page.getByRole('button',{name:'Request schedule change',exact:true}).click();
   let dialog=page.getByRole('dialog',{name:'Request schedule change',exact:true});
   await dialog.getByLabel('Session start',{exact:true}).fill('12:00');

@@ -1,3 +1,4 @@
+import { useDashboardViewState } from '../components/DashboardViewState';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import DriverAvailabilityDialog from '../components/DriverAvailabilityDialog';
 import { ApiError, apiGet, apiRequest } from '../lib/api';
@@ -16,9 +17,9 @@ const driverSortOptions = [{ value: 'created_at', label: 'Created date', ascendi
 const reviewDate = (value: string) => new Intl.DateTimeFormat('en-SG', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Singapore' }).format(new Date(value));
 
 export default function DriversPage({ notify, onSessionExpired }: { notify: (message: string) => void; onSessionExpired: () => void }) {
-  const [filters, setFilters] = useState<{ page: number; search: string; status: string; sort: DriverSort; direction: 'asc' | 'desc' }>({ page: 1, search: '', status: 'all', sort: 'created_at', direction: 'desc' });
+  const [filters, setFilters] = useDashboardViewState<{ page: number; search: string; status: string; sort: DriverSort; direction: 'asc' | 'desc' }>('drivers',{ page: 1, search: '', status: 'all', sort: 'created_at', direction: 'desc' });
   const [sorting, setSorting] = useState(false);
-  const [search, setSearch] = useState('');
+  const [search, setSearch] = useState(filters.search);
   const [filterDraft, setFilterDraft] = useState<string | null>(null);
   const [list, setList] = useState<DriverList | null>(null);
   const [loading, setLoading] = useState(true);

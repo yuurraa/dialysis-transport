@@ -184,7 +184,7 @@ test('mobile availability selects a day before editing, saves ranges and preserv
   await expect(mobile).toBeHidden();
   await expect(page.getByRole('button',{name:/^Monday .*08:00–08:30$/})).toHaveAttribute('aria-pressed','true');
   await page.getByRole('button',{name:'Edit availability',exact:true}).click();
-  const earlyMonday=page.getByRole('button',{name:'Monday 05:00–05:30',exact:true});
+  const earlyMonday=page.getByRole('button',{name:/^Monday .* 05:00–05:30$/});
   await earlyMonday.focus();await page.keyboard.press('Space');
   await page.setViewportSize({width:390,height:844});
   await expect(page.getByRole('button',{name:'Save availability',exact:true})).toBeVisible();

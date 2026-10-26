@@ -1,18 +1,19 @@
 import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, NotFoundException, NotImplementedException, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
+import { TripRoutingService } from './trip-routing.service';
 import { AuthService } from '../auth/auth.service';
 import { SupabaseService } from '../supabase.module';
-import type { PatientScope, LocationInput } from '../types';
+import type { PatientScope } from '../types';
 
 /** UC-04, UC-05, UC-05.1 and UC-09 to UC-12: operations, recovery and patient actions. */
 @Injectable()
 export class TripsService {
-  constructor(@Inject(AuthService) private readonly auth: AuthService, @Inject(SupabaseService) private readonly database: SupabaseService) {}
+  constructor(@Inject(AuthService) private readonly auth: AuthService, @Inject(SupabaseService) private readonly database: SupabaseService, @Inject(TripRoutingService) private readonly routes: TripRoutingService) {}
 
-  private async access(header?: string, write = false) {
+  private async access(header?: string, write = false, roles?: string[]) {
     const token = header?.match(/^Bearer (\S+)$/i)?.[1];
     if (!token) throw new UnauthorizedException('Sign-in required.');
     const { account } = await this.auth.verifyIdentity(token);
-    if (!account || account.status !== 'active' || !(write ? ['coordinator'] : ['patient', 'coordinator', 'driver']).includes(account.role)) {
+    if (!account || account.status !== 'active' || !(roles ?? (write ? ['coordinator'] : ['patient', 'coordinator', 'driver'])).includes(account.role)) {
       throw new ForbiddenException('Trip access denied.');
     }
     return this.database.forUser(token);
@@ -48,17 +49,17 @@ export class TripsService {
   }
 
   /** Database pagination and patient ownership checks run before returning trip records. */
-  async listTrips(header?: string, page = '1', from = this.today(), until?: string, status = 'all', search = '', direction = 'all', sort = 'treatment_start', order = 'asc') {
+  async listTrips(header?: string, page = '1', from = this.today(), until?: string, status = 'unfilled,at-risk,on-track', search = '', direction = 'all', sort = 'treatment_start', order = 'asc') {
     const client = await this.access(header);
     const start = this.date(from);
     const end = until === undefined || until === '' ? null : this.date(until);
     if (end !== null && end < start) throw new BadRequestException('End date cannot be before start date.');
     const statuses = typeof status === 'string' ? status.split(',') : [];
     if (typeof page !== 'string' || !/^\d+$/.test(page) || !Number.isSafeInteger(Number(page)) || Number(page) < 1 || Number(page) > 1000000
-      || typeof status !== 'string' || statuses.length > 4 || (status !== 'all' && statuses.some(value => !['unfilled', 'at-risk', 'on-track', 'resolved'].includes(value)))
+      || typeof status !== 'string' || statuses.length > 8 || (status !== 'all' && statuses.some(value => !['unfilled', 'at-risk', 'on-track', 'resolved', 'cancelled', 'upcoming', 'in-progress', 'completed'].includes(value)))
       || typeof search !== 'string' || search.length > 100 || /[\u0000-\u001f\u007f]/.test(search)
       || typeof direction !== 'string' || (direction !== 'all' && (direction.split(',').length > 2 || direction.split(',').some(value => !['outbound', 'return'].includes(value))))
-      || !['treatment_start', 'patient_name', 'direction', 'status'].includes(sort) || !['asc', 'desc'].includes(order)) throw new BadRequestException('Invalid trip filters.');
+      || !['treatment_start', 'pickup_time', 'patient_name', 'direction', 'status'].includes(sort) || !['asc', 'desc'].includes(order)) throw new BadRequestException('Invalid trip filters.');
     const result = await client.rpc('list_trips', { page_no: Number(page), from_date: from, until_date: end === null ? null : until, status_filter: status, search_text: search.trim(), direction_filter: direction, sort_by: sort, sort_order: order });
     this.check(result.error);
     return result.data;
@@ -105,6 +106,7 @@ export class TripsService {
   async assignmentOptions(header: string | undefined, id: string, pickupAt: unknown) {
     const client = await this.access(header, true);
     this.assignmentId(id); this.pickup(pickupAt, false);
+    await this.routes.prepare(client, id, pickupAt);
     const result = await client.rpc('trip_assignment_options', { target: id, starts: pickupAt });
     this.check(result.error, 'Trip');
     return result.data;
@@ -117,6 +119,7 @@ export class TripsService {
     const input = body as Record<string, unknown>;
     this.assignmentId(input.driver_id); this.pickup(input.pickup_at);
     if (!Number.isSafeInteger(input.version) || (input.version as number)<1 || (input.version as number)>2147483647) throw new BadRequestException('A valid trip version is required.');
+    await this.routes.prepare(client, id, input.pickup_at, input.version as number);
     const result = await client.rpc('assign_trip', { target: id, driver: input.driver_id, starts: input.pickup_at, expected_version: input.version });
     this.check(result.error, 'Trip');
     return result.data;
@@ -133,16 +136,97 @@ export class TripsService {
     return result.data;
   }
 
-  /** Persist authorised patient or linked-caregiver confirmation. */
-  async confirmTrip(scope: PatientScope, tripId: string): Promise<unknown> {
-    // TODO: Implement using Supabase and database constraints.
-    throw new NotImplementedException('confirmTrip is awaiting implementation.');
+  async tripRoute(header: string | undefined, id: string) {
+    const client = await this.access(header);
+    this.assignmentId(id);
+    return this.routes.view(client, id);
   }
 
-  /** Check pickup time and lifecycle; atomically cancel, release capacity and log history; propose reuse for coordinator approval and schedule calendar removal. */
-  async cancelTrip(scope: PatientScope, tripId: string): Promise<unknown> {
-    // TODO: Implement using Supabase and database constraints.
-    throw new NotImplementedException('cancelTrip is awaiting implementation.');
+  /** Current record for stale-overlay recovery; the caller's JWT retains row-level scope. */
+  async getTrip(header: string | undefined, id: string) {
+    const client = await this.access(header);
+    this.assignmentId(id);
+    const result = await client.from('trips').select('*').eq('id', id).is('deleted_at', null).maybeSingle();
+    this.check(result.error, 'Trip');
+    if (!result.data) throw new NotFoundException('Trip not found.');
+    return result.data;
+  }
+
+  private async tripAction(header: string | undefined, id: string, body: unknown, action: 'confirm' | 'cancel' | 'unavailable' | 'start' | 'complete') {
+    const execution = action === 'start' || action === 'complete';
+    const client = await this.access(header, false, [action === 'unavailable' || execution ? 'driver' : 'patient']);
+    this.assignmentId(id);
+    if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some(key => key !== 'version')) throw new BadRequestException('Invalid trip action.');
+    const version = (body as Record<string, unknown>).version;
+    if (!Number.isSafeInteger(version) || (version as number) < 1 || (version as number) > 2147483647) throw new BadRequestException('A valid trip version is required.');
+    const result = await client.rpc(execution ? 'execute_trip' : action === 'unavailable' ? 'report_driver_unavailability' : `${action}_trip`, { target: id, expected_version: version, ...(execution ? { action } : {}) });
+    this.check(result.error, 'Trip');
+    return result.data;
+  }
+
+  /** Confirmation acknowledges current transport details without changing journey progress. */
+  confirmTrip(header: string | undefined, id: string, body: unknown) {
+    return this.tripAction(header, id, body, 'confirm');
+  }
+
+  /** Cancel one upcoming owned journey; the database releases capacity and records history atomically. */
+  cancelTrip(header: string | undefined, id: string, body: unknown) {
+    return this.tripAction(header, id, body, 'cancel');
+  }
+
+  /** A report retains capacity until the coordinator explicitly resolves the disruption. */
+  reportUnavailability(header: string | undefined, id: string, body: unknown) {
+    return this.tripAction(header, id, body, 'unavailable');
+  }
+
+  executeTrip(header: string | undefined, id: string, body: unknown, action: 'start' | 'complete') {
+    return this.tripAction(header, id, body, action);
+  }
+
+  async progress(header: string | undefined, id: string) {
+    const client = await this.access(header);
+    this.assignmentId(id);
+    const result = await client.rpc('trip_progress', { target: id });
+    this.check(result.error, 'Trip');
+    return result.data;
+  }
+
+  async beginSharing(header: string | undefined, id: string, body: unknown) {
+    const client = await this.access(header, false, ['driver']);
+    this.assignmentId(id);
+    if (body !== undefined && (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).length)) throw new BadRequestException('Invalid sharing action.');
+    const result = await client.rpc('begin_trip_sharing', { target: id });
+    this.check(result.error, 'Trip');
+    return result.data;
+  }
+
+  private locationInput(body: unknown, clearing = false) {
+    if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some(key => !(clearing ? ['sharing_id'] : ['sharing_id','latitude','longitude','accuracy_metres','recorded_at']).includes(key))) throw new BadRequestException('Invalid location.');
+    const input = body as Record<string,unknown>;
+    this.assignmentId(input.sharing_id);
+    if (!clearing && (typeof input.latitude !== 'number' || !Number.isFinite(input.latitude) || input.latitude < -90 || input.latitude > 90
+      || typeof input.longitude !== 'number' || !Number.isFinite(input.longitude) || input.longitude < -180 || input.longitude > 180
+      || typeof input.accuracy_metres !== 'number' || !Number.isFinite(input.accuracy_metres) || input.accuracy_metres < 0 || input.accuracy_metres > 10000
+      || typeof input.recorded_at !== 'string' || !Number.isFinite(Date.parse(input.recorded_at)))) throw new BadRequestException('Invalid location.');
+    return input;
+  }
+
+  async updateLocation(header: string | undefined, id: string, body: unknown) {
+    const client = await this.access(header, false, ['driver']);
+    this.assignmentId(id);
+    const input = this.locationInput(body);
+    const result = await client.rpc('report_trip_location', { target: id, session_id: input.sharing_id, latitude: input.latitude, longitude: input.longitude, accuracy_metres: input.accuracy_metres, recorded_at: input.recorded_at });
+    this.check(result.error, 'Trip');
+    return { ok: true };
+  }
+
+  async clearLocation(header: string | undefined, id: string, body: unknown) {
+    const client = await this.access(header, false, ['driver']);
+    this.assignmentId(id);
+    const input = this.locationInput(body, true);
+    const result = await client.rpc('clear_trip_location', { target: id, session_id: input.sharing_id });
+    this.check(result.error, 'Trip');
+    return { ok: true };
   }
 
   /** Generate/rank feasible pickup, route or resource options within ten seconds; escalate no-option cases as Unfilled-Critical. */
@@ -151,11 +235,11 @@ export class TripsService {
     throw new NotImplementedException('assessRecovery is awaiting implementation.');
   }
 
-  /** UC-08: combine baseline driving geometry with route-relevant traffic and treatment buffer. */
-  async assessRoute(scope: PatientScope, tripId: string): Promise<unknown> {
-    // TODO: Call OneMap/LTA under one five-second deadline, using a fresh cached traffic snapshot.
-    // Recalculate ETA in application logic and flag buffer violations; label stale data clearly.
-    throw new NotImplementedException('assessRoute is awaiting implementation.');
+  /** Access is verified before route/traffic provider calls; database reads retain caller RLS. */
+  async assessRoute(header:string|undefined,id:string) {
+    const client=await this.access(header);
+    this.assignmentId(id);
+    return this.routes.traffic(client,id);
   }
 
   /** Require coordinator approval and fresh feasibility; atomically apply changes and history before notifications. */
@@ -164,16 +248,42 @@ export class TripsService {
     throw new NotImplementedException('approveRecovery is awaiting implementation.');
   }
 
-  /** Require assigned active driver; stop authorised sharing at completion/cancellation. */
-  async reportLocation(scope: PatientScope, tripId: string, location: LocationInput): Promise<unknown> {
-    // TODO: Implement using Supabase and database constraints.
-    throw new NotImplementedException('reportLocation is awaiting implementation.');
+  private page(value: string) {
+    if (typeof value !== 'string' || !/^[1-9]\d*$/.test(value) || !Number.isSafeInteger(Number(value)) || Number(value)>1000000) throw new BadRequestException('Invalid page.');
+    return Number(value);
   }
 
-  /** Return authorised durable trip events and actor/time details. */
-  async getHistory(scope: PatientScope, tripId: string): Promise<unknown> {
-    // TODO: Implement using Supabase and database constraints.
-    throw new NotImplementedException('getHistory is awaiting implementation.');
+  /** Current access is rechecked on every history read, including after unassignment. */
+  async getHistory(header: string | undefined, id: string, page = '1') {
+    const client = await this.access(header);
+    this.assignmentId(id);
+    const result = await client.rpc('trip_history_page', { target: id, page_no: this.page(page) });
+    this.check(result.error, 'Trip');
+    return result.data;
+  }
+
+  async listNotifications(header: string | undefined, page = '1') {
+    const client = await this.access(header);
+    const result = await client.rpc('list_trip_notifications', { page_no: this.page(page) });
+    this.check(result.error, 'Notification');
+    return result.data;
+  }
+
+  async readAllNotifications(header:string|undefined,body:unknown) {
+    const client=await this.access(header);
+    if(body!==undefined&&(!body||typeof body!=='object'||Array.isArray(body)||Object.keys(body).length))throw new BadRequestException('Invalid notification action.');
+    const result=await client.rpc('read_all_trip_notifications');
+    this.check(result.error,'Notification');
+    return result.data;
+  }
+
+  async readNotification(header: string | undefined, id: string, body: unknown) {
+    const client = await this.access(header);
+    this.assignmentId(id);
+    if (body !== undefined && (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).length)) throw new BadRequestException('Invalid notification action.');
+    const result = await client.rpc('read_trip_notification', { target: id });
+    this.check(result.error, 'Notification');
+    return result.data;
   }
 
   /** Require patient identity and their completed trip with the rated driver. */
@@ -187,11 +297,4 @@ export class TripsService {
     // TODO: Implement using Supabase and database constraints.
     throw new NotImplementedException('setDriverPreference is awaiting implementation.');
   }
-
-  /** After approved changes, notify only affected authorised recipients and record delivery state. */
-  async notifyAffectedUsers(tripId: string): Promise<unknown> {
-    // TODO: Implement using Supabase and database constraints.
-    throw new NotImplementedException('notifyAffectedUsers is awaiting implementation.');
-  }
-
 }

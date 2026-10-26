@@ -1,5 +1,6 @@
 /* Stylesheet entry point. Ownership and cascade notes: ./styles/README.md */
 @import "tailwindcss";
+@import "leaflet/dist/leaflet.css";
 @import "./styles/tokens.css";
 @import "./styles/base.css";
 @import "./styles/components/controls.css";

@@ -9,7 +9,7 @@ interface DriverOption {
 }
 interface Options { trip: Trip; duration_minutes: number; drivers: DriverOption[] }
 const localPickup = (trip: Trip) => {
-  const instant = trip.pickup_at ?? (trip.direction === 'outbound' ? new Date(Date.parse(trip.arrival_by!) - 30 * 60000).toISOString() : trip.pickup_not_before!);
+  const instant = trip.pickup_at ?? (trip.direction === 'outbound' ? new Date(Date.parse(trip.arrival_by!) - (trip.duration_minutes ?? 30) * 60000).toISOString() : trip.pickup_not_before!);
   return new Date(Date.parse(instant) + 8 * 3600000).toISOString().slice(0,16);
 };
 const pickupInstant = (value: string) => {
@@ -32,6 +32,7 @@ export default function TripAssignmentDialog({ trip, onClose, onChanged, onSessi
   const [conflict, setConflict] = useState(false);
   const alive = useRef(false);
   const requestSequence = useRef(0);
+  const pickupTouched = useRef(false);
   useEffect(() => { alive.current = true; return () => { alive.current = false; requestSequence.current++; }; }, [trip.id]);
   useEffect(() => {
     if (!pickupInstant(pickup)) { setLoading(false); return; }
@@ -43,6 +44,8 @@ export default function TripAssignmentDialog({ trip, onClose, onChanged, onSessi
     if (reason instanceof ApiError && reason.status === 401) onSessionExpired();
     if (reason instanceof ApiError && [404,409].includes(reason.status)) {
       setConflict(true); setError('This trip or driver availability changed. Reload before trying again.');
+    } else if (reason instanceof ApiError && ['routing_unconfigured','route_unavailable','route_address_unresolved'].includes(reason.code ?? '')) {
+      setError(reason.code === 'route_address_unresolved' ? 'A route address could not be located. Check the patient and centre address.' : 'Route planning is unavailable. Please retry once routing is configured and available.');
     } else setError(reason instanceof ApiError && reason.status === 400 ? 'Choose an upcoming pickup time that meets the treatment requirements.' : 'Assignment details could not be saved or loaded. Please try again.');
   }
   async function findDrivers(value = pickup, resetPickup = false) {
@@ -54,7 +57,7 @@ export default function TripAssignmentDialog({ trip, onClose, onChanged, onSessi
       const result = await apiGet<Options>(`/trips/${trip.id}/assignment-options?${new URLSearchParams({ pickup_at: instant })}`);
       if (!alive.current || sequence !== requestSequence.current) return;
       setCurrent(result.trip); setConflict(false);
-      if (resetPickup) {
+      if (resetPickup || !pickupTouched.current) {
         const latest = localPickup(result.trip);
         setPickup(latest);
         if (latest !== value) { setOptions(null); return; }
@@ -82,7 +85,7 @@ export default function TripAssignmentDialog({ trip, onClose, onChanged, onSessi
       : <button className="patient-primary" type="submit" disabled={busy || loading || !selected || pickup !== loadedPickup}>{busy ? 'Saving…' : 'Assign driver'}</button>}<button type="button" disabled={busy} onClick={onClose}>Close</button></>}>
     <dl className="schedule-detail-fields"><div><dt>From</dt><dd>{current.origin}</dd></div><div><dt>To</dt><dd>{current.destination}</dd></div><div><dt>{current.direction === 'outbound' ? 'Arrive by' : 'Earliest pickup'}</dt><dd>{new Intl.DateTimeFormat('en-SG',{dateStyle:'medium',timeStyle:'short',timeZone:'Asia/Singapore'}).format(new Date((current.arrival_by ?? current.pickup_not_before)!))}</dd></div></dl>
     {assigned ? <><dl className="trip-detail-timings"><div><dt>Driver</dt><dd>{current.assignment?.driver_name}</dd></div><div><dt>Car</dt><dd>{current.assignment?.plate} · {current.assignment?.make} {current.assignment?.model}</dd></div><div><dt>Pickup (Singapore time)</dt><dd>{current.pickup_at && new Intl.DateTimeFormat('en-SG',{dateStyle:'medium',timeStyle:'short',timeZone:'Asia/Singapore'}).format(new Date(current.pickup_at))}</dd></div></dl><p className="treatment-hint">Unassigning releases this driver and returns the trip to Unfilled.</p></>
-      : <><fieldset className="patient-form-fields" disabled={busy}><div className="patient-field patient-form-wide"><label className="patient-required" htmlFor="assignment-pickup">Pickup (Singapore time)</label><input id="assignment-pickup" type="datetime-local" required min={`${localPickup(current).slice(0,10)}T00:00`} max={`${localPickup(current).slice(0,10)}T23:59`} value={pickup} onChange={event => { setPickup(event.target.value); setSelected(''); setOptions(null); requestSequence.current++; setLoading(Boolean(pickupInstant(event.target.value))); setError(''); }} /><p className="treatment-hint">Approximate journey duration: 30 minutes.</p></div></fieldset>
+      : <><fieldset className="patient-form-fields" disabled={busy}><div className="patient-field patient-form-wide"><label className="patient-required" htmlFor="assignment-pickup">Pickup (Singapore time)</label><input id="assignment-pickup" type="datetime-local" required min={`${localPickup(current).slice(0,10)}T00:00`} max={`${localPickup(current).slice(0,10)}T23:59`} value={pickup} onChange={event => { pickupTouched.current = true; setPickup(event.target.value); setSelected(''); setOptions(null); requestSequence.current++; setLoading(Boolean(pickupInstant(event.target.value))); setError(''); }} /><p className="treatment-hint">{options ? `Approximate journey duration: ${options.duration_minutes} minutes.` : loading ? 'Calculating journey duration…' : 'Journey duration unavailable.'}</p></div></fieldset>
         <section className="assignment-candidates" aria-label="Eligible drivers" aria-busy={loading}><h3 className="patient-required">Eligible drivers</h3>
           {loading ? <p role="status">Loading drivers…</p> : options && loadedPickup === pickup ? options.drivers.length ? <fieldset className="assignment-driver-list" disabled={busy} tabIndex={0}><legend className="sr-only">Choose a driver (required)</legend>{options.drivers.map(driver => <label className="assignment-driver" key={driver.id}><input type="radio" name="assigned-driver" required checked={selected === driver.id} value={driver.id} onChange={() => setSelected(driver.id)} /><span><strong>{driver.name}</strong><span>{driver.plate} · {driver.make} {driver.model}</span><span>{driver.passenger_capacity} passenger seats{driver.wheelchair_accessible ? ' · Wheelchair accessible' : ''}</span></span></label>)}</fieldset> : <p>No eligible drivers for this pickup time. Check availability or choose another time.</p> : error && !conflict ? <p>Drivers could not be loaded. <button type="button" disabled={busy} onClick={() => void findDrivers()}>Retry</button></p> : <p>Choose a valid pickup time to see eligible drivers.</p>}
         </section></>}

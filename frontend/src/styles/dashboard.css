@@ -1171,3 +1171,26 @@
   .dashboard-drawer[open], .dashboard-drawer[open][data-closing=true],
   .dashboard-drawer[open]::backdrop, .dashboard-drawer[open][data-closing=true]::backdrop { animation: none; }
 }
+
+.dashboard-icon-button:has(.notification-unread-dot) { position: relative; }
+.notification-unread-dot { position: absolute; top: 8px; right: 8px; width: 7px; height: 7px; border-radius: 50%; background: var(--ui-accent); }
+.dashboard-notifications { display: flex; flex-direction: column; max-height: min(560px, 70svh); overflow: hidden; }
+.dashboard-notifications > h2 { flex-shrink: 0; }
+.trip-notification-scroll { min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.trip-notification-list { list-style: none; padding: 0; margin: 0; }
+.trip-notification-list li + li { border-top: 1px solid var(--ui-border); }
+.trip-notification-list .trip-notification-open { display: grid; grid-template-columns: 7px minmax(0, 1fr); align-items: start; gap: 10px; width: 100%; min-height: 44px; padding: 14px 12px; border: 0; border-radius: 8px; background: transparent; color: var(--ui-muted); font-weight: 400; text-align: left; white-space: normal; box-shadow: none; }
+.trip-notification-list .trip-notification-open:hover { background: var(--ui-hover); }
+.trip-notification-message { display: block; font-weight: 400; font-size: .875rem; line-height: 1.6; }
+.trip-notification-list li[data-unread=true] .trip-notification-message { color: var(--ui-text); font-weight: 600; }
+.trip-notification-dot { width: 6px; height: 6px; margin-top: 8px; border-radius: 50%; background: transparent; }
+.trip-notification-list li[data-unread=true] .trip-notification-dot { background: var(--ui-accent); }
+.trip-notification-list time { display: block; margin-top: 5px; font-size: .75rem; color: var(--ui-muted); }
+.trip-notification-footer { flex-shrink: 0; padding: 0 8px; border-top: 1px solid var(--ui-border); }
+.dashboard-notifications .trip-notification-footer button { width: 100%; min-height: 32px; padding: 4px 8px; font-size: .8125rem; transition: background-color 160ms ease, transform 160ms ease; }
+.dashboard-notifications .trip-notification-footer button:hover:not(:disabled) { background: var(--ui-hover); transform: translateY(-1px); }
+@media (prefers-reduced-motion: reduce) {
+  .dashboard-notifications .trip-notification-footer button { transition: none; }
+  .dashboard-notifications .trip-notification-footer button:hover:not(:disabled) { transform: none; }
+}
+.trip-notification-sentinel { height: 1px; }

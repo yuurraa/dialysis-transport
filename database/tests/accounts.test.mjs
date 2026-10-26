@@ -1,14 +1,15 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { PGlite } from '@electric-sql/pglite';
+import { PGlite, types } from '@electric-sql/pglite';
 
 // Disposable PostgreSQL engine; this suite never connects to Supabase.
 const schema = await readFile(new URL('../schema.sql', import.meta.url), 'utf8');
 async function databaseWithAuth() {
-  const database = new PGlite();
+  // Match Supabase's date-only strings; timestamps retain their normal parser.
+  const database = new PGlite({parsers:{[types.DATE]:value=>value}});
   await database.exec(`-- FICTIONAL AUTH FIXTURE FOR DISPOSABLE LOCAL DATABASES ONLY. Never run on Supabase.
-    create role anon; create role authenticated;
+    create role anon; create role authenticated; create role service_role;
     create schema auth;
     create table auth.users (id uuid primary key, email text, email_confirmed_at timestamptz);
     create table auth.identities (user_id uuid, provider text);
@@ -523,6 +524,10 @@ test('trip search precedes pagination and manual generation restores deleted tri
     assert.equal(descending.trips[0].session_date,dates.until);
     assert.equal(descending.total,26);
     assert.equal(descending.trips.length,10);
+    const upcoming=(await own(patient,"select public.list_trips(1,$1,$2,'upcoming,in-progress','','all','pickup_time','asc') as result",[dates.first,dates.until]))[0].result;
+    assert.equal(upcoming.total,26);assert.equal(upcoming.counts.upcoming,26);
+    const pickupTime=trip=>Date.parse(trip.pickup_at??trip.pickup_not_before??trip.arrival_by)-(trip.pickup_at||trip.pickup_not_before?0:trip.duration_minutes*60000);
+    assert.ok(upcoming.trips.every((trip,index)=>index===0||pickupTime(upcoming.trips[index-1])<=pickupTime(trip)));
     const middlePage = (await own(coordinator, "select public.list_trips(2,$1,$2,'all','','all','treatment_start','desc') as result", [dates.first,dates.until]))[0].result;
     const lastPage = (await own(coordinator, "select public.list_trips(3,$1,$2,'all','','all','treatment_start','desc') as result", [dates.first,dates.until]))[0].result;
     assert.equal(middlePage.trips.length, 10);
@@ -945,6 +950,7 @@ test('approved rescheduling and deletion reconcile future trips atomically and p
   assert.deepEqual((await db.query('select * from public.trips where id=$1',[historical.id])).rows[0],historical);
 });
 
+const fixtureRoadRoute={geometry:[[1.3,103.8],[1.301,103.801]],origin_coordinates:{latitude:1.3,longitude:103.8},destination_coordinates:{latitude:1.301,longitude:103.801},duration_seconds:1800,distance_metres:5000};
 async function assignmentFixture() {
   const local = await databaseWithAuth();
   await local.exec(schema);
@@ -966,6 +972,11 @@ async function assignmentFixture() {
   const [source] = await own(patient,`insert into public.treatment_schedules(patient_id,centre_id,days,start_time,end_time,effective_from,effective_to)
     values($1,$2,array[extract(isodow from $3::date)::integer],'10:00','11:00',$3,$4) returning *`,[ids.patient_id,ids.centre_id,ids.first,ids.last]);
   await own(coordinator,'select public.generate_treatment_trips($1,$2,$3,1)',[source.id,ids.first,ids.last]);
+  const pending=(await local.query('select * from public.trips where root_schedule_id=$1',[source.id])).rows;
+  for(const trip of pending) {
+    await local.query('select public.cache_driving_route($1,$2,$3::jsonb)',[trip.origin,trip.destination,JSON.stringify(fixtureRoadRoute)]);
+    await own(coordinator,'select public.prepare_trip_route($1,$2)',[trip.id,trip.version]);
+  }
   const trips=(await local.query('select * from public.trips where root_schedule_id=$1 order by session_date,direction',[source.id])).rows;
   const assign=async trip=>(await own(coordinator,`select public.assign_trip($1,$2,case when $3='outbound' then $4::timestamptz-interval '30 minutes' else $5::timestamptz end,$6) as trip`,[trip.id,ids.driver_id,trip.direction,trip.arrival_by,trip.pickup_not_before,trip.version]))[0].trip;
   return {local,own,ids,source,trips,assign};
@@ -1072,5 +1083,311 @@ test('driver week edits are owned, isolated, versioned and protect assigned wind
     await local.exec(schema);
     assert.equal((await get(monday)).availability.version,2);
     assert.deepEqual((await get(weeks.next)).availability.weekly_slots,[18,19]);
+  } finally {await local.close();}
+});
+
+test('patient pickup actions are owned, versioned and preserve cancellation through regeneration', async () => {
+  const {local,own,ids,source,trips,assign}=await assignmentFixture();
+  try {
+    let trip=await assign(trips.find(row=>row.direction==='outbound'));
+    for (const who of [driver,coordinator,stranger]) {
+      await assert.rejects(own(who,'select public.confirm_trip($1,$2)',[trip.id,trip.version]),/Patient access|Trip access/);
+      await assert.rejects(own(who,'select public.cancel_trip($1,$2)',[trip.id,trip.version]),/Patient access|Trip access/);
+    }
+    await local.exec(`insert into public.accounts(auth_user_id,email,display_name,role) values ('${stranger}','stranger@example.test','Other Patient','patient');
+      insert into public.patients(account_id,full_name,phone,pickup_address,mobility) select id,'Other Patient','83456789','Other home','ambulant' from public.accounts where auth_user_id='${stranger}';`);
+    await assert.rejects(own(stranger,'select public.cancel_trip($1,$2)',[trip.id,trip.version]),/Trip access/);
+    await assert.rejects(own(patient,'select public.confirm_trip($1,$2)',[trip.id,trip.version+1]),/changed/);
+    const originalVersion=trip.version;
+    trip=(await own(patient,'select public.confirm_trip($1,$2) as trip',[trip.id,trip.version]))[0].trip;
+    assert.ok(trip.confirmed_at);assert.equal(trip.lifecycle,'scheduled');assert.equal(trip.status,'on-track');
+    await assert.rejects(own(patient,'select public.cancel_trip($1,$2)',[trip.id,originalVersion]),/changed/);
+    // Changing transport arrangements invalidates the old acknowledgement.
+    trip=(await own(coordinator,'select public.unassign_trip($1,$2) as trip',[trip.id,trip.version]))[0].trip;
+    assert.equal(trip.confirmed_at,null);
+    await assert.rejects(own(patient,'select public.confirm_trip($1,$2)',[trip.id,trip.version]),/assigned upcoming/);
+    trip=await assign(trip);
+    trip=(await own(patient,'select public.cancel_trip($1,$2) as trip',[trip.id,trip.version]))[0].trip;
+    assert.equal(trip.lifecycle,'cancelled');assert.equal(trip.status,'resolved');assert.ok(trip.cancelled_at);
+    assert.equal(trip.assigned_driver_id,null);assert.equal(trip.pickup_at,null);assert.equal(trip.assignment,null);
+    assert.equal(trip.cancelled_driver_id,ids.driver_id);
+    assert.equal(trip.cancelled_assignment.driver_name,'Fixture Driver');
+    assert.equal(trip.cancelled_assignment.plate,'TEST123');
+    assert.equal(trip.cancelled_assignment.patient_phone,undefined);
+    assert.equal((await own(driver,'select * from public.trips where id=$1',[trip.id])).length,1);
+    assert.equal((await own(driver,"select public.list_trips(1,$1,null,'cancelled') as data",[ids.first]))[0].data.trips[0].id,trip.id);
+    const progress=(await own(driver,'select public.trip_progress($1) as data',[trip.id]))[0].data;
+    assert.equal(progress.trip.lifecycle,'cancelled');assert.equal(progress.location,null);assert.equal(progress.sharing,false);
+    await assert.rejects(own(driver,"select public.execute_trip($1,'start',$2)",[trip.id,trip.version]),/Trip access/);
+    await assert.rejects(own(driver,'select public.begin_trip_sharing($1)',[trip.id]),/active assigned|access|in-progress/i);
+    await assert.rejects(own(driver,'update public.trips set cancelled_driver_id=null where id=$1',[trip.id]),/permission denied/);
+    assert.equal((await own(stranger,'select * from public.trips where id=$1',[trip.id])).length,0);
+    assert.equal((await own(patient,'select public.list_trips(1,$1,null) as data',[ids.first]))[0].data.trips.find(row=>row.id===trip.id).lifecycle,'cancelled');
+    const cancelled=(await own(coordinator,"select public.list_trips(1,$1,null,'cancelled','','all','status','asc') as data",[ids.first]))[0].data;
+    assert.equal(cancelled.total,1);assert.equal(cancelled.trips[0].id,trip.id);
+    assert.equal(cancelled.counts.cancelled,1);assert.equal(cancelled.counts.resolved,0);
+    const active=(await own(patient,"select public.list_trips(1,$1,null,'upcoming,in-progress') as data",[ids.first]))[0].data;
+    assert.ok(active.trips.every(row=>row.lifecycle==='scheduled'||row.lifecycle==='in-progress'));
+    assert.ok(!active.trips.some(row=>row.id===trip.id));
+    assert.equal((await own(patient,"select public.list_trips(1,$1,null,'completed') as data",[ids.first]))[0].data.total,0);
+    assert.equal((await own(coordinator,"select public.list_trips(1,$1,null,'resolved') as data",[ids.first]))[0].data.total,0);
+    assert.notEqual((await own(patient,'select public.list_trips(1,$1,null) as data',[ids.first]))[0].data.next_trip?.id,trip.id);
+    await assert.rejects(own(patient,'select public.confirm_trip($1,$2)',[trip.id,trip.version]),/assigned upcoming/);
+    await assert.rejects(own(patient,'select public.cancel_trip($1,$2)',[trip.id,trip.version]),/upcoming/);
+    await assert.rejects(own(coordinator,'select public.delete_trip($1,$2)',[trip.id,trip.version]),/unassigned/);
+    await own(coordinator,'select public.generate_treatment_trips($1,$2,$3,1)',[source.id,ids.first,ids.last]);
+    assert.equal((await local.query('select lifecycle from public.trips where id=$1',[trip.id])).rows[0].lifecycle,'cancelled');
+    const events=(await own(patient,'select event,details from public.trip_history where trip_id=$1 order by created_at,id',[trip.id]));
+    assert.ok(events.some(event=>event.event==='confirmed'));
+    assert.equal(events.filter(event=>event.event==='cancelled').length,1);
+    assert.equal(events.find(event=>event.event==='cancelled').details.driver_id,ids.driver_id);
+    // A passed pickup is not proof of execution, but it is the cancellation cutoff.
+    let past=await assign(trips.find(row=>row.direction==='return'));
+    await local.query("update public.trips set pickup_at=now()-interval '1 minute',dropoff_at=now()+interval '29 minutes',pickup_not_before=now()-interval '2 minutes',treatment_start=now()-interval '1 hour',treatment_end=now()-interval '17 minutes' where id=$1",[past.id]);
+    past=(await local.query('select * from public.trips where id=$1',[past.id])).rows[0];
+    await assert.rejects(own(patient,'select public.cancel_trip($1,$2)',[past.id,past.version]),/upcoming/);
+    assert.equal(past.lifecycle,'scheduled');
+    // An older cancellation has only its immutable event link; schema reapply restores access.
+    await local.query('update public.trips set cancelled_driver_id=null,cancelled_assignment=null where id=$1',[trip.id]);
+    await local.query("update public.trip_history set details=details-'assignment' where trip_id=$1 and event='cancelled'",[trip.id]);
+    assert.equal((await own(driver,'select * from public.trips where id=$1',[trip.id])).length,0);
+    await local.exec(schema);
+    const recovered=(await own(driver,'select cancelled_driver_id,cancelled_assignment from public.trips where id=$1',[trip.id]))[0];
+    assert.equal(recovered.cancelled_driver_id,ids.driver_id);
+    assert.equal(recovered.cancelled_assignment.driver_name,'Fixture Driver');assert.equal(recovered.cancelled_assignment.plate,'TEST123');
+    assert.equal((await local.query('select lifecycle from public.trips where id=$1',[trip.id])).rows[0].lifecycle,'cancelled');
+  } finally {await local.close();}
+});
+
+test('trip notifications are recipient-only, durable and history respects current trip access', async () => {
+  const {local,own,ids,trips,assign}=await assignmentFixture();
+  try {
+    let trip=await assign(trips.find(row=>row.direction==='outbound'));
+    const inbox=async who=>(await own(who,'select public.list_trip_notifications(1) as inbox'))[0].inbox;
+    const patientInbox=await inbox(patient);const driverInbox=await inbox(driver);
+    assert.equal(patientInbox.unread,1);assert.equal(driverInbox.unread,1);
+    assert.match(patientInbox.notifications[0].message,/assigned/i);
+    const item=patientInbox.notifications[0];
+    assert.equal((await own(driver,'select * from public.trip_notifications where id=$1',[item.id])).length,0);
+    await assert.rejects(own(driver,'select public.read_trip_notification($1)',[item.id]),/Notification access/);
+    await own(patient,'select public.read_trip_notification($1)',[item.id]);
+    assert.equal((await inbox(patient)).unread,0);
+    await own(patient,'select public.read_trip_notification($1)',[item.id]);
+    await assert.rejects(own(patient,'update public.trip_notifications set read_at=null where id=$1',[item.id]),/permission denied/);
+    const history=(await own(driver,'select public.trip_history_page($1,1) as history',[trip.id]))[0].history;
+    assert.ok(history.events.some(event=>event.event==='assigned'&&event.actor==='coordinator'));
+    await assert.rejects(own(stranger,'select public.trip_history_page($1,1)',[trip.id]),/Trip access/);
+    trip=(await own(patient,'select public.cancel_trip($1,$2) as trip',[trip.id,trip.version]))[0].trip;
+    assert.ok((await inbox(driver)).notifications.some(item=>item.event==='cancelled'));
+    assert.ok((await own(driver,'select public.trip_history_page($1,1) as data',[trip.id]))[0].data.events.some(event=>event.event==='cancelled'));
+    assert.ok((await inbox(coordinator)).notifications.some(item=>item.event==='cancelled'));
+    const driverUnread=(await inbox(driver)).unread;
+    await assert.rejects(own(stranger,'select public.read_all_trip_notifications()'),/Notification access/);
+    const marked=(await own(patient,'select public.read_all_trip_notifications() as data'))[0].data;
+    assert.ok(marked.read_at);assert.equal(marked.unread,0);assert.equal((await inbox(patient)).unread,0);
+    assert.equal((await inbox(driver)).unread,driverUnread,'Mark all must never change another recipient.');
+    assert.equal((await own(patient,'select public.read_all_trip_notifications() as data'))[0].data.unread,0);
+    const count=(await inbox(patient)).total;
+    await local.exec(schema);
+    assert.equal((await inbox(patient)).total,count);
+    await assert.rejects(own(patient,'select public.list_trip_notifications(0)'),/Invalid/);
+  } finally {await local.close();}
+});
+
+test('driver unavailability is owned, stays at risk and requires coordinator resolution', async () => {
+  const {local,own,ids,trips,assign}=await assignmentFixture();
+  try {
+    let trip=await assign(trips.find(row=>row.direction==='outbound'));
+    for(const who of [patient,coordinator,stranger]) await assert.rejects(own(who,'select public.report_driver_unavailability($1,$2)',[trip.id,trip.version]),/Driver access|Trip access/);
+    await assert.rejects(own(driver,'select public.report_driver_unavailability($1,$2)',[trip.id,trip.version+1]),/changed/);
+    trip=(await own(driver,'select public.report_driver_unavailability($1,$2) as trip',[trip.id,trip.version]))[0].trip;
+    assert.ok(trip.driver_unavailable_at);assert.equal(trip.status,'at-risk');assert.equal(trip.assigned_driver_id,ids.driver_id);
+    await own(driver,'select public.report_driver_unavailability($1,$2)',[trip.id,trip.version]);
+    assert.equal((await local.query("select count(*)::int as count from public.trip_history where trip_id=$1 and event='driver_unavailable'",[trip.id])).rows[0].count,1);
+    await own(driver,"select public.update_my_driver($1,1)",[JSON.stringify({full_name:'Updated Driver',phone:'82345678',birth_date:'1990-01-01',gender:'male'})]);
+    trip=(await local.query('select * from public.trips where id=$1',[trip.id])).rows[0];
+    assert.equal(trip.status,'at-risk');
+    await assert.rejects(own(patient,'select public.confirm_trip($1,$2)',[trip.id,trip.version]),/assigned upcoming/);
+    const inbox=(await own(coordinator,'select public.list_trip_notifications(1) as data'))[0].data;
+    assert.ok(inbox.notifications.some(item=>item.event==='driver_unavailable'));
+    trip=(await own(coordinator,'select public.unassign_trip($1,$2) as trip',[trip.id,trip.version]))[0].trip;
+    assert.equal(trip.driver_unavailable_at,null);
+    await assert.rejects(own(driver,'select public.report_driver_unavailability($1,$2)',[trip.id,trip.version]),/Trip access/);
+    trip=await assign(trip);assert.equal(trip.status,'on-track');
+    trip=(await own(patient,'select public.cancel_trip($1,$2) as trip',[trip.id,trip.version]))[0].trip;
+    await assert.rejects(own(driver,'select public.report_driver_unavailability($1,$2)',[trip.id,trip.version]),/Trip access/);
+    await local.exec(schema);
+    assert.equal((await local.query("select count(*)::int as count from public.trip_history where trip_id=$1 and event='driver_unavailable'",[trip.id])).rows[0].count,1);
+  } finally {await local.close();}
+});
+
+test('verified routes set variable reservations and require travel time between driver bookings', async () => {
+  const {local,own,ids,trips}=await assignmentFixture();
+  try {
+    let trip=trips.find(row=>row.direction==='outbound');
+    for(const who of [patient,driver,coordinator])await assert.rejects(own(who,'select public.cache_driving_route($1,$2,$3::jsonb)',[trip.origin,trip.destination,JSON.stringify(fixtureRoadRoute)]),/permission denied/);
+    await assert.rejects(own(patient,'select public.prepare_trip_route($1,$2)',[trip.id,trip.version]),/Coordinator/);
+    await local.query('select public.cache_driving_route($1,$2,$3::jsonb)',[trip.origin,trip.destination,JSON.stringify({...fixtureRoadRoute,duration_seconds:2401})]);
+    trip=(await own(coordinator,'select public.prepare_trip_route($1,$2) as trip',[trip.id,trip.version]))[0].trip;
+    assert.equal(trip.duration_minutes,45);
+    const starts=new Date(Date.parse(trip.arrival_by)-45*60000).toISOString();
+    trip=(await own(coordinator,'select public.assign_trip($1,$2,$3,$4) as trip',[trip.id,ids.driver_id,starts,trip.version]))[0].trip;
+    assert.equal(Date.parse(trip.dropoff_at)-Date.parse(trip.pickup_at),45*60000);
+    await local.query('select public.cache_driving_route($1,$2,$3::jsonb)',[trip.origin,trip.destination,JSON.stringify({...fixtureRoadRoute,duration_seconds:3600})]);
+    assert.equal((await own(coordinator,'select public.prepare_trip_route($1,$2) as trip',[trip.id,trip.version]))[0].trip.duration_minutes,45);
+    const next=(await local.query(`insert into public.trips(patient_id,patient_name,source_schedule_id,root_schedule_id,occurrence_key,original_session_date,session_date,direction,origin,destination,treatment_start,treatment_end,arrival_by,source_version,patient_version,created_by)
+      select patient_id,patient_name,source_schedule_id,root_schedule_id,'route-next',original_session_date,session_date,direction,'Other pickup',destination,treatment_start+interval '2 hours',treatment_end+interval '2 hours',arrival_by+interval '2 hours',source_version,patient_version,created_by from public.trips where id=$1 returning *`,[trip.id])).rows[0];
+    await local.query('select public.cache_driving_route($1,$2,$3::jsonb)',[next.origin,next.destination,JSON.stringify(fixtureRoadRoute)]);
+    let planned=(await own(coordinator,'select public.prepare_trip_route($1,$2) as trip',[next.id,next.version]))[0].trip;
+    const short=new Date(Date.parse(trip.dropoff_at)+10*60000).toISOString();
+    const suitable=new Date(Date.parse(trip.dropoff_at)+60*60000).toISOString();
+    await assert.rejects(own(coordinator,'select public.assign_trip($1,$2,$3,$4)',[planned.id,ids.driver_id,short,planned.version]),/eligible/);
+    await local.query('select public.cache_driving_route($1,$2,$3::jsonb)',[trip.destination,next.origin,JSON.stringify({...fixtureRoadRoute,duration_seconds:1200})]);
+    assert.equal((await own(coordinator,'select public.trip_assignment_options($1,$2) as data',[planned.id,short]))[0].data.drivers.length,0);
+    const bridgeSlot=(await local.query(`select (extract(isodow from $1::date)::int-1)*48+20 as slot`,[ids.first])).rows[0].slot;
+    await local.query('update public.driver_availability set weekly_slots=array_remove(weekly_slots,$2) where driver_id=$1',[ids.driver_id,bridgeSlot]);
+    assert.equal((await own(coordinator,'select public.trip_assignment_options($1,$2) as data',[planned.id,suitable]))[0].data.drivers.length,0);
+    await local.query('update public.driver_availability set weekly_slots=array(select generate_series(0,335)) where driver_id=$1',[ids.driver_id]);
+    planned=(await own(coordinator,'select public.assign_trip($1,$2,$3,$4) as trip',[planned.id,ids.driver_id,suitable,planned.version]))[0].trip;
+    const availability=(await local.query('select * from public.driver_availability where driver_id=$1',[ids.driver_id])).rows[0];
+    await assert.rejects(own(driver,'select public.save_my_availability($1,$2)',[availability.weekly_slots.filter(slot=>slot!==bridgeSlot),availability.version]),/remain available/);
+
+    assert.equal(planned.duration_minutes,30);
+    const monday=(await local.query(`select ($1::date-extract(isodow from $1::date)::integer+1)::text as monday`,[ids.first])).rows[0].monday;
+    const calendar=(await own(driver,'select public.get_driver_week($1,$2) as data',[ids.driver_id,monday]))[0].data;
+    assert.ok(calendar.trips.some(row=>row.kind==='transfer'&&row.destination===planned.origin));
+
+    await local.exec(schema);
+    assert.equal((await local.query('select duration_minutes from public.trips where id=$1',[trip.id])).rows[0].duration_minutes,45);
+  } finally {await local.close();}
+});
+
+test('driver execution is explicit and live location is scoped to an assigned active journey', async () => {
+  const {local,own,ids,trips,assign}=await assignmentFixture();
+  try {
+    let trip=await assign(trips.find(row=>row.direction==='outbound'));
+    const other=await assign(trips.find(row=>row.direction==='return'));
+    for(const who of [patient,coordinator,stranger])await assert.rejects(own(who,"select public.execute_trip($1,'start',$2)",[trip.id,trip.version]),/Driver access|Trip access/);
+    await assert.rejects(own(driver,"select public.execute_trip($1,'start',$2)",[trip.id,trip.version]),/pickup/);
+    await local.query(`update public.trips set pickup_at=now()-interval '5 minutes',dropoff_at=now()+interval '25 minutes',treatment_start=now()+interval '40 minutes',treatment_end=now()+interval '100 minutes',arrival_by=now()+interval '25 minutes' where id=$1`,[trip.id]);
+    trip=(await local.query('select * from public.trips where id=$1',[trip.id])).rows[0];
+    const oldVersion=trip.version;
+    trip=(await own(driver,"select public.execute_trip($1,'start',$2) as trip",[trip.id,trip.version]))[0].trip;
+    assert.equal(trip.lifecycle,'in-progress');assert.ok(trip.started_at);assert.equal(trip.completed_at,null);
+    assert.equal((await own(driver,"select public.execute_trip($1,'start',$2) as trip",[trip.id,trip.version]))[0].trip.version,trip.version);
+    await local.query(`update public.trips set pickup_at=now()-interval '1 minute',dropoff_at=now()+interval '29 minutes',pickup_not_before=now()-interval '1 minute',treatment_start=now()-interval '76 minutes',treatment_end=now()-interval '16 minutes' where id=$1`,[other.id]);
+    const otherVersion=(await local.query('select version from public.trips where id=$1',[other.id])).rows[0].version;
+    await assert.rejects(own(driver,"select public.execute_trip($1,'start',$2)",[other.id,otherVersion]),/already has an active/);
+
+    await assert.rejects(own(driver,"select public.execute_trip($1,'complete',$2)",[trip.id,oldVersion]),/changed/);
+    await assert.rejects(own(patient,'select public.cancel_trip($1,$2)',[trip.id,trip.version]),/upcoming/);
+    const recorded=new Date().toISOString();
+    let sharing=(await own(driver,'select public.begin_trip_sharing($1) as data',[trip.id]))[0].data.sharing_id;
+    for(const who of [patient,coordinator,stranger])await assert.rejects(own(who,'select public.report_trip_location($1,$2,1.3,103.8,10,$3)',[trip.id,sharing,recorded]),/Driver access|Trip access/);
+    await own(driver,'select public.report_trip_location($1,$2,1.3,103.8,10,$3)',[trip.id,sharing,recorded]);
+    const progress=(await own(patient,'select public.trip_progress($1) as data',[trip.id]))[0].data;
+    assert.equal(progress.trip.lifecycle,'in-progress');assert.equal(progress.location.latitude,1.3);
+    await assert.rejects(own(stranger,'select public.trip_progress($1)',[trip.id]),/Trip access|not found/);
+    await assert.rejects(own(driver,'select public.report_trip_location($1,$2,91,103.8,10,$3)',[trip.id,sharing,recorded]),/Invalid/);
+    await assert.rejects(own(driver,'select public.report_trip_location($1,$2,1.3,103.8,10,$3)',[trip.id,sharing,new Date(Date.now()+120000).toISOString()]),/Invalid/);
+    await own(driver,'select public.clear_trip_location($1,$2)',[trip.id,sharing]);
+    assert.equal((await own(patient,'select public.trip_progress($1) as data',[trip.id]))[0].data.location,null);
+    await assert.rejects(own(driver,'select public.report_trip_location($1,$2,1.3,103.8,10,$3)',[trip.id,sharing,new Date().toISOString()]),/session ended/);
+    sharing=(await own(driver,'select public.begin_trip_sharing($1) as data',[trip.id]))[0].data.sharing_id;
+    await own(driver,'select public.report_trip_location($1,$2,1.3,103.8,10,$3)',[trip.id,sharing,new Date().toISOString()]);
+    trip=(await own(driver,"select public.execute_trip($1,'complete',$2) as trip",[trip.id,trip.version]))[0].trip;
+    assert.equal(trip.lifecycle,'completed');assert.equal(trip.status,'resolved');assert.ok(trip.completed_at);
+    const resolved=(await own(coordinator,"select public.list_trips(1,$1,null,'resolved') as data",[ids.first]))[0].data;
+    assert.equal(resolved.total,1);assert.equal(resolved.trips[0].id,trip.id);
+    assert.equal(resolved.counts.resolved,1);assert.equal(resolved.counts.cancelled,0);
+    assert.equal((await local.query('select * from public.trip_locations where trip_id=$1',[trip.id])).rows.length,0);
+    await local.query('insert into public.trip_locations(trip_id,driver_id,latitude,longitude,accuracy_metres,recorded_at,received_at) values($1,$2,1.3,103.8,10,now(),now())',[trip.id,ids.driver_id]);
+    for(const who of [patient,driver,coordinator])assert.deepEqual(await own(who,'select latitude,longitude from public.trip_locations where trip_id=$1',[trip.id]),[]);
+    await local.query('delete from public.trip_locations where trip_id=$1',[trip.id]);
+
+    assert.equal((await own(patient,'select public.trip_progress($1) as data',[trip.id]))[0].data.location,null);
+    await assert.rejects(own(driver,'select public.report_trip_location($1,$2,1.3,103.8,10,$3)',[trip.id,sharing,new Date().toISOString()]),/active/);
+    await assert.rejects(own(driver,"select public.execute_trip($1,'start',$2)",[trip.id,trip.version]),/scheduled|completed/);
+    assert.equal((await local.query('select lifecycle from public.trips where id=$1',[other.id])).rows[0].lifecycle,'scheduled');
+    await local.exec(schema);
+    assert.equal((await local.query('select lifecycle from public.trips where id=$1',[trip.id])).rows[0].lifecycle,'completed');
+  } finally {await local.close();}
+});
+
+
+test('trusted traffic monitoring leases work and flags a trip once without clearing independent risks', async () => {
+  const {local,own,trips,assign}=await assignmentFixture();
+  const service=async(sql,params=[])=>{
+    await local.exec('begin; set local role service_role;');
+    try {const result=await local.query(sql,params);await local.exec('commit');return result.rows;}
+    catch(error){await local.exec('rollback');throw error;}
+  };
+  try {
+    let trip=await assign(trips.find(row=>row.direction==='outbound'));
+    await local.query(`update public.trips set pickup_at=now()+interval '10 minutes',dropoff_at=now()+interval '40 minutes',treatment_start=now()+interval '55 minutes',treatment_end=now()+interval '115 minutes',arrival_by=now()+interval '40 minutes' where id=$1`,[trip.id]);
+    trip=(await local.query('select * from public.trips where id=$1',[trip.id])).rows[0];
+    const assessment={assessed_at:new Date().toISOString(),expires_at:new Date(Date.now()+60000).toISOString(),risk:'possible-delay',requires_attention:true,coverage_percent:50};
+    for(const who of [patient,driver,coordinator]){
+      await assert.rejects(own(who,'select public.claim_trip_traffic_checks()'),/permission/i);
+      await assert.rejects(own(who,'select public.trip_traffic_context($1)',[trip.id]),/permission/i);
+      await assert.rejects(own(who,'select public.record_trip_traffic_check($1,$2,$3::jsonb)',[trip.id,trip.version,JSON.stringify(assessment)]),/permission/i);
+    }
+    assert.ok((await service('select public.claim_trip_traffic_checks() as ids'))[0].ids.includes(trip.id));
+    assert.ok(!(await service('select public.claim_trip_traffic_checks() as ids'))[0].ids.includes(trip.id));
+    assert.equal((await service('select public.trip_traffic_context($1) as data',[trip.id]))[0].data.location,null);
+    await assert.rejects(service('select public.record_trip_traffic_check($1,$2,$3::jsonb)',[trip.id,trip.version+1,JSON.stringify(assessment)]),/changed/i);
+    await service('select public.record_trip_traffic_check($1,$2,$3::jsonb)',[trip.id,trip.version,JSON.stringify(assessment)]);
+    trip=(await local.query('select * from public.trips where id=$1',[trip.id])).rows[0];
+    assert.equal(trip.traffic_review_required,true);assert.equal(trip.status,'at-risk');
+    await service('select public.record_trip_traffic_check($1,$2,$3::jsonb)',[trip.id,trip.version,JSON.stringify(assessment)]);
+    await service('select public.record_trip_traffic_check($1,$2,$3::jsonb)',[trip.id,trip.version,JSON.stringify({...assessment,risk:'no-delay-detected',requires_attention:false})]);
+    assert.equal((await local.query('select traffic_review_required from public.trips where id=$1',[trip.id])).rows[0].traffic_review_required,true);
+    assert.equal((await local.query("select count(*)::int as count from public.trip_history where trip_id=$1 and event='traffic_risk_detected'",[trip.id])).rows[0].count,1);
+    for(const who of [patient,driver,coordinator])assert.ok((await own(who,'select public.list_trip_notifications(1) as data'))[0].data.notifications.some(row=>row.event==='traffic_risk_detected'));
+    await own(driver,'select public.report_driver_unavailability($1,$2)',[trip.id,trip.version]);
+    await local.exec(schema);
+    trip=(await local.query('select * from public.trips where id=$1',[trip.id])).rows[0];
+    assert.equal(trip.traffic_review_required,true);assert.ok(trip.driver_unavailable_at);
+    trip=(await own(coordinator,'select public.unassign_trip($1,$2) as trip',[trip.id,trip.version]))[0].trip;
+    assert.equal(trip.traffic_review_required,false);assert.equal(trip.status,'unfilled');
+    assert.equal((await local.query('select count(*)::int as count from private.trip_traffic_checks where trip_id=$1',[trip.id])).rows[0].count,0);
+  } finally {await local.close();}
+});
+
+
+test('recovery proposals preserve reservations and require trusted validation plus coordinator approval', async () => {
+  const {local,own,trips,assign}=await assignmentFixture();
+  const service=async(sql,params=[])=>{
+    await local.exec('begin; set local role service_role;');
+    try {const result=await local.query(sql,params);await local.exec('commit');return result.rows;}
+    catch(error){await local.exec('rollback');throw error;}
+  };
+  try {
+    let trip=await assign(trips.find(row=>row.direction==='outbound'));
+    await local.query("update public.trips set traffic_review_required=true,status='at-risk' where id=$1",[trip.id]);
+    trip=(await local.query('select * from public.trips where id=$1',[trip.id])).rows[0];
+    for(const who of [patient,driver,coordinator]){
+      await assert.rejects(own(who,'select public.trip_recovery_candidates($1,$2,$3,false)',[trip.id,trip.version,trip.duration_minutes]),/permission/i);
+      await assert.rejects(own(who,'select public.store_trip_recovery_options($1,$2,$3,false)',[trip.id,trip.version,trip.duration_minutes]),/permission/i);
+    }
+    const proposed=(await service('select public.store_trip_recovery_options($1,$2,$3,false) as data',[trip.id,trip.version,trip.duration_minutes]))[0].data;
+    assert.ok(proposed.options.length);assert.equal(proposed.critical,false);
+    assert.equal(proposed.trip.assigned_driver_id,trip.assigned_driver_id);assert.equal(proposed.trip.version,trip.version);
+    const option=proposed.options[0];
+    await assert.rejects(own(coordinator,'select public.approve_trip_recovery($1,$2)',[option.id,trip.version]),/expired|changed/i);
+    for(const who of [patient,driver,coordinator])await assert.rejects(own(who,"select public.attest_trip_recovery_option($1,clock_timestamp()+interval '20 seconds')",[option.id]),/permission/i);
+    await service("select public.attest_trip_recovery_option($1,clock_timestamp()+interval '20 seconds')",[option.id]);
+    for(const who of [patient,driver])await assert.rejects(own(who,'select public.approve_trip_recovery($1,$2)',[option.id,trip.version]),/Coordinator/i);
+    trip=(await own(coordinator,'select public.approve_trip_recovery($1,$2) as trip',[option.id,trip.version]))[0].trip;
+    assert.equal(trip.status,'on-track');assert.equal(trip.traffic_review_required,false);assert.equal(trip.confirmed_at,null);
+    await assert.rejects(own(coordinator,'select public.approve_trip_recovery($1,$2)',[option.id,trip.version]),/expired|changed/i);
+    assert.equal((await local.query("select count(*)::int as count from public.trip_history where trip_id=$1 and event='recovery_approved'",[trip.id])).rows[0].count,1);
+    trip=(await own(driver,'select public.report_driver_unavailability($1,$2) as trip',[trip.id,trip.version]))[0].trip;
+    const critical=(await service('select public.store_trip_recovery_options($1,$2,$3,false) as data',[trip.id,trip.version,trip.duration_minutes]))[0].data;
+    assert.equal(critical.options.length,0);assert.equal(critical.critical,true);
+    assert.equal(critical.trip.assigned_driver_id,trip.assigned_driver_id);assert.equal(critical.trip.status,'at-risk');
+    await local.exec(schema);
+    assert.equal((await local.query('select recovery_critical from public.trips where id=$1',[trip.id])).rows[0].recovery_critical,true);
+    assert.ok((await own(coordinator,'select public.list_trip_notifications(1) as data'))[0].data.notifications.some(row=>row.event==='recovery_critical'));
   } finally {await local.close();}
 });
