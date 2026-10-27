@@ -74,7 +74,10 @@ export class TripRoutingService {
     }
     const assessArrival=trip.lifecycle==='in-progress'||(trip.lifecycle==='scheduled'&&!!trip.assigned_driver_id&&Number.isFinite(pickup)&&pickup<=Date.now()+3600000);
     try {
-      const [saved,snapshot]=await Promise.all([this.route(trip.origin,trip.destination,signal),this.lta.getTraffic(signal,!monitor)]);
+      const reservedRoute=trip.route_snapshot;
+      const reusableRoute=reservedRoute?.origin===trip.origin&&reservedRoute.destination===trip.destination
+        &&Date.parse(reservedRoute.assessed_at)>Date.now()-86400000&&Date.parse(reservedRoute.assessed_at)<=Date.now();
+      const [saved,snapshot]=await Promise.all([reusableRoute?Promise.resolve(reservedRoute):this.route(trip.origin,trip.destination,signal),this.lta.getTraffic(signal,!monitor)]);
       let route={geometry:saved.geometry,distanceMetres:saved.distance_metres,durationSeconds:saved.duration_seconds,encodedPolyline:''};
       let departure=assessArrival&&trip.lifecycle==='scheduled'?Math.max(Date.now(),pickup):Date.now(),locationAvailable=true,estimateExpires=Date.now()+60000;
       if(trip.lifecycle==='in-progress'){

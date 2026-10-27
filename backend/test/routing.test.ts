@@ -4,7 +4,7 @@ import { OneMapService } from '../src/integrations/onemap.service';
 import { LtaService, type TrafficSnapshot } from '../src/integrations/lta.service';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { SupabaseService } from '../src/supabase.module';
-import { TripRoutingService } from '../src/trips/trip-routing.service';
+import { TripRoutingService, type RoadRoute } from '../src/trips/trip-routing.service';
 import { routeTraffic } from '../src/trips/route-traffic';
 
 test('OneMap validates provider responses, caches authentication and refuses ambiguous addresses', async context => {
@@ -109,11 +109,12 @@ test('Route traffic preserves observed coverage and shows roads for future/unass
   const boundary=routeTraffic({...route,geometry:[[1.3,103.8],[1.3,103.809],[1.30102,103.809]]},{...snapshot,speedBands:[{...forward,end:{latitude:1.3001,longitude:103.809}}]});
   assert.equal(boundary.coverage_percent,90);assert.ok(boundary.coverage_fraction<.9);
   const saved={...route,origin:'Fixture home',destination:'Fixture centre',origin_coordinates:forward.start,destination_coordinates:forward.end,distance_metres:route.distanceMetres,duration_seconds:route.durationSeconds};
-  let trip={id:'fixture-trip',version:1,origin:saved.origin,destination:saved.destination,lifecycle:'scheduled',assigned_driver_id:'fixture-driver' as string|null,pickup_at:new Date(Date.now()+5*86400000).toISOString() as string|null,dropoff_at:null,arrival_by:new Date(Date.now()+5*86400000+1800000).toISOString()};
+  let trip={id:'fixture-trip',version:1,origin:saved.origin,destination:saved.destination,route_snapshot:null as RoadRoute|null,lifecycle:'scheduled',assigned_driver_id:'fixture-driver' as string|null,pickup_at:new Date(Date.now()+5*86400000).toISOString() as string|null,dropoff_at:null,arrival_by:new Date(Date.now()+5*86400000+1800000).toISOString()};
   const chain={select(){return this;},eq(){return this;},is(){return this;},abortSignal(){return this;},async maybeSingle(){return {data:trip,error:null};}};
   const client={from:()=>chain,rpc:()=>({abortSignal:async()=>({data:{trip},error:null})})} as unknown as SupabaseClient;
   let feedReads=0;
-  const database={forIntegration:()=>({rpc:()=>({abortSignal:async()=>({data:saved,error:null})})})} as unknown as SupabaseService;
+  let routeReads=0;
+  const database={forIntegration:()=>({rpc:()=>{routeReads++;return {abortSignal:async()=>({data:saved,error:null})};}})} as unknown as SupabaseService;
   let observations=snapshot;
   const lta={getTraffic:async()=>{feedReads++;return observations;}} as unknown as LtaService;
   const service=new TripRoutingService(database,{} as OneMapService,lta);
@@ -129,6 +130,14 @@ test('Route traffic preserves observed coverage and shows roads for future/unass
   }
   trip={...trip,lifecycle:'scheduled',assigned_driver_id:null,pickup_at:null};
   assert.equal((await service.traffic(client,trip.id)).state,'current');
+  const lookups=routeReads;
+  trip={...trip,route_snapshot:{...saved,provider:'onemap',duration_minutes:5,assessed_at:new Date().toISOString()}};
+  await service.traffic(client,trip.id);
+  assert.equal(routeReads,lookups,'A fresh matching reservation route needs no cache RPC.');
+  trip={...trip,route_snapshot:{...trip.route_snapshot!,assessed_at:new Date(Date.now()-86400001).toISOString()}};
+  await service.traffic(client,trip.id);
+  assert.equal(routeReads,lookups+1,'An expired reservation route must use the normal cache/provider path.');
+  trip={...trip,route_snapshot:null};
   observations={...snapshot,speedBands:[],speedBandsRetrievedAt:null,availability:{incidents:'current',speeds:'rate-limited'}};
   const incidentOnly=await service.traffic(client,trip.id);
   assert.equal(incidentOnly.state,'current');

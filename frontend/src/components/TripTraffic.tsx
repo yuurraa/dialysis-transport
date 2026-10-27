@@ -55,9 +55,17 @@ export default function TripTraffic({tripId,version,activeTrip,locationAvailable
     async function load(){
       if(!live||busy||document.visibilityState==='hidden')return;
       busy=true;setLoading(true);window.clearTimeout(timer);
-      let failed=false;
+      const started=performance.now();
+      let failed=false,nextDelay=activeTrip?15000:60000;
       try {
         const result=await apiGet<TrafficView>(`/trips/${tripId}/traffic`);
+        if(result.state==='current'){
+          const elapsed=performance.now()-started,expires=Date.parse(result.estimate_expires_at??''),assessed=Date.parse(result.assessed_at??'');
+          // Server-relative validity avoids relying on the phone/computer clock.
+          // Reserve time for a slow replacement request before the current result expires.
+          const remaining=Number.isFinite(assessed)?expires-assessed-elapsed:expires-Date.now();
+          if(Number.isFinite(remaining))nextDelay=Math.min(nextDelay,Math.max(5000,remaining-Math.max(15000,elapsed*2)));
+        }
         if(live){last=result;setData(result);setError('');callbacks.current.onUpdate(result);}
       } catch(reason){
         failed=true;
@@ -67,7 +75,7 @@ export default function TripTraffic({tripId,version,activeTrip,locationAvailable
           if(!retain){last=null;setData(null);callbacks.current.onUpdate(null);}
           setError(reason instanceof ApiError&&reason.status===409?'Trip changed. Waiting for updated details.':'Current traffic assessment is unavailable.');
         }
-      } finally {busy=false;if(live){const interval=failed||activeTrip?15000:60000;nextReadAt=Date.now()+interval;setLoading(false);timer=window.setTimeout(()=>void load(),interval);}}
+      } finally {busy=false;if(live){const interval=failed?15000:nextDelay;nextReadAt=Date.now()+interval;setLoading(false);timer=window.setTimeout(()=>void load(),interval);}}
     }
     refresh.current=()=>void load();
     void load();

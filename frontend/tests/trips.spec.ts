@@ -263,7 +263,7 @@ test('driver starts a journey, explicitly shares location and completes without 
   let trip={...fixtureTrip,id:'dddddddd-dddd-4ddd-8ddd-dddddddddddd',version:3,lifecycle:'scheduled',assigned_driver_id:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',pickup_at:'2026-10-21T00:00:00Z',dropoff_at:'2026-10-21T00:30:00Z',started_at:null as string|null,completed_at:null as string|null,status:'on-track'};
   let following={...trip,id:'ffffffff-ffff-4fff-8fff-ffffffffffff',version:1,pickup_at:'2026-10-21T02:00:00Z',dropoff_at:'2026-10-21T02:30:00Z'};
   let sharing=false;let point:unknown=null;let posts=0;let trafficReads=0;
-  await page.route('**/api/trips/*/traffic',route=>{trafficReads++;return route.fulfill({json:{state:'current',assessment_scope:'trip-arrival',baseline_arrival_at:'2026-10-21T00:25:00Z',estimated_arrival_from:'2026-10-21T00:30:00Z',estimated_arrival_until:'2026-10-21T00:30:00Z',estimate_expires_at:'2026-10-21T00:06:00Z',incidents:[],speed_bands:[]}});});
+  await page.route('**/api/trips/*/traffic',async route=>{trafficReads++;const assessed=await page.evaluate(()=>Date.now());return route.fulfill({json:{state:'current',assessment_scope:'trip-arrival',baseline_arrival_at:'2026-10-21T00:25:00Z',estimated_arrival_from:'2026-10-21T00:30:00Z',estimated_arrival_until:'2026-10-21T00:30:00Z',assessed_at:new Date(assessed).toISOString(),estimate_expires_at:new Date(assessed+60000).toISOString(),incidents:[],speed_bands:[]}});});
   await page.route('**/api/auth/me',route=>route.fulfill({json:{account:{...activeAccount,role:'driver'}}}));
   await page.route('**/api/trips?*',route=>route.fulfill({json:{trips:[trip,following],total:2,page:1,pageSize:10,counts:{},next_trip:trip.lifecycle==='scheduled'?trip:following,active_trip:trip.lifecycle==='in-progress'?trip:null}}));
   await page.route('**/api/trips/*/progress',route=>route.fulfill({json:{trip,sharing,location:point}}));
@@ -300,6 +300,10 @@ test('driver starts a journey, explicitly shares location and completes without 
   });
   await page.clock.runFor(1);
   expect(trafficReads).toBe(beforeTabSwitch);
+  await expect(traffic.getByText('Current ETA',{exact:true}).locator('..').locator('dd')).toContainText('08:30');
+  // Scheduled trips must refresh before their one-minute assessment expires.
+  await page.clock.runFor(46000);
+  await expect.poll(()=>trafficReads).toBeGreaterThan(beforeTabSwitch);
   await expect(traffic.getByText('Current ETA',{exact:true}).locator('..').locator('dd')).toContainText('08:30');
   await details.getByRole('button',{name:'Start trip',exact:true}).click();
   const start=page.getByRole('dialog',{name:'Start trip',exact:true});await start.getByRole('button',{name:'Start trip',exact:true}).click();
