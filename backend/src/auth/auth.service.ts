@@ -13,6 +13,9 @@ interface Account {
   role: UserRole;
   status: 'active' | 'inactive';
   profile_complete?: boolean;
+  demo_admin?: boolean;
+  demo_owner_id?: string|null;
+  demo_access_owner_id?:string|null;
 }
 
 @Injectable()
@@ -33,11 +36,13 @@ export class AuthService {
       this.logger.warn(`Sign-in rejected: code=${error?.code ?? 'user_unavailable'}, status=${error?.status ?? 'unknown'}`);
       throw new UnauthorizedException('Invalid or expired sign-in.');
     }
-    if (!data.user.email_confirmed_at || !data.user.identities?.some(identity => identity.provider === 'google')) {
+    const demo=process.env.DEMO_ENABLED==='true'&&data.user.app_metadata?.demo_account_id===data.user.id&&typeof data.user.app_metadata?.demo_owner_id==='string';
+    if (!data.user.email_confirmed_at || (!demo&&!data.user.identities?.some(identity => identity.provider === 'google'))) {
       throw new ForbiddenException('A verified Google account is required.');
     }
     const result = await client.rpc('current_account');
     this.checkDatabaseError(result.error);
+    if(demo&&((result.data?.demo_access_owner_id??result.data?.demo_owner_id)!==data.user.app_metadata.demo_owner_id||result.data.id!==data.user.id))throw new ForbiddenException('Demo identity is unavailable.');
     return { id: data.user.id, email: data.user.email, account: result.data as Account | null };
   }
 

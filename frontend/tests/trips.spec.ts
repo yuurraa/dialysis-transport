@@ -81,12 +81,24 @@ test('coordinator deletes selected trips with confirmation and reports partial f
   await expect(page.getByText('No trips scheduled.', { exact: true })).toBeVisible();
 });
 
-test('coordinator assigns and unassigns a driver while patient and driver views show the same journey', async ({ page }) => {
+test('coordinator assigns and unassigns a driver while patient, driver and caregiver views share trip filters', async ({ page }) => {
   await seedSession(page);
   let role='coordinator';let vehicleUnavailable=false;
   const driverId='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
   const date=new Date(Date.now()+3*86400000).toISOString().slice(0,10);
   let trip: Record<string,any>={...fixtureTrip,id:'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',lifecycle:'scheduled',session_date:date,treatment_start:`${date}T10:00:00+08:00`,treatment_end:`${date}T11:00:00+08:00`,arrival_by:`${date}T09:45:00+08:00`};
+  async function checkSharedFilters(operational=false){
+    await page.getByRole('button',{name:'Filters',exact:true}).click();
+    const filters=page.getByRole('dialog',{name:'Trip filters',exact:true});
+    await expect(filters.getByRole('checkbox',{name:/^Completed/})).not.toBeChecked();
+    await expect(filters.getByRole('checkbox',{name:/^Cancelled/})).not.toBeChecked();
+    await expect(filters.getByRole('checkbox',{name:/^Resolved/})).toHaveCount(0);
+    await expect(filters.getByLabel('From date',{exact:true})).toHaveValue(new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Singapore',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date()));
+    await expect(filters.getByLabel('Until date (optional)',{exact:true})).toHaveValue('');
+    for(const direction of ['Outbound','Return'])await expect(filters.getByRole('checkbox',{name:direction,exact:true})).toBeChecked();
+    for(const status of operational?['Unfilled','At-Risk','On-Track']:['Upcoming','In progress'])await expect(filters.getByRole('checkbox',{name:new RegExp(`^${status}`)})).toBeChecked();
+    await filters.getByRole('button',{name:'Cancel',exact:true}).click();
+  }
   const candidate={id:driverId,name:'Fixture Driver',phone:'82345678',vehicle_id:'cccccccc-cccc-4ccc-8ccc-cccccccccccc',plate:'TEST123',make:'Fixture',model:'Car',passenger_capacity:4,wheelchair_accessible:true};
   await page.route('**/api/auth/me',route=>route.fulfill({json:{account:{...activeAccount,role}}}));
   await page.route('**/api/drivers/me',route=>vehicleUnavailable?route.fulfill({status:503,json:{}}):route.fulfill({json:{vehicle:{status:'approved',registered_at:'2026-01-01T00:00:00Z'}}}));
@@ -106,6 +118,7 @@ test('coordinator assigns and unassigns a driver while patient and driver views 
   });
   await page.route('**/api/trips/*/unassign',route=>{expect(route.request().postDataJSON().version).toBe(trip.version);trip={...trip,version:trip.version+1,assigned_driver_id:null,pickup_at:null,dropoff_at:null,status:'unfilled',assignment:null};return route.fulfill({json:trip});});
   await page.goto('/dashboard/trips');
+  await checkSharedFilters(true);
   await page.getByRole('button',{name:'Assign driver',exact:true}).click();
   let dialog=page.getByRole('dialog',{name:'Assign driver',exact:true});
   await expect(dialog.getByRole('button',{name:'Find drivers',exact:true})).toHaveCount(0);
@@ -115,6 +128,7 @@ test('coordinator assigns and unassigns a driver while patient and driver views 
   await expect(page.getByRole('region',{name:'Trip list',exact:true})).toContainText('On-Track');
   role='patient';await page.reload();
   await expect(page.getByRole('region',{name:'Trip list',exact:true})).toContainText('Driver assigned');
+  await checkSharedFilters();
   await page.getByRole('button',{name:'View trip details',exact:true}).click();
   await expect(page).toHaveURL(new RegExp(`/dashboard/trips/${trip.id}$`));
   await page.reload();
@@ -191,6 +205,9 @@ test('coordinator assigns and unassigns a driver while patient and driver views 
   await expect(page.getByRole('heading',{name:'Trips',exact:true})).toBeVisible();
   await expect(page.getByText('No trips assigned.',{exact:true})).toBeVisible();
   await expect(page.getByText('No upcoming pickups assigned.',{exact:true})).toBeVisible();
+  await page.route('**/api/profiles/caregiver-links',route=>route.fulfill({json:{links:[{patient_id:trip.patient_id,patient_name:trip.patient_name,active:true}]}}));
+  role='caregiver';await page.reload();
+  await checkSharedFilters();
 
 });
 
@@ -239,7 +256,8 @@ test('patient acknowledges and cancels an upcoming trip with stale-version recov
   await expect(confirmation.getByRole('button',{name:'Reload trip',exact:true})).toBeVisible();
   await confirmation.getByRole('button',{name:'Reload trip',exact:true}).click();
   await confirmation.getByRole('button',{name:'Acknowledge trip',exact:true}).click();
-  await expect(details).toContainText('Trip acknowledged.');
+  await expect(details.getByRole('button',{name:'Acknowledge trip',exact:true})).toHaveCount(0);
+  await expect(details.getByText('Trip acknowledged.',{exact:true})).toHaveCount(0);
   await details.getByRole('button',{name:'Cancel trip',exact:true}).click();
   const cancellation=page.getByRole('dialog',{name:'Cancel trip',exact:true});
   await cancellation.getByRole('button',{name:'Back',exact:true}).click();
@@ -255,6 +273,8 @@ test('patient acknowledges and cancels an upcoming trip with stale-version recov
   await page.getByRole('button',{name:'Apply Filters',exact:true}).click();
   await expect(page.getByRole('region',{name:'Trip list',exact:true})).toContainText('Cancelled');
   trip={...trip,lifecycle:'completed',status:'resolved'};
+  let progressReads=0;
+  await page.route('**/api/trips/*/progress',route=>{progressReads++;return route.fulfill({json:{trip,sharing:false,location:null}});});
   let rating:number|null=null;
   let preference:{driver_id:string|null;driver_name:string|null;version:number}={driver_id:null,driver_name:null,version:0};
   await page.route('**/api/trips/*/feedback',route=>route.fulfill({json:{trip_id:trip.id,driver_id:trip.assigned_driver_id,rating,can_prefer:true,preference}}));
@@ -262,7 +282,16 @@ test('patient acknowledges and cancels an upcoming trip with stale-version recov
   await page.route('**/api/trips/driver-preference',route=>{const body=route.request().postDataJSON();expect(body.version).toBe(preference.version);preference={driver_id:body.driver_id,driver_name:body.driver_id?'Fixture Driver':null,version:preference.version+1};return route.fulfill({json:preference});});
   await page.goto(`/dashboard/trips/${trip.id}`);
   const feedback=page.getByRole('region',{name:'Driver feedback',exact:true});
+  await expect(feedback).toHaveCount(0);
+  await page.getByRole('button',{name:'Rate',exact:true}).click();
   await feedback.getByRole('button',{name:'5 stars',exact:true}).click();
+  for(let refresh=0;refresh<3;refresh++){
+    const before=progressReads;
+    await page.clock.runFor(5000);
+    await expect.poll(()=>progressReads).toBeGreaterThan(before);
+    await expect(feedback).toHaveCount(1);
+    await expect(feedback.getByRole('button',{name:'5 stars',exact:true})).toHaveAttribute('aria-pressed','true');
+  }
   await feedback.getByRole('button',{name:'Submit rating',exact:true}).click();
   await expect(feedback).toContainText('Your rating: 5 / 5');
   await expect(feedback.getByRole('button',{name:'Submit rating',exact:true})).toHaveCount(0);
@@ -270,6 +299,17 @@ test('patient acknowledges and cancels an upcoming trip with stale-version recov
   await expect(feedback).toContainText('Preferred driver: Fixture Driver');
   await feedback.getByRole('button',{name:'Remove preference',exact:true}).click();
   await expect(feedback).toContainText('Preferred driver: None');
+  await page.getByRole('button',{name:'Details',exact:true}).click();
+  await expect(feedback).toHaveCount(0);
+  const notice={id:'99999999-9999-4999-8999-999999999999',trip_id:trip.id,event:'completed',message:'Rate your driver',created_at:new Date().toISOString(),read_at:null};
+  await page.route('**/api/trips/notifications?*',route=>route.fulfill({json:{notifications:[notice],unread:1,total:1,page:1,pageSize:10}}));
+  await page.route(`**/api/trips/notifications/${notice.id}/read`,route=>route.fulfill({json:{...notice,read_at:new Date().toISOString()}}));
+  await page.getByRole('button',{name:'Notifications',exact:true}).click();
+  await page.getByRole('button',{name:/^Rate your driver ·/}).click();
+  await expect(page.getByRole('button',{name:'Rate',exact:true})).toHaveAttribute('aria-pressed','true');
+  await expect(feedback).toContainText('Your rating: 5 / 5');
+  await page.reload();
+  await expect(page.getByRole('button',{name:'Rate',exact:true})).toHaveAttribute('aria-pressed','true');
 });
 
 test('driver starts a journey, explicitly shares location and completes without retaining tracking', async ({page,context}) => {
@@ -300,7 +340,9 @@ test('driver starts a journey, explicitly shares location and completes without 
   const details=page.getByRole('region',{name:'Trip details',exact:true});
   await expect(details.getByRole('region',{name:'Journey progress',exact:true})).toHaveCount(0);
   await expect(details.getByRole('region',{name:'Current traffic',exact:true})).toHaveCount(0);
+  await expect(details.locator('.trip-detail-page-actions').getByRole('button',{name:'Start trip',exact:true})).toBeVisible();
   await details.getByRole('button',{name:'Journey',exact:true}).click();
+  await expect(details.locator('.trip-detail-page-actions').getByRole('button',{name:'Start trip',exact:true})).toBeVisible();
   await expect(details.getByRole('region',{name:'Driving route',exact:true})).toContainText('Approx. 20 min · 2.5 km');
   await expect(details.getByRole('region',{name:'Driving route map',exact:true})).toBeVisible();
   const traffic=details.getByRole('region',{name:'Current traffic',exact:true});
@@ -324,6 +366,9 @@ test('driver starts a journey, explicitly shares location and completes without 
   await details.getByRole('button',{name:'Start trip',exact:true}).click();
   const start=page.getByRole('dialog',{name:'Start trip',exact:true});await start.getByRole('button',{name:'Start trip',exact:true}).click();
   await expect(details.getByRole('button',{name:'Complete trip',exact:true})).toBeVisible();expect(posts).toBe(0);
+  await details.getByRole('button',{name:'Details',exact:true}).click();
+  await expect(details.locator('.trip-detail-page-actions').getByRole('button',{name:'Complete trip',exact:true})).toBeVisible();
+  await details.getByRole('button',{name:'Journey',exact:true}).click();
   await details.getByRole('button',{name:'Share location',exact:true}).click();
   await expect.poll(()=>posts).toBeGreaterThan(0);
   await details.getByRole('button',{name:'Details',exact:true}).click();
@@ -335,6 +380,7 @@ test('driver starts a journey, explicitly shares location and completes without 
   await details.getByRole('button',{name:'Complete trip',exact:true}).click();
   const complete=page.getByRole('dialog',{name:'Complete trip',exact:true});await complete.getByRole('button',{name:'Complete trip',exact:true}).click();
   await expect(details.getByRole('region',{name:'Journey progress',exact:true})).toContainText('Completed');
+  await expect(details.locator('.trip-progress .trip-execution-times > div')).toHaveCount(2);
   await expect(details.getByRole('button',{name:'Share location',exact:true})).toHaveCount(0);expect(point).toBeNull();
   await details.getByRole('button',{name:'Close trip details',exact:true}).click();
   await expect(page.locator('.trip-next-summary')).toContainText('Pickup at 10:00');

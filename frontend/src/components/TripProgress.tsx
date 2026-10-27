@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { apiGet, apiRequest, ApiError } from '../lib/api';
 import { watchDriverLocation } from '../lib/location';
 import type { Trip } from '../pages/TripsPage';
@@ -9,7 +10,7 @@ interface Progress { trip:Trip; sharing:boolean; location:TrackingPoint|null }
 const timestamp=(value:string)=>new Intl.DateTimeFormat('en-SG',{dateStyle:'medium',timeStyle:'short',timeZone:'Asia/Singapore'}).format(new Date(value));
 
 /** Location consent is separate from execution; failure to share never blocks the trip. */
-export default function TripProgress({trip,driver,onChanged,onUnavailable,onSessionExpired,onNotify,display='journey'}:{display?:'overview'|'journey';trip:Trip;driver:boolean;onChanged:(trip:Trip)=>void;onNotify:(message:string,urgent:boolean)=>void;onUnavailable:()=>void;onSessionExpired:()=>void}) {
+export default function TripProgress({trip,driver,actionsHost,onChanged,onUnavailable,onSessionExpired,onNotify,display='journey'}:{display?:'overview'|'journey';trip:Trip;driver:boolean;actionsHost:HTMLElement|null;onChanged:(trip:Trip)=>void;onNotify:(message:string,urgent:boolean)=>void;onUnavailable:()=>void;onSessionExpired:()=>void}) {
   const [progress,setProgress]=useState<Progress|null>(null);
   const [readError,setReadError]=useState(false);
   const [retry,setRetry]=useState(0);
@@ -118,14 +119,18 @@ export default function TripProgress({trip,driver,onChanged,onUnavailable,onSess
   const location=running&&!readError?progress?.location??null:null;
   const stale=!!location&&(now-Date.parse(location.recorded_at)>30000||now-Date.parse(location.received_at)>30000);
   return <>
-    {display==='journey'&&(current.started_at||current.completed_at||current.handover_at||running||driver&&(canStart||pendingStop))&&<section className="trip-progress" aria-label="Journey progress">
-        {(current.started_at||current.completed_at)&&<dl className="schedule-detail-fields">{current.started_at&&<div><dt>Started</dt><dd>{timestamp(current.started_at)}</dd></div>}{current.completed_at&&<div><dt>Completed</dt><dd>{timestamp(current.completed_at)}</dd></div>}</dl>}
+    {driver&&actionsHost&&createPortal(<>
+      {canStart&&<button className="patient-primary trip-execution-primary" type="button" onClick={()=>{setAction('start');setConflict(false);setActionError('');}}>Start trip</button>}
+      {running&&<>
+        <button className="patient-primary trip-execution-primary" type="button" onClick={()=>{setAction('complete');setConflict(false);setActionError('');}}>Complete trip</button>
+        {!current.demo_owner_id&&<button type="button" disabled={sharingBusy||readError} onClick={()=>{if(session){const old=session;setSession(null);void clearSession(old);}else void beginSharing();}}>{sharingBusy?'Starting sharing…':session?'Stop sharing':'Share location'}</button>}
+      </>}
+      {pendingStop&&<button type="button" onClick={()=>void clearSession(pendingStop)}>Retry stop sharing</button>}
+    </>,actionsHost)}
+    {display==='journey'&&(current.started_at||current.completed_at||current.handover_at&&current.lifecycle==='scheduled'||running)&&<section className="trip-progress" aria-label="Journey progress">
+        {(current.started_at||current.completed_at)&&<dl className="trip-execution-times" aria-label="Journey timestamps">{current.started_at&&<div><dt>Started</dt><dd>{timestamp(current.started_at)}</dd></div>}{current.completed_at&&<div><dt>Completed</dt><dd>{timestamp(current.completed_at)}</dd></div>}</dl>}
         {current.handover_at&&current.lifecycle==='scheduled'&&<p className="trip-map-note" role="status">Awaiting replacement pickup.</p>}
         {running&&<p className="trip-map-note" role="status">{readError?'Location unavailable.':location?`${stale?'Last known location':'Location updated'}: ${timestamp(location.received_at)} · Accuracy ±${Math.round(location.accuracy_metres)} m`:progress?.sharing?'Waiting for the driver’s location.':'Location is not being shared.'}</p>}
-      {driver&&<div className="patient-actions trip-progress-actions">{canStart&&<button className="patient-primary" type="button" onClick={()=>{setAction('start');setConflict(false);setActionError('');}}>Start trip</button>}{running&&<>
-        <button className="patient-primary" type="button" onClick={()=>{setAction('complete');setConflict(false);setActionError('');}}>Complete trip</button>
-        <button type="button" disabled={sharingBusy||readError} onClick={()=>{if(session){const old=session;setSession(null);void clearSession(old);}else void beginSharing();}}>{sharingBusy?'Starting sharing…':session?'Stop sharing':'Share location'}</button>
-      </>}{pendingStop&&<button type="button" onClick={()=>void clearSession(pendingStop)}>Retry stop sharing</button>}</div>}
     </section>}
     {display!=='overview'&&<TripRouteMap tripId={trip.id} routeKey={JSON.stringify([current.origin,current.destination])} version={current.version} activeTrip={running} location={location} locationStale={stale} onSessionExpired={onSessionExpired}/>}
     {display==='journey'&&readError&&<p className="trip-map-note trip-map-feedback trip-progress-feedback" role="status"><span>Progress unavailable.</span><RefreshButton label="Refresh progress" onClick={()=>setRetry(value=>value+1)}/></p>}

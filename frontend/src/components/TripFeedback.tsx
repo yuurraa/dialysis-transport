@@ -41,8 +41,10 @@ export default function TripFeedback({tripId,notify,onSessionExpired}:{tripId:st
     <h2>Driver feedback</h2>
     {loading?<p className="trip-map-note" role="status">Loading feedback…</p>:error?<p className="trip-map-note trip-map-feedback" role="status">{error}<RefreshButton label="Reload driver feedback" busy={loading} onClick={()=>setRetry(value=>value+1)}/></p>:data&&<>
       {data.rating!==null?<p className="trip-feedback-rating">Your rating: <strong>{data.rating} / 5</strong></p>:<div className="trip-feedback-form">
+        <div className="trip-feedback-rating-row">
         <fieldset disabled={busy}><legend className="patient-required">Rate your driver</legend><div className="trip-rating-choices">{[1,2,3,4,5].map(value=><button key={value} type="button" className="trip-rating-choice" aria-label={`${value} ${value===1?'star':'stars'}`} aria-pressed={draft===value} data-filled={draft>=value} onClick={()=>setDraft(value)}>★</button>)}</div></fieldset>
-        <div className="patient-actions"><button type="button" className="patient-primary" disabled={busy||!draft} onClick={()=>void save('rating')}>Submit rating</button></div><p className="trip-map-note">One rating per trip. Ratings cannot be changed.</p>
+        <button type="button" className="patient-primary" disabled={busy||!draft} onClick={()=>void save('rating')}>Submit rating</button>
+        </div><p className="trip-map-note trip-feedback-note">Ratings cannot be changed once submitted.</p>
       </div>}
       <div className="trip-feedback-preference"><p>Preferred driver: <strong>{data.preference.driver_name??'None'}</strong></p><div className="patient-actions">
         {data.can_prefer&&data.preference.driver_id!==data.driver_id&&<button type="button" disabled={busy} onClick={()=>void save('preference',data.driver_id)}>Make this driver preferred</button>}

@@ -273,6 +273,25 @@
   flex-wrap: nowrap;
 }
 
+/* Demo controls use the same fields, action sizes and footer as operational dialogs. */
+.dashboard-dialog.demo-tools-dialog { width: min(640px, calc(100vw - 32px)); }
+.demo-tools-dialog .overlay-body { padding-block: 16px; }
+.demo-tools-dialog .demo-tools-section + .demo-tools-section { margin-top: 16px; }
+.demo-tools-dialog .demo-tools-section h3 { margin: 0 0 4px; font-size: .875rem; font-weight: 600; line-height: 1.5; }
+.demo-tools-dialog .demo-tools-section .trip-map-note { margin: 0; font-size: .8125rem; line-height: 1.5; }
+.demo-tools-dialog .demo-tools-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; }
+.demo-tools-dialog .demo-tools-row > h3 { margin: 0; }
+.demo-tools-dialog .overlay-body .patient-actions { justify-content: flex-start; gap: 8px; margin: 0; }
+.demo-tools-dialog button[aria-pressed='true'] { border-color: var(--ui-accent); color: var(--ui-accent); }
+.demo-tools-dialog .demo-position-field { display: grid; flex: 1 1 180px; min-width: 120px; gap: 4px; }
+.demo-tools-dialog .demo-position-label { display: block; margin: 0; color: var(--ui-muted); font-size: .8125rem; line-height: 1.5; }
+.demo-tools-dialog .demo-movement-controls { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 16px; }
+.demo-tools-dialog input[type='range'] { display: block; width: 100%; min-width: 0; min-height: 28px; height: 28px; margin: 0; padding: 0; accent-color: var(--ui-accent); }
+.demo-tools-dialog .demo-reset-control { margin-inline-end: auto; }
+.demo-tools-dialog .demo-reset-note { margin: 16px 0 0; color: var(--ui-muted); font-size: .875rem; line-height: 1.5; }
+.demo-tools-dialog .demo-tools-empty p { margin: 0 0 12px; font-size: .875rem; line-height: 1.5; }
+.demo-tools-dialog .demo-tools-empty + .patient-form-fields { margin-top: 12px; }
+
 @media (max-width: 760px) {
   .dashboard-dialog.list-options-dialog {
     width: min(520px, calc(100% - 24px));

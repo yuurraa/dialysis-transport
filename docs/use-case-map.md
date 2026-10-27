@@ -39,9 +39,31 @@ Milestones 1–6 are implemented locally. The requested automated suite passed a
 
 The use-case model makes lifecycle, notifications and disruption handling prerequisites for mapping and recovery, rather than treating a map as an isolated feature. Those foundations, tracking, traffic assessment and recovery exist locally; recovery and linked-caregiver workflows await user-run verification. Turn-by-turn navigation and automatic detours remain outside the agreed scope.
 
-### Deferred demo tooling
+### Demo workflow
 
-Revisit after the main application is fleshed out; do not implement yet. Add a demo account switcher inside the signed-in account menu, never on the login page. Preserve the owner's real coordinator, caregiver, patient and driver accounts, and extend the optional seed with fictional patients and treatment schedules alongside dummy drivers. The proposed switcher lets the real coordinator enter explicitly tagged demo patient/driver dashboards, perform normal acknowledgement and Start/Complete actions, and return to the coordinator, with a visible demo identity indicator. Enforce the demo-mode setting and permitted targets on the backend while retaining each selected role's normal permissions. Existing dummy drivers have no Auth login, so switching requires an explicit authorisation mechanism rather than a cosmetic frontend role change.
+The user approved this design to exercise assignment through patient feedback without taking a physical journey. **Confirmed choice: real maps/routes, simulated movement and traffic.** Implemented locally, pending user-run tests and hosted setup; see the [walkthrough](development.md#interactive-demo-walkthrough). Optional Google Calendar integration remains deferred. A project-owner-managed `accounts.demo_admin` flag grants demo tools to active coordinators without introducing a new application role.
+
+Use a demo switcher inside the signed-in account menu, never on the login page. An authorised real coordinator can prepare a fictional scenario, switch to a seeded patient, caregiver, driver or ordinary dummy coordinator, and return to their original coordinator account. Display the switched identity persistently. The optional seed deletes the old generated Demo accounts and their dependent fixtures, then enrolls three realistic patients, three linked caregivers, the existing Max/Lewis/Lando driver records and Sophia Tan as a coordinator with `demo_admin=false`. Private registry membership grants switcher access without rewriting existing driver ownership, profile/vehicle data or reservations; setup repairs missing Auth identities instead of generating duplicate accounts. See the [seed instructions](development.md#seeded-fictional-accounts) before applying the explicit cleanup.
+
+The implementation provisions explicitly tagged demo identities and uses their ordinary role permissions for trip actions, keeping the original coordinator session separate. Demo access is enabled on the backend and restricted to a flagged real coordinator and their demo identities. Ordinary verified-Google sign-in requirements remain in place for real accounts; the demo authentication exception validates trusted Auth metadata and server-owned demo membership, rather than an email pattern or caller-supplied role. Service credentials never reach the browser. The browser receives only an actor access token, held in tab memory without a refresh token; reload returns to the coordinator. Revoking the owner's database capability also disables demo role helpers.
+
+The walkthrough uses the existing screens:
+
+1. Prepare a fictional patient, linked caregiver, treatment schedule and suitable drivers. Generate the scenario's trip, then assign it as coordinator using normal eligibility and reservation rules.
+2. Switch to the demo patient and acknowledge the trip normally.
+3. Use a demo-only timing control to make that booking due, then switch to its assigned driver and use the normal Start action. Timing changes must preserve the treatment buffer, availability and reservation constraints; they cannot alter real bookings or globally change the application clock.
+4. Simulate the driver's position along the real route without requesting physical GPS. Provide selectable normal traffic, delay and driver-unavailable scenarios. Scripted traffic must be labelled as simulated, isolated from shared LTA caches and excluded from automatic real-feed monitoring. Recovery still requires normal coordinator approval and eligibility checks.
+5. Complete the trip through the driver screen, switch to its patient, and submit normal completed-trip feedback or set a preferred driver.
+6. Reset only the explicitly owned demo scenario after confirmation, allowing the walkthrough to repeat. Reset must not delete real history, ratings, accounts or reservations, and must stop any active simulated movement.
+
+Keep controls compact and consistent with existing dashboard styling. Switching identities must clear the previous identity's visible records, notification state and outstanding requests. Server checks must reject untagged targets even when IDs are manually supplied. Start with this complete happy path plus one disruption scenario; extend existing test cases rather than expanding the shared test count unnecessarily. Tests remain user-run unless explicitly requested.
+
+Implementation checklist (completed locally; no commits or test execution):
+
+- [x] Add protected demo ownership, scenario and coordinator capability fields plus service-only fixture/control functions in `database/schema.sql`. Exclude demo trips from real traffic/recovery workers. Preserve ordinary role checks for acknowledgement, execution and feedback.
+- [x] Add backend demo setup/session/control endpoints, gated by `DEMO_ENABLED=true` and the current database flag. Provision only tagged fictional Auth identities. Use a separate short-lived actor access token; retain the coordinator's original Google session and require it for controls and switching.
+- [x] Add an account-menu demo popup and persistent identity/control strip. Clear requests and remount role screens on switches. Drive simulated positions along the real route and show explicitly simulated traffic for demo trips.
+- [x] Extend existing boundary/workflow cases, update setup instructions, and run builds/type checks only. Review revoked permissions, forged targets, repeated setup/reset and outstanding requests before reporting completion. Tests and hosted walkthrough remain user-run.
 
 ### Full milestone sequence
 

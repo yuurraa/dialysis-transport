@@ -10,7 +10,7 @@ const unique=(items:Notification[])=>[...new Map(items.map(item=>[item.id,item])
 /** A scrollable inbox; opening a trip always rechecks current access. */
 const notificationMessage=(item:Notification)=>item.event==='confirmed'?item.message.replace(/^Pickup confirmed(?= ·|$)/,'Trip acknowledged'):item.message;
 
-export default function TripNotifications({open,onUnread,onError,onSessionExpired,onOpenTrip,onOpenPage}:{open:boolean;onUnread:(count:number)=>void;onError:(message:string)=>void;onSessionExpired:()=>void;onOpenTrip:(trip:Trip)=>void;onOpenPage:(page:'connections'|'schedules')=>void}) {
+export default function TripNotifications({open,onUnread,onError,onSessionExpired,onOpenTrip,onOpenPage}:{open:boolean;onUnread:(count:number)=>void;onError:(message:string)=>void;onSessionExpired:()=>void;onOpenTrip:(trip:Trip,rate?:boolean)=>void;onOpenPage:(page:'connections'|'schedules')=>void}) {
   const [data,setData]=useState<Inbox|null>(null);
   const [loading,setLoading]=useState(true),[loadingMore,setLoadingMore]=useState(false);
   const [error,setError]=useState(false),[moreError,setMoreError]=useState(false),[hasMore,setHasMore]=useState(false);
@@ -86,7 +86,7 @@ export default function TripNotifications({open,onUnread,onError,onSessionExpire
         if(alive.current)callbacks.current.onOpenPage(item.notice_kind==='link'?'connections':'schedules');
       }else{
         const trip=await apiGet<Trip>(`/trips/${item.trip_id}`);
-        if(alive.current)callbacks.current.onOpenTrip(trip);
+        if(alive.current)callbacks.current.onOpenTrip(trip,item.event==='completed');
       }
     } catch(reason){
       if(alive.current){

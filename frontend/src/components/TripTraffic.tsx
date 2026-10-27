@@ -3,6 +3,7 @@ import { RefreshButton } from './DashboardUI';
 import { ApiError, apiGet } from '../lib/api';
 
 export interface TrafficView {
+  simulated?:boolean;
   availability?:{incidents:'current'|'unavailable'|'rate-limited';speeds:'current'|'unavailable'|'rate-limited'};
   state:'current'|'ended'|'unassigned'|'not_due';
   assessment_scope?:'road-conditions'|'trip-arrival';
@@ -89,7 +90,7 @@ export default function TripTraffic({tripId,version,activeTrip,locationAvailable
   const speedsUnavailable=!!data?.availability&&data.availability.speeds!=='current';
   if(data?.state==='ended')return null;
   return <section className="trip-traffic" aria-label="Current traffic">
-    <div className="trip-map-heading"><h3>Current traffic</h3></div>
+    <div className="trip-map-heading"><h3>Current traffic</h3>{data?.simulated&&<span className="trip-map-note">Simulated</span>}</div>
     {error&&!data?<p className="trip-map-note trip-map-feedback" role="status"><span>{error}</span><RefreshButton label="Refresh traffic" busy={loading} onClick={()=>refresh.current()}/></p>
       :!data?<p className="trip-map-note" role="status">Checking traffic…</p>
       :data.state!=='current'?<p className="trip-map-note">Traffic is not available yet.</p>

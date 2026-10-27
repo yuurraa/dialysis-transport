@@ -62,7 +62,11 @@ export default function TripRecoveryDialog({trip,onClose,onChanged,onAssessed,on
     {(!handover||data)&&<button type="button" className="patient-primary" disabled={loading||busy||!option||expired||conflict||(handover&&!safeConfirmed)} onClick={()=>void approve()}>{busy?'Approving…':handover?'Approve handover':'Approve recovery'}</button>}
     <button type="button" className={handover&&!data?'patient-primary':undefined} disabled={busy||loading||(handover&&!origin.trim())} onClick={()=>void generate(true)}>{handover&&!data?'Find replacements':'Refresh options'}</button><button type="button" disabled={busy} onClick={onClose}>Close</button>
   </>}>
-    {handover&&<div className="patient-field trip-handover-field"><label className="patient-required" htmlFor="handover-origin">Safe pickup point</label><input id="handover-origin" required maxLength={500} disabled={busy||loading} value={origin} onChange={event=>{setOrigin(event.target.value);setData(null);setSelected('');setSafeConfirmed(false);setAssessmentError('');}} placeholder="Address or postal code"/></div>}
+    {handover&&<div className="patient-form-fields trip-handover-field"><div className="patient-field patient-form-wide">
+      <label className="patient-required" htmlFor="handover-origin">Safe pickup point</label>
+      <input id="handover-origin" required maxLength={500} disabled={busy||loading} value={origin} aria-describedby="handover-origin-help" onChange={event=>{setOrigin(event.target.value);setData(null);setSelected('');setSafeConfirmed(false);setAssessmentError('');}} placeholder="Address or postal code"/>
+      <span id="handover-origin-help" className="trip-map-note">Enter the agreed safe stopping point where the replacement driver will collect the patient.</span>
+    </div></div>}
     {loading?<p role="status">Finding recovery options…</p>:assessmentError?<p role="status">{assessmentError}</p>:data?.options.length?<fieldset className="trip-recovery-options"><legend className="sr-only">Choose a recovery option</legend>{Array.from(drivers,([key,choices])=>{
       const driver=choices[0];
       return <div key={key} className="trip-recovery-driver">

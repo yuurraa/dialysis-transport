@@ -4,6 +4,7 @@ import type { User } from '@supabase/supabase-js';
 import AccountPanel, { type Account } from './AccountPanel';
 import PageLayout from '../components/PageLayout';
 import Dashboard from './Dashboard';
+import { demoSessionEvent, getDemoSession, setDemoSession } from '../lib/demoSession';
 import { hasSignupSelection, supabase } from '../lib/supabase';
 import { completeGoogleAccountSelection, startGoogleAccountSelection, type SignupDraft } from '../lib/googleAccountSelection';
 
@@ -12,6 +13,12 @@ export default function LoginPage() {
   const [path, setPath] = useState(window.location.pathname);
   const [resolvedAccount, setResolvedAccount] = useState<{ userId: string; account: Account | null } | null>(null);
   const [user, setUser] = useState<User | null>(null);
+  const [demoAccount,setDemoAccount]=useState<Account|null>(null);
+  useEffect(()=>{
+    const changed=()=>setDemoAccount(getDemoSession()?.account??null);
+    window.addEventListener(demoSessionEvent,changed);
+    return()=>window.removeEventListener(demoSessionEvent,changed);
+  },[]);
   const [checking, setChecking] = useState(Boolean(supabase));
   const [busy, setBusy] = useState<'signin' | 'signout' | 'change' | null>(null);
   const [message, setMessage] = useState('');
@@ -46,7 +53,8 @@ export default function LoginPage() {
     setResolvedAccount(previous => previous?.account?.role === 'patient' ? { ...previous, account: { ...previous.account, profile_complete: false } } : previous);
     navigate('/', true);
   }, [navigate]);
-  const account = resolvedAccount?.userId === user?.id ? resolvedAccount?.account : null;
+  const originalAccount = resolvedAccount?.userId === user?.id ? resolvedAccount?.account : null;
+  const account = user ? demoAccount??originalAccount : null;
   const restoringAccount = checking || Boolean(user && resolvedAccount?.userId !== user.id);
   const dashboardAccess = Boolean(user && account && (!['patient', 'driver', 'caregiver'].includes(account.role) || account.profile_complete === true) && account.status === 'active');
   useEffect(() => {
@@ -114,7 +122,7 @@ export default function LoginPage() {
       if (!active) return;
       eventVersion += 1;
       setUser(session?.user ?? null);
-      if (event === 'SIGNED_OUT') setResolvedAccount(null);
+      if (event === 'SIGNED_OUT') {setDemoSession(null);setResolvedAccount(null);}
       setChecking(selectingAccount.current);
       setBusy(null);
       if (event === 'SIGNED_OUT' && !selectingAccount.current && !cancellingSignup.current) notify('You have been signed out.');
@@ -164,6 +172,7 @@ export default function LoginPage() {
   }, [notify]);
 
   const expireSession = useCallback(async () => {
+    if(getDemoSession()) {setDemoSession(null);navigate('/dashboard/trips',true);notify('Demo session ended. Returned to your coordinator account.');return;}
     await supabase?.auth.signOut({ scope: 'local' }).catch(() => undefined);
     setUser(null);
     notify('Your session is no longer valid. Please sign in with Google again.');
@@ -205,6 +214,7 @@ export default function LoginPage() {
 
   async function signOut(cancelSignup = false) {
     if (!supabase || busy) return;
+    setDemoSession(null);
     cancellingSignup.current = cancelSignup;
     if (cancelSignup) setToast(null);
     setBusy('signout');
@@ -232,7 +242,7 @@ export default function LoginPage() {
 
   return (
     <>
-      {dashboardAccess && account && !checking ? <Dashboard key={`${account.id}:${account.role}`} account={account} avatarUrl={typeof user?.user_metadata.avatar_url === 'string' ? user.user_metadata.avatar_url : typeof user?.user_metadata.picture === 'string' ? user.user_metadata.picture : undefined} path={path} onNavigate={navigate} onSignOut={() => void signOut()} signingOut={busy === 'signout'} notify={notify} onSessionExpired={expireSession} onPatientProfileMissing={onPatientProfileMissing} /> : <PageLayout restoring={restoringAccount} accountCreation={Boolean(user && !restoringAccount && (!account || (['patient', 'driver', 'caregiver'].includes(account.role) && account.status === 'active' && account.profile_complete !== true)))}>
+      {dashboardAccess && account && !checking ? <Dashboard key={`${account.id}:${account.role}`} account={account} demoAdmin={Boolean(originalAccount?.demo_admin&&originalAccount.role==='coordinator')} avatarUrl={demoAccount?undefined:typeof user?.user_metadata.avatar_url === 'string' ? user.user_metadata.avatar_url : typeof user?.user_metadata.picture === 'string' ? user.user_metadata.picture : undefined} path={path} onNavigate={navigate} onSignOut={() => void signOut()} signingOut={busy === 'signout'} notify={notify} onSessionExpired={expireSession} onPatientProfileMissing={onPatientProfileMissing} /> : <PageLayout restoring={restoringAccount} accountCreation={Boolean(user && !restoringAccount && (!account || (['patient', 'driver', 'caregiver'].includes(account.role) && account.status === 'active' && account.profile_complete !== true)))}>
       <section className={`entry-card ${user ? 'entry-card-account' : ''}`} aria-busy={checking || Boolean(busy)} aria-label={user ? 'Your account' : 'Sign in'}>
         {checking || (!user && supabase && !backendReady) ? <div className="account-loading" role="status" aria-label={checking ? 'Checking sign-in' : 'Connecting to service'}><span className="account-spinner" aria-hidden="true" /><span>Loading...</span></div> : user ? (
           <AccountPanel key={user.id} email={user.email} onSignOut={() => void signOut()} onCancel={() => void signOut(true)} onSessionExpired={expireSession} signingOut={busy === 'signout'} onAccountResolved={onAccountResolved} onLoadingChange={setAccountLoading} onChangeGoogleAccount={changeGoogleAccount} initialDraft={signupDraft} />

@@ -6,6 +6,7 @@ import { ProfilesModule } from './profiles/profiles.module';
 import { SchedulingModule } from './scheduling/scheduling.module';
 import { TripsModule } from './trips/trips.module';
 import { IntegrationsModule } from './integrations/integrations.module';
+import { DemoModule } from './demo/demo.module';
 
 @Controller('health')
 class HealthController {
@@ -15,7 +16,7 @@ class HealthController {
 }
 
 @Module({
-  imports: [DriversModule, SupabaseModule, AuthModule, ProfilesModule, SchedulingModule, TripsModule, IntegrationsModule],
+  imports: [DriversModule, SupabaseModule, AuthModule, ProfilesModule, SchedulingModule, TripsModule, IntegrationsModule, DemoModule],
   controllers: [HealthController],
 })
 export class AppModule {}

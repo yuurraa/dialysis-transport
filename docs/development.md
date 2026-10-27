@@ -194,11 +194,24 @@ Each Driver List row has Schedule, Car and Info icons in that order. Schedule op
 `WeeklyAvailabilityView` shares rendering, time formatting, Singapore clock and weekly slot grouping between the driver's editor and coordinator inspection. The popup is an individual reference view. A filtered driver list or daily timeline during future trip assignment remains separate work; individual dated assignments are included; a combined-driver calendar remains separate work.
 
 
-### Optional mock drivers
+### Seeded fictional accounts
 
-After applying `database/schema.sql`, run `database/seed.sql` in Supabase SQL Editor as project owner to add three fictional Driver records. These are app records without Auth identities or usable Google logins. All contact, demographic, licence and vehicle information is fictional, even though the display names are familiar. Existing Drivers, including Charles Leclerc, remain unchanged. The script is transactional and rerunnable: existing demo emails are skipped, preserving edits; a collision with a linked/non-Driver account aborts the operation.
+Return to the original coordinator and pause demo tools (`DEMO_ENABLED=false`, restart every running backend, including local/deployed instances) so no Auth provisioning remains in flight. Apply `database/schema.sql`, enable `demo_admin=true` on the intended existing Google coordinator, then run `database/seed.sql` as project owner in Supabase SQL Editor. Deploy the matching backend/frontend, restore `DEMO_ENABLED=true`, and restart before using the switcher again. The seed selects the oldest active, Google-linked, flagged real coordinator as the cohort owner and refuses to move an existing cohort to another owner.
 
-The mock vehicles are approved using an existing active Coordinator as the review reference; their audit snapshots include `mock_seed: true`. No coordinator account is created or changed. Different capacity, accessibility and Singapore-time availability provide assignment fixtures:
+**The seed intentionally deletes the old generated accounts with a stored `demo_owner_id`, including their patient/driver/caregiver profiles, schedules, trips, history, notifications, ratings, links, recovery/location records and matching synthetic Auth users.** It does not select accounts by their display name or email prefix. Google identities and unexpected Auth ownership fail the transaction; unexpected references from retained records also fail rather than silently deleting or rewriting them. The operation is atomic. Recovering deleted old fixture data requires a database backup; rerunning the seed cannot restore that history.
+
+It then creates/enrolls these ten fictional accounts, without a “Demo” name or duplicate driver records:
+
+| Role | Accounts | Details |
+| --- | --- | --- |
+| Patients | Tan Wee Kiat; Lim Mei Ling; Rajesh Kumar | Ambulant; walking aid; wheelchair with assistance, respectively. Fictional Singapore addresses, contacts and demographics. |
+| Caregivers | Tan Jia Hui; Lim Wei Ming; Priya Kumar | Linked one-to-one to the patients in the same order. |
+| Drivers | Max Verstappen; Lewis Hamilton; Lando Norris | Reuse `mock.max@example.test`, `mock.lewis@example.test`, `mock.lando@example.test` and their original UUIDs. |
+| Coordinator | Sophia Tan | `mock.coordinator@example.test`, ordinary coordinator role, **`demo_admin=false`**. Cannot initiate demo tools. |
+
+All email addresses use `example.test`; no real inboxes, passwords or extra Google accounts are needed. The seed creates account/profile/link records, not Auth users or treatment bookings. Prepare Demo later provisions only the missing synthetic Auth identities through Admin Auth and prepares one primary-patient walkthrough booking in a free daytime availability window within the next seven days. It leaves the existing driver availability intact; if none has a suitable window, preparation is blocked until availability is supplied. Other patients start with no schedules/trips and can use the normal patient/coordinator flows.
+
+On reruns, existing enrolled profiles, names, account status, Auth links and relationships retain subsequent edits. The dummy coordinator's `demo_admin` capability stays false. Existing driver profiles, vehicles, approvals, availability, ratings and bookings are preserved. On a new installation only, missing original mock drivers receive these defaults:
 
 | Driver | Vehicle | Capacity | Wheelchair accessible | Weekly availability |
 | --- | --- | ---: | --- | --- |
@@ -206,7 +219,39 @@ The mock vehicles are approved using an existing active Coordinator as the revie
 | Lewis Hamilton | Mercedes-Benz Vito | 6 | Yes | Mon/Wed/Fri, 10:00–18:00 (24h) |
 | Lando Norris | Perodua Myvi | 4 | No | Tue/Thu/Sat, 16:00–22:00 (18h) |
 
-These are optional demo records, not part of schema reapplication or automatic application startup. The final SELECT displays only the seeded demo drivers for inspection. It supplies demo driver identities, approved vehicles and default availability; dated overrides can be set through the application.
+A private `seeded_accounts` registry enrolls the fixtures in the administrator's switcher without rewriting the existing drivers' `demo_owner_id` or previous bookings. Account responses expose derived `demo_access_owner_id`/`seed_key` metadata; clients cannot write membership. The backend checks registry membership and trusted Auth metadata before issuing a temporary actor session. Seeded coordinator sessions use normal coordinator permissions but cannot serve as the original demo-tool administrator, even if their capability is mistakenly changed later.
+
+The final seed SELECT shows only these fictional records. Schema reapplication alone never runs the cleanup or seed. Real accounts, the real coordinator capability and Charles Leclerc are not changed. Seed collisions with an unrelated account or identity abort the entire transaction.
+
+### Interactive demo walkthrough
+
+The signed-in demo tools use the seeded accounts above, including the existing three mock drivers. They no longer generate generic Demo Patient/Caregiver accounts or duplicate drivers. No extra Google accounts or real email addresses are needed. The login page remains unchanged.
+
+1. Apply the full current `database/schema.sql` in Supabase SQL Editor, then enable the capability on the intended **existing coordinator account** (replace the UUID below). The flag defaults to false and application users cannot edit it:
+
+   ```sql
+   update public.accounts set demo_admin=true
+   where id='YOUR_COORDINATOR_ACCOUNT_UUID' and role='coordinator' and demo_owner_id is null;
+   ```
+
+2. Set backend `DEMO_ENABLED=true` and retain the existing backend-only `SUPABASE_SECRET_KEY`, Supabase URL/publishable key and OneMap credentials. Restart/redeploy the backend and deploy the updated frontend. Demo identity creation uses Supabase Admin Auth and email-link verification without sending email; the project's Email Auth provider must support this flow. Ordinary account access still uses Google.
+3. Apply `database/seed.sql` as described above, then sign in as that real coordinator and open **Account → Demo Tools → Prepare Demo**. This repairs/provisions missing Auth links for the ten seeded accounts and prepares one single-session treatment schedule and unassigned outbound trip for Tan Wee Kiat. It does not create another set of accounts. The fixture trip is intentionally prepared by the service, not by weakening ordinary trip generation rules. Setup is idempotent; **Finish Demo Setup** retries interrupted Auth provisioning without duplicating records.
+4. Choose **Open Trip**, then assign Max Verstappen, Lewis Hamilton or Lando Norris through the normal assignment button. Their existing availability still applies; adjust the relevant week through the normal driver editor if the walkthrough needs a different time. Switch to **Tan Wee Kiat** and acknowledge the trip normally. The View as selector also contains the other seeded patients/caregivers and Sophia Tan. The persistent Demo strip opens controls and returns to the original coordinator; Open Trip is disabled for an actor who cannot view the selected walkthrough trip.
+5. Choose **Make Pickup Due**. This deliberately retimes only the owned scenario booking and its displayed treatment timestamps; it preserves acknowledgement and checks availability and competing reservations. It does not move the global clock, real bookings, or the source treatment schedule. Switch to the assigned demo driver, open the trip's Journey tab and use **Start trip**.
+6. Open controls and **Set Position** along the real route, or **Play Movement**, then close the popup to watch the map. Movement advances five percentage points every five seconds while the tab is visible; Pause remains in the Demo strip. Switching roles, hiding the tab, reaching the destination or an ended trip stops the player. Open controls again as the patient/caregiver and play to view movement from that role. Physical GPS sharing is disabled for demo trips in both the UI and database functions.
+7. Select **Normal** or **15-Minute Delay** to script traffic, including an At-Risk flag, a labelled simulated obstacle and ETA. Demo route/recovery reads use real OneMap routes with scripted traffic and an explicit recovery buffer; they never fetch or update shared LTA feeds. Real traffic/recovery workers exclude tagged demo trips. Driver unavailability and coordinator recovery approval use their normal screens and rules; a scenario does not guarantee that feasible recovery exists.
+8. Use the driver's normal **Complete trip** action. Switch to the patient, include completed trips in the filters, and submit the normal completed-trip rating/preferred-driver action. The role switches clear visible records, notifications, pending requests and filter state between identities.
+9. **Reset Scenario → Confirm Reset** archives the current owned demo journey and prepares a fresh one. It stops the player and preserves historical demo records/feedback; it does not delete real accounts, trips, ratings or reservations. The same demo identities and source schedule are reused. Only this scenario's active journey is reset; separately created demo trips are not bulk-deleted.
+
+The real Google session stays in the normal Supabase client. Demo actor access tokens are held only in tab memory, without browser refresh-token storage; refresh/reload returns to the real coordinator. All controls and switches require the original active coordinator and current database capability, even while a demo actor is displayed. Disabling `DEMO_ENABLED` rejects backend demo access; revoke `demo_admin` as well to revoke database role helpers for previously issued demo identities. Demo alerts are labelled **Demo** and go only to their owner coordinator and the relevant fictional actors, not other coordinators.
+
+The persistent Demo strip uses equal spacing from the top-bar divider and the page heading (12px on desktop, 8px on mobile). Controls, Return and Pause Movement use visible bordered buttons with the dashboard's theme colours and hover/focus states.
+
+The Demo tools popup uses a compact **View as** account selector, standard neutral form styling and normal-size dashboard buttons. Scenario and traffic actions share rows when space permits; movement controls wrap on narrow screens. Reset stays in the footer beside Close, with an explicit confirmation before archiving the run. The footer retains the shared 12px bottom padding.
+
+`GET /api/demo` reads the current owned scenario; `POST /api/demo/setup` prepares/repairs it; `POST /api/demo/switch` accepts `{account_id}` and returns only a tagged actor's short-lived access token/account; `POST /api/demo/control` accepts `due`, `traffic`, `move` or confirmed `reset`. The service-only database functions are not executable by anonymous or ordinary authenticated clients. Seeded-patient simulation trips use only the cohort’s drivers and caregivers. The reused drivers retain access to their previously assigned ordinary trips; those reservations are not retagged or rewritten. Outside the primary walkthrough, seeded-patient routes use a labelled normal simulated traffic assessment without querying LTA. Setup can take longer than ordinary API requests while provisioning Auth identities; its browser deadline is 60 seconds.
+
+Frontend/backend builds and type checks were run for this implementation. Existing backend, database and browser cases were extended without adding test cases; **tests have not been executed**. Before relying on a deployed demonstration, run `npm test` yourself, apply the schema and walk through the steps above with the configured providers. No hosted data or Auth identities were created during implementation.
 
 
 ### Schedule trip-generation indicators
@@ -282,6 +327,10 @@ A stale action requires explicit reload through role-scoped `GET /api/trips/:id`
 
 
 ### Driver feedback and preferences
+
+Completed patient trips have a **Rate** tab immediately after Details/Journey. Ratings and preferred-driver controls live there rather than under Details; drivers, caregivers and coordinators do not receive a rating tab. The redundant “Trip acknowledged.” detail line is removed, while acknowledgement actions/history remain. Completing a journey sends the patient one **Rate your driver** notification using the existing completion event; clicking it opens the authorised trip directly on Rate, including when that trip is already open. Caregivers/coordinators retain ordinary completion wording. Reapplying the schema updates existing visible patient completion messages without creating duplicate notices or resetting read state.
+
+The feedback panel is limited to 560px, with stars and Submit sharing a wrapping row and preferences directly below a divider. Feedback and the background progress tracker use different per-trip component keys so polling cannot duplicate or remount the rating form or clear an unsent rating selection.
 
 Patient/caregiver trip badges say At risk instead of Under review. UC-12 adds `GET /api/trips/:id/feedback`, `POST /api/trips/:id/rating` with `{rating:1..5}`, and `PATCH /api/trips/driver-preference` with `{driver_id:uuid|null,version}`. These endpoints require the active patient owner; linked caregivers, drivers and coordinators cannot submit feedback/preferences. Ratings are available only for completed journeys and bind the final assigned driver on the server. One rating is allowed per trip; identical retries are idempotent and different subsequent values return PT409/HTTP409. Preference choices must be active, approved, suitable drivers who completed a trip for the patient. Clearing is allowed even if that driver has since become ineligible. Stale preference versions require a refresh before retrying.
 

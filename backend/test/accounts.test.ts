@@ -6,6 +6,8 @@ import { NestFactory } from '@nestjs/core';
 import { AuthController } from '../src/auth/auth.controller';
 import { AuthService } from '../src/auth/auth.service';
 import { SupabaseService } from '../src/supabase.module';
+import { DemoService } from '../src/demo/demo.module';
+import type { TripsService } from '../src/trips/trips.service';
 
 const account = { id: '11111111-1111-4111-8111-111111111111', auth_user_id: 'user', email: 'person@example.test', display_name: 'Test Person', role: 'patient', status: 'active' };
 const profile = { full_name: 'Test Patient', birth_date: '1990-04-12', gender: 'female', phone: '+65 81234567', pickup_address: 'Test street', postal_code: '560123', mobility: 'ambulant', assistance_required: false };
@@ -47,6 +49,23 @@ test('requires a verified session and returns persisted account separately from 
   assert.equal(result.status, 200);
   assert.equal(result.body.account, null);
   assert.equal(result.body.role, undefined);
+  const previous=process.env.DEMO_ENABLED;
+  let role='coordinator',status='active',demo_admin=false;
+  const calls:unknown[]=[];
+  const service=new DemoService({verifyIdentity:async()=>({account:{id:account.id,role,status,demo_admin}})} as unknown as AuthService,
+    {forIntegration:()=>({rpc:async(name:string,args:unknown)=>{calls.push([name,args]);return {data:{actors:[],scenario:null,trip:null},error:null};}})} as unknown as SupabaseService,{} as TripsService);
+  try {
+    process.env.DEMO_ENABLED='false';await assert.rejects(service.state('Bearer fixture'));assert.equal(calls.length,0);
+    process.env.DEMO_ENABLED='true';await assert.rejects(service.state('Bearer fixture'));assert.equal(calls.length,0);
+    demo_admin=true;
+    for(const invalid of ['patient','driver','caregiver']){role=invalid;await assert.rejects(service.state('Bearer fixture'));}
+    role='coordinator';status='inactive';await assert.rejects(service.state('Bearer fixture'));assert.equal(calls.length,0);
+    status='active';await service.state('Bearer fixture');
+    assert.deepEqual(calls,[['demo_manage',{owner:account.id,action:'state',details:{}}]]);
+    await assert.rejects(service.switchActor('Bearer fixture',{account_id:account.id}));
+    await assert.rejects(service.control('Bearer fixture',{action:'move',percent:101}));
+    await assert.rejects(service.control('Bearer fixture',{action:'reset',owner_id:account.id,confirmed:true}));
+  } finally {if(previous===undefined)delete process.env.DEMO_ENABLED;else process.env.DEMO_ENABLED=previous;}
 });
 test('registration validates public roles, privilege fields and complete personal profiles', async () => {
   for (const body of [{ role: 'coordinator', displayName: 'Someone' }, { role: 'patient', displayName: '' }, { role: 'driver', displayName: 'Test', status: 'approved' }, { role: 'caregiver', displayName: 42 }, { role: ['patient'], displayName: 'Test' }]) {

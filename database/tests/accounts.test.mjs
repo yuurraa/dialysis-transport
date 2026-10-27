@@ -69,6 +69,9 @@ test('registration persists the verified email, allowed role and active status; 
 });
 test('users cannot write roles/status directly or access other accounts', async () => {
   await assert.rejects(asUser(patient, "update public.accounts set role = 'coordinator'"), /permission denied/);
+  await assert.rejects(asUser(patient, 'update public.accounts set demo_admin=true'), /permission denied/);
+  await assert.rejects(asUser(patient, "select public.demo_manage('22222222-2222-4222-8222-222222222222','setup','{}')"), /permission denied/);
+  await assert.rejects(asUser(patient, "select public.demo_trip_context('11111111-1111-4111-8111-111111111111')"), /permission denied/);
   await assert.rejects(asUser(patient, "insert into public.accounts(email, display_name, role, status) values ('hacker@example.test', 'Hacker', 'coordinator', 'active')"), /permission denied/);
   assert.equal((await asUser(driver, 'select * from public.accounts')).length, 0);
   assert.equal((await asUser(patient, 'select * from public.accounts')).length, 1);
@@ -79,6 +82,43 @@ test('preconfigured coordinator links by verified email once, without letting re
   assert.equal(account.auth_user_id, coordinator);
   assert.equal(account.role, 'coordinator');
   await assert.rejects(asUser(coordinator, "select public.register_account('patient', 'Changed')"), /already registered/);
+  // Demo provisioning is owner-managed and service-only; keep fixtures local to this transaction.
+  await db.exec('begin; alter table auth.users add column raw_app_meta_data jsonb;');
+  try {
+    await db.query('update public.accounts set demo_admin=true where id=$1',[account.id]);
+    const other=(await db.query("insert into public.accounts(email,display_name,role) values('other.coordinator@example.test','Other Coordinator','coordinator') returning id")).rows[0].id;
+    const seed=(await readFile(new URL('../seed.sql',import.meta.url),'utf8')).replace(/^begin;$/m,'').replace(/^commit;$/m,'');
+    await db.exec(seed);
+    const driversBefore=(await db.query("select to_jsonb(a) as account,to_jsonb(d) as profile,to_jsonb(v) as vehicle,to_jsonb(s) as availability from private.seeded_accounts r join public.accounts a on a.id=r.account_id join public.drivers d on d.account_id=a.id join public.driver_vehicles v on v.driver_id=a.id join public.driver_availability s on s.driver_id=a.id where r.seed_key like 'driver%' order by a.id")).rows;
+    await db.query("select set_config('request.jwt.claim.sub',$1,true)",[coordinator]);
+    const legacyId=(await db.query('select gen_random_uuid() as id')).rows[0].id;
+    await db.query("insert into auth.users(id,email,email_confirmed_at,raw_app_meta_data) values($1,'legacy.demo@example.test',now(),$2::jsonb)",[legacyId,JSON.stringify({demo_account_id:legacyId,demo_owner_id:account.id})]);
+    await db.query("insert into public.accounts(id,auth_user_id,email,display_name,role,demo_owner_id,demo_key) values($1,null,'legacy.demo@example.test','Demo Patient','patient',$2,'patient')",[legacyId,account.id]);
+    const legacyPatient=(await db.query("insert into public.patients(account_id,full_name,phone,pickup_address,mobility) values($1,'Demo Patient','80000999','Fictional address','ambulant') returning id",[legacyId])).rows[0].id;
+    const legacySchedule=(await db.query("insert into public.treatment_schedules(patient_id,centre_id,days,start_time,end_time,effective_from,effective_to,kind) select $1,id,array[extract(isodow from (now() at time zone 'Asia/Singapore')::date)::integer],'10:00','11:00',(now() at time zone 'Asia/Singapore')::date,(now() at time zone 'Asia/Singapore')::date,'single' from public.dialysis_centres limit 1 returning id",[legacyPatient])).rows[0].id;
+    const legacyTrip=(await db.query("insert into public.trips(patient_id,patient_name,source_schedule_id,root_schedule_id,occurrence_key,original_session_date,session_date,direction,origin,destination,treatment_start,treatment_end,arrival_by,source_version,patient_version,created_by) values($1,'Demo Patient',$2,$2,'legacy-fixture',current_date,current_date,'outbound','Old home','Old centre',now()+interval '2 hours',now()+interval '3 hours',now()+interval '105 minutes',1,1,$3) returning id",[legacyPatient,legacySchedule,account.id])).rows[0].id;
+    await db.query("insert into public.trip_history(trip_id,actor_id,event,details) values($1,$2,'generated','{}')",[legacyTrip,account.id]);
+    await db.query('insert into private.demo_scenarios(owner_id,schedule_id,trip_id) values($1,$2,$3)',[account.id,legacySchedule,legacyTrip]);
+    await db.exec(seed);
+    for(const [table,id] of [['public.accounts',legacyId],['auth.users',legacyId],['public.patients',legacyPatient],['public.treatment_schedules',legacySchedule],['public.trips',legacyTrip]])assert.equal((await db.query(`select count(*)::integer as count from ${table} where id=$1`,[id])).rows[0].count,0);
+    assert.deepEqual((await db.query("select to_jsonb(a) as account,to_jsonb(d) as profile,to_jsonb(v) as vehicle,to_jsonb(s) as availability from private.seeded_accounts r join public.accounts a on a.id=r.account_id join public.drivers d on d.account_id=a.id join public.driver_vehicles v on v.driver_id=a.id join public.driver_availability s on s.driver_id=a.id where r.seed_key like 'driver%' order by a.id")).rows,driversBefore);
+    await db.exec('set local role service_role;');
+    await db.query("select set_config('request.jwt.claims',$1,true)",[JSON.stringify({role:'service_role'})]);
+    const manage=async(action,details={})=>(await db.query('select public.demo_manage($1,$2,$3::jsonb) as state',[account.id,action,JSON.stringify(details)])).rows[0].state;
+    const first=await manage('setup');
+    assert.equal(first.actors.length,10);assert.equal(first.trip.demo_owner_id,account.id);
+    assert.equal(first.actors.filter(actor=>actor.role==='driver').length,3);
+    assert.equal(first.actors.filter(actor=>actor.role==='patient').length,3);assert.equal(first.actors.filter(actor=>actor.role==='caregiver').length,3);
+    assert.equal(first.actors.find(actor=>actor.role==='coordinator').demo_admin,false);
+    assert.ok(first.actors.every(actor=>actor.demo_access_owner_id===account.id&&actor.demo_owner_id===null&&!actor.display_name.includes('Demo')));
+    const again=await manage('setup');assert.equal(again.trip.id,first.trip.id);assert.deepEqual(again.actors.map(actor=>actor.id),first.actors.map(actor=>actor.id));
+    const reset=await manage('reset',{confirmed:true});assert.notEqual(reset.trip.id,first.trip.id);assert.equal(reset.scenario.traffic,'normal');
+    await db.exec('reset role;');
+    assert.ok((await db.query('select deleted_at from public.trips where id=$1',[first.trip.id])).rows[0].deleted_at);
+    await db.query("insert into public.trip_history(trip_id,actor_id,event,details) values($1,$2,'confirmed','{}')",[reset.trip.id,account.id]);
+    assert.equal((await db.query('select count(*)::integer as count from public.trip_notifications where recipient_id=$1',[other])).rows[0].count,0);
+    assert.ok((await db.query('select message from public.trip_notifications where recipient_id=$1',[account.id])).rows.every(row=>row.message.startsWith('Demo · ')));
+  } finally {await db.exec('rollback');}
 });
 test('anonymous callers cannot execute account functions or read accounts', async () => {
   await db.exec('set role anon');
@@ -1482,6 +1522,10 @@ test('driver execution is explicit and live location is scoped to an assigned ac
     await own(driver,'select public.report_trip_location($1,$2,1.3,103.8,10,$3)',[trip.id,sharing,new Date().toISOString()]);
     trip=(await own(driver,"select public.execute_trip($1,'complete',$2) as trip",[trip.id,trip.version]))[0].trip;
     assert.equal(trip.lifecycle,'completed');assert.equal(trip.status,'resolved');assert.ok(trip.completed_at);
+    const completedNotices=(await own(patient,'select public.list_trip_notifications(1) as data'))[0].data.notifications.filter(notice=>notice.trip_id===trip.id&&notice.event==='completed');
+    assert.equal(completedNotices.length,1);assert.match(completedNotices[0].message,/^Rate your driver · /);
+    const coordinatorCompletion=(await own(coordinator,'select public.list_trip_notifications(1) as data'))[0].data.notifications.find(notice=>notice.trip_id===trip.id&&notice.event==='completed');
+    assert.match(coordinatorCompletion.message,/^Trip completed · /);
     for(const who of [driver,coordinator,stranger]){
       await assert.rejects(own(who,'select public.trip_feedback($1)',[trip.id]),/access denied/i);
       await assert.rejects(own(who,'select public.rate_driver($1,5)',[trip.id]),/access denied/i);

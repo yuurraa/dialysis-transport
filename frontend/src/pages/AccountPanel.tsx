@@ -12,6 +12,11 @@ export interface Account {
   role: 'coordinator' | 'patient' | 'caregiver' | 'driver';
   status: 'active' | 'inactive';
   profile_complete?: boolean;
+  demo_admin?:boolean;
+  demo_owner_id?:string|null;
+  demo_access_owner_id?:string|null;
+  seed_key?:string|null;
+  demo_key?:string|null;
 }
 interface Props {
   email?: string;

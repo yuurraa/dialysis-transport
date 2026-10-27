@@ -16,6 +16,34 @@ create table if not exists public.accounts (
 );
 -- Account status has its own concurrency version, independent of personal/vehicle details.
 alter table public.accounts add column if not exists status_version integer not null default 1 check (status_version > 0);
+-- Project-owner-managed capability and fixture ownership; never writable by app users.
+alter table public.accounts add column if not exists demo_admin boolean not null default false;
+alter table public.accounts add column if not exists demo_owner_id uuid references public.accounts(id) on delete restrict;
+alter table public.accounts add column if not exists demo_key text;
+alter table public.accounts drop constraint if exists accounts_demo_scope;
+alter table public.accounts add constraint accounts_demo_scope check (
+  (not demo_admin or (role='coordinator' and demo_owner_id is null))
+  and (demo_owner_id is null or (demo_owner_id<>id and role<>'coordinator')));
+create unique index if not exists accounts_demo_identity on public.accounts(demo_owner_id,email) where demo_owner_id is not null;
+create unique index if not exists accounts_demo_key on public.accounts(demo_owner_id,demo_key) where demo_owner_id is not null;
+-- The optional seed enrolls existing fictional accounts without changing their
+-- operational ownership, Auth link, vehicle or booking history.
+create table if not exists private.seeded_accounts (
+  account_id uuid primary key references public.accounts(id) on delete restrict,
+  owner_id uuid not null references public.accounts(id) on delete restrict,
+  seed_key text not null check(seed_key in ('patient1','patient2','patient3','caregiver1','caregiver2','caregiver3','driver1','driver2','driver3','coordinator')),
+  unique(owner_id,seed_key),check(account_id<>owner_id)
+);
+alter table private.seeded_accounts enable row level security;
+revoke all on private.seeded_accounts from public,anon,authenticated;
+create or replace function private.demo_identity_allowed() returns boolean
+language sql stable security definer set search_path='' as $$
+  select not exists(select 1 from public.accounts a left join private.seeded_accounts s on s.account_id=a.id
+    where a.auth_user_id=(select auth.uid()) and coalesce(a.demo_owner_id,s.owner_id) is not null
+    and not exists(select 1 from public.accounts owner where owner.id=coalesce(a.demo_owner_id,s.owner_id) and owner.role='coordinator' and owner.status='active' and owner.demo_admin));
+$$;
+revoke all on function private.demo_identity_allowed() from public,anon;
+grant execute on function private.demo_identity_allowed() to authenticated;
 create or replace function private.increment_account_status_version() returns trigger
 language plpgsql set search_path = '' as $$
 begin new.status_version := old.status_version + 1; return new; end;
@@ -45,7 +73,7 @@ grant select on public.accounts to authenticated;
 create or replace function private.is_coordinator() returns boolean
 language sql stable security definer set search_path = '' as $$
   select exists(select 1 from public.accounts
-    where auth_user_id = (select auth.uid()) and role = 'coordinator' and status = 'active');
+    where auth_user_id = (select auth.uid()) and role = 'coordinator' and status = 'active' and private.demo_identity_allowed());
 $$;
 drop policy if exists accounts_read on public.accounts;
 create policy accounts_read on public.accounts for select to authenticated
@@ -58,7 +86,11 @@ declare verified text;
 begin
   select lower(btrim(u.email)) into verified from auth.users u
   where u.id = (select auth.uid()) and u.email_confirmed_at is not null
-    and exists(select 1 from auth.identities i where i.user_id = u.id and i.provider = 'google');
+    and (exists(select 1 from auth.identities i where i.user_id = u.id and i.provider = 'google')
+      or exists(select 1 from public.accounts a join public.accounts owner on owner.id=a.demo_owner_id
+        where a.auth_user_id=u.id and a.status='active' and owner.role='coordinator' and owner.status='active' and owner.demo_admin)
+      or exists(select 1 from public.accounts a join private.seeded_accounts s on s.account_id=a.id join public.accounts owner on owner.id=s.owner_id
+        where a.auth_user_id=u.id and a.status='active' and owner.role='coordinator' and owner.status='active' and owner.demo_admin));
   if verified is null then
     raise exception 'A verified Google account is required.' using errcode = '42501';
   end if;
@@ -169,7 +201,7 @@ alter table public.patients add column if not exists account_id uuid references 
 create unique index if not exists patients_account on public.patients(account_id);
 create or replace function private.patient_account_id() returns uuid
 language sql stable security definer set search_path = '' as $$
-  select id from public.accounts where auth_user_id = (select auth.uid()) and role = 'patient' and status = 'active';
+  select id from public.accounts where auth_user_id = (select auth.uid()) and role = 'patient' and status = 'active' and private.demo_identity_allowed();
 $$;
 revoke all on function private.patient_account_id() from public, anon;
 grant execute on function private.patient_account_id() to authenticated;
@@ -310,7 +342,7 @@ revoke all on public.drivers from public, anon, authenticated;
 grant select on public.drivers to authenticated;
 create or replace function private.driver_account_id() returns uuid
 language sql stable security definer set search_path = '' as $$
-  select id from public.accounts where auth_user_id=(select auth.uid()) and role='driver' and status='active';
+  select id from public.accounts where auth_user_id=(select auth.uid()) and role='driver' and status='active' and private.demo_identity_allowed();
 $$;
 revoke all on function private.driver_account_id() from public, anon;
 grant execute on function private.driver_account_id() to authenticated;
@@ -1135,6 +1167,7 @@ alter table public.trips add column if not exists version integer not null defau
 alter table public.trips add column if not exists deleted_at timestamptz;
 alter table public.trips add column if not exists duration_minutes integer not null default 30 check (duration_minutes between 5 and 360 and duration_minutes%5=0);
 alter table public.trips add column if not exists route_snapshot jsonb;
+alter table public.trips add column if not exists demo_owner_id uuid references public.accounts(id) on delete restrict;
 -- Journey progress is independent of operational risk and patient confirmation.
 alter table public.trips add column if not exists lifecycle text not null default 'scheduled';
 alter table public.trips add column if not exists driver_unavailable_at timestamptz;
@@ -1181,7 +1214,11 @@ begin
   new.first_started_at:=coalesce(old.first_started_at,new.started_at);
   -- Once transport has begun, source reconciliation cannot rewrite the journey.
   -- Only the explicit handover transition may replace its pickup and reservation.
-  if old.first_started_at is not null and not (old.lifecycle='in-progress' and new.lifecycle='scheduled' and new.handover_at is distinct from old.handover_at) and (
+  if old.first_started_at is not null
+    and not (old.demo_owner_id is not null and new.deleted_at is not null
+      and current_setting('app.demo_reset_owner',true)=old.demo_owner_id::text
+      and coalesce(nullif(current_setting('request.jwt.claims',true),'')::jsonb->>'role','')='service_role')
+    and not (old.lifecycle='in-progress' and new.lifecycle='scheduled' and new.handover_at is distinct from old.handover_at) and (
     new.origin is distinct from old.origin or new.destination is distinct from old.destination
     or new.treatment_start is distinct from old.treatment_start or new.treatment_end is distinct from old.treatment_end
     or new.source_schedule_id is distinct from old.source_schedule_id or new.session_date is distinct from old.session_date
@@ -1462,16 +1499,17 @@ begin
   -- Message snapshots omit patient identity, medical details and addresses, even after access is revoked.
   insert into public.trip_notifications(recipient_id,trip_id,event_id,event,message,created_at)
     select a.id,journey.id,new.id,new.event,
-      coalesce(case when a.role='patient' then private.patient_trip_event_label(new.event,action_details)
+      case when journey.demo_owner_id is not null then 'Demo · ' else '' end||coalesce(case when a.role='patient' and new.event='completed' then 'Rate your driver'
+        when a.role='patient' then private.patient_trip_event_label(new.event,action_details)
         when a.role='driver' then private.driver_trip_event_label(a.id,new.event,new.details) end,label)||' · '||to_char(journey.session_date,'FMDD Mon YYYY')||' · '||initcap(journey.direction),new.created_at
     from public.accounts a where a.status='active' and (a.id in (patient_account,affected_driver,(new.details->>'previous_driver_id')::uuid)
-      or (a.role='coordinator' and new.event in ('confirmed','cancelled','driver_unavailable','started','completed','traffic_risk_detected','traffic_risk_cleared','recovery_critical','recovery_approved','handover_approved')))
+      or (a.role='coordinator' and (journey.demo_owner_id is null or a.id=journey.demo_owner_id) and new.event in ('confirmed','cancelled','driver_unavailable','started','completed','traffic_risk_detected','traffic_risk_cleared','recovery_critical','recovery_approved','handover_approved')))
       and not (new.event in ('confirmed','cancelled') and a.id=patient_account and new.actor_id is not distinct from a.id)
       and not (a.role='driver' and new.event in ('started','completed','driver_unavailable') and new.actor_id is not distinct from a.id)
     on conflict(recipient_id,event_id) do nothing;
   if to_regclass('public.caregiver_links') is not null then
     insert into public.trip_notifications(recipient_id,trip_id,event_id,event,message,created_at)
-      select a.id,journey.id,new.id,new.event,coalesce(private.patient_trip_event_label(new.event,action_details),label)||' · '||to_char(journey.session_date,'FMDD Mon YYYY')||' · '||initcap(journey.direction),new.created_at
+      select a.id,journey.id,new.id,new.event,case when journey.demo_owner_id is not null then 'Demo · ' else '' end||coalesce(private.patient_trip_event_label(new.event,action_details),label)||' · '||to_char(journey.session_date,'FMDD Mon YYYY')||' · '||initcap(journey.direction),new.created_at
       from public.caregiver_links l join public.caregivers c on c.account_id=l.caregiver_id join public.accounts a on a.id=c.account_id
       join public.patients p on p.id=l.patient_id join public.accounts pa on pa.id=p.account_id
       where l.patient_id=journey.patient_id and l.active and a.role='caregiver' and a.status='active' and p.status='active' and pa.status='active' and pa.role='patient'
@@ -1486,6 +1524,11 @@ drop trigger if exists trip_event_notification on public.trip_history;
 create trigger trip_event_notification after insert on public.trip_history for each row execute function private.deliver_trip_event();
 
 -- Apply the same patient presentation to existing inboxes without changing history/read state.
+update public.trip_notifications n set message=case when t.demo_owner_id is not null then 'Demo · ' else '' end||'Rate your driver · '||to_char(t.session_date,'FMDD Mon YYYY')||' · '||initcap(t.direction)
+  from public.accounts a,public.trips t
+  where a.id=n.recipient_id and a.role='patient' and t.id=n.trip_id and n.event='completed'
+    and t.lifecycle='completed' and t.assigned_driver_id is not null and t.deleted_at is null
+    and n.message is distinct from case when t.demo_owner_id is not null then 'Demo · ' else '' end||'Rate your driver · '||to_char(t.session_date,'FMDD Mon YYYY')||' · '||initcap(t.direction);
 update public.trip_notifications n set message=private.patient_trip_event_label(n.event,h.details)||coalesce(substring(n.message from ' · .*'),'')
   from public.accounts a,public.trip_history h
   where a.id=n.recipient_id and a.role='patient' and h.id=n.event_id
@@ -1703,6 +1746,7 @@ language sql stable security definer set search_path='' as $$
       join public.driver_vehicles v on v.driver_id=a.id
       join public.patients p on p.id=target.patient_id
       where a.id=driver and a.status='active' and a.role='driver' and v.status='approved'
+      and (a.demo_owner_id is not distinct from target.demo_owner_id or exists(select 1 from private.seeded_accounts s where s.account_id=a.id and s.owner_id=target.demo_owner_id))
       and v.passenger_capacity>=1
       and (p.mobility<>'wheelchair' or v.wheelchair_accessible)
       and not exists(select 1 from generate_series(
@@ -2827,7 +2871,7 @@ begin
   if actor is null then raise exception 'Driver access required.' using errcode='42501'; end if;
   perform 1 from public.accounts where id=actor and status='active' and role='driver' for share;
   if not found then raise exception 'Driver access required.' using errcode='42501'; end if;
-  perform 1 from public.trips where id=target and assigned_driver_id=actor and lifecycle='in-progress' and deleted_at is null for share;
+  perform 1 from public.trips where id=target and assigned_driver_id=actor and lifecycle='in-progress' and deleted_at is null and demo_owner_id is null for share;
   if not found then raise exception 'Only an active assigned trip may share location.' using errcode='42501'; end if;
   insert into public.trip_locations(trip_id,driver_id) values(target,actor) on conflict(trip_id) do update set
     driver_id=actor,sharing_id=gen_random_uuid(),latitude=null,longitude=null,accuracy_metres=null,recorded_at=null,received_at=null returning sharing_id into saved;
@@ -2846,7 +2890,7 @@ begin
     or not isfinite(recorded_at) or recorded_at<now()-interval '2 minutes' or recorded_at>now()+interval '30 seconds' then raise exception 'Invalid current location.' using errcode='22023'; end if;
   perform 1 from public.accounts where id=actor and role='driver' and status='active' for share;
   if not found then raise exception 'Driver access required.' using errcode='42501'; end if;
-  perform 1 from public.trips where id=target and assigned_driver_id=actor and lifecycle='in-progress' and deleted_at is null for share;
+  perform 1 from public.trips where id=target and assigned_driver_id=actor and lifecycle='in-progress' and deleted_at is null and demo_owner_id is null for share;
   if not found then raise exception 'Only an active assigned trip may report location.' using errcode='42501'; end if;
   perform 1 from public.trip_locations l where l.trip_id=target and l.driver_id=actor and l.sharing_id=session_id for update;
   if not found then raise exception 'Location sharing session ended.' using errcode='PT409'; end if;
@@ -2862,7 +2906,8 @@ language plpgsql security definer set search_path='' as $$
 declare actor uuid:=private.driver_account_id();
 begin
   if actor is null then raise exception 'Driver access required.' using errcode='42501'; end if;
-  delete from public.trip_locations where trip_id=target and driver_id=actor and sharing_id=session_id;
+  delete from public.trip_locations where trip_id=target and driver_id=actor and sharing_id=session_id
+    and exists(select 1 from public.trips where id=target and demo_owner_id is null);
 end;
 $$;
 create or replace function public.clear_trip_location(target uuid,session_id uuid) returns void
@@ -2925,7 +2970,7 @@ language plpgsql security definer set search_path='' as $$
 declare journey public.trips; ids jsonb:='[]'::jsonb;
 begin
   for journey in select t.* from public.trips t left join private.trip_traffic_checks c on c.trip_id=t.id
-    where t.deleted_at is null and t.assigned_driver_id is not null and t.lifecycle in ('scheduled','in-progress')
+    where t.deleted_at is null and t.demo_owner_id is null and t.assigned_driver_id is not null and t.lifecycle in ('scheduled','in-progress')
       and (t.lifecycle='in-progress' or t.pickup_at between now()-interval '1 day' and now()+interval '1 hour')
       and coalesce(c.next_check_at,'-infinity'::timestamptz)<=now()
     order by c.next_check_at nulls first,t.pickup_at,t.id limit 25 for update of t skip locked
@@ -3056,7 +3101,7 @@ language plpgsql security definer set search_path='' as $$
 declare journey public.trips; work jsonb:='[]'::jsonb;
 begin
   for journey in select t.* from public.trips t left join private.trip_recovery_checks c on c.trip_id=t.id
-    where t.deleted_at is null and t.lifecycle='scheduled' and t.status='at-risk'
+    where t.deleted_at is null and t.demo_owner_id is null and t.lifecycle='scheduled' and t.status='at-risk'
       and t.assigned_driver_id is not null and not t.review_required and t.pickup_at>=now()-interval '1 day'
       and (t.pickup_at at time zone 'Asia/Singapore')::date<=private.planning_window_end()
       and coalesce(c.next_check_at,'-infinity'::timestamptz)<=now()
@@ -3371,7 +3416,7 @@ revoke all on public.caregivers from public,anon,authenticated;
 grant select on public.caregivers to authenticated;
 create or replace function private.caregiver_account_id() returns uuid
 language sql stable security definer set search_path='' as $$
-  select id from public.accounts where auth_user_id=(select auth.uid()) and role='caregiver' and status='active';
+  select id from public.accounts where auth_user_id=(select auth.uid()) and role='caregiver' and status='active' and private.demo_identity_allowed();
 $$;
 revoke all on function private.caregiver_account_id() from public,anon;
 grant execute on function private.caregiver_account_id() to authenticated;
@@ -3408,7 +3453,8 @@ grant execute on function private.save_my_caregiver(jsonb,integer),public.save_m
 
 create or replace function private.account_details(account public.accounts) returns jsonb
 language sql stable security definer set search_path='' as $$
-  select to_jsonb(account)||jsonb_build_object('profile_complete',case account.role
+  select to_jsonb(account)||jsonb_build_object('demo_access_owner_id',(select owner_id from private.seeded_accounts where account_id=account.id),
+    'seed_key',(select seed_key from private.seeded_accounts where account_id=account.id),'profile_complete',case account.role
     when 'patient' then exists(select 1 from public.patients where account_id=account.id)
     when 'driver' then exists(select 1 from public.drivers where account_id=account.id)
     when 'caregiver' then exists(select 1 from public.caregivers where account_id=account.id) else true end,
@@ -3735,6 +3781,218 @@ create trigger shared_schedule_notification after insert on public.treatment_sch
 drop trigger if exists shared_schedule_change_notification on public.treatment_change_requests;
 create trigger shared_schedule_change_notification after insert or update of status on public.treatment_change_requests
   for each row execute function private.notify_shared_schedule();
+
+-- Demo fixtures are private and all controls require the backend service identity.
+create table if not exists private.demo_scenarios (
+  owner_id uuid primary key references public.accounts(id) on delete restrict,
+  schedule_id uuid references public.treatment_schedules(id) on delete restrict,
+  trip_id uuid references public.trips(id) on delete restrict,
+  traffic text not null default 'normal' check(traffic in ('normal','delay')),
+  progress integer not null default 0 check(progress between 0 and 100)
+);
+alter table private.demo_scenarios enable row level security;
+revoke all on private.demo_scenarios from public,anon,authenticated;
+
+create or replace function private.apply_demo_traffic() returns trigger
+language plpgsql security definer set search_path='' as $$
+begin
+  if new.demo_owner_id is not null and new.deleted_at is null and new.assigned_driver_id is not null and new.lifecycle in ('scheduled','in-progress')
+    and exists(select 1 from private.demo_scenarios s where s.trip_id=new.id and s.owner_id=new.demo_owner_id and s.traffic='delay') then
+    new.traffic_review_required:=true; new.status:='at-risk';
+  end if;
+  return new;
+end;
+$$;
+revoke all on function private.apply_demo_traffic() from public,anon,authenticated;
+-- Run after trips_version, which clears old risk when reservations change.
+drop trigger if exists zz_demo_traffic on public.trips;
+create trigger zz_demo_traffic before insert or update on public.trips for each row execute function private.apply_demo_traffic();
+
+-- Tag generated journeys automatically, and prevent mixing real/demo resources even
+-- when an ordinary assignment or recovery RPC is called directly.
+create or replace function private.enforce_demo_trip_scope() returns trigger
+language plpgsql security definer set search_path='' as $$
+declare cohort_owner uuid;
+begin
+  select coalesce(a.demo_owner_id,s.owner_id) into cohort_owner from public.patients p join public.accounts a on a.id=p.account_id left join private.seeded_accounts s on s.account_id=a.id where p.id=new.patient_id;
+  if tg_op='UPDATE' and old.demo_owner_id is distinct from cohort_owner then raise exception 'Demo ownership cannot change.' using errcode='42501'; end if;
+  new.demo_owner_id:=cohort_owner;
+  if new.assigned_driver_id is not null and not exists(select 1 from public.accounts a where a.id=new.assigned_driver_id and (a.demo_owner_id is not distinct from cohort_owner or exists(select 1 from private.seeded_accounts s where s.account_id=a.id and s.owner_id=cohort_owner))) then
+    raise exception 'Real and demo bookings cannot share drivers.' using errcode='42501';
+  end if;
+  return new;
+end;
+$$;
+revoke all on function private.enforce_demo_trip_scope() from public,anon,authenticated;
+drop trigger if exists demo_trip_scope on public.trips;
+create trigger demo_trip_scope before insert or update on public.trips for each row execute function private.enforce_demo_trip_scope();
+create or replace function private.enforce_demo_link_scope() returns trigger
+language plpgsql security definer set search_path='' as $$
+declare patient_owner uuid; caregiver_owner uuid;
+begin
+  select coalesce(a.demo_owner_id,s.owner_id) into patient_owner from public.patients p join public.accounts a on a.id=p.account_id left join private.seeded_accounts s on s.account_id=a.id where p.id=new.patient_id;
+  select coalesce(a.demo_owner_id,s.owner_id) into caregiver_owner from public.accounts a left join private.seeded_accounts s on s.account_id=a.id where a.id=new.caregiver_id;
+  if patient_owner is distinct from caregiver_owner then raise exception 'Real and demo accounts cannot be linked.' using errcode='42501'; end if;
+  return new;
+end;
+$$;
+revoke all on function private.enforce_demo_link_scope() from public,anon,authenticated;
+drop trigger if exists demo_link_scope on public.caregiver_links;
+create trigger demo_link_scope before insert or update on public.caregiver_links for each row execute function private.enforce_demo_link_scope();
+
+create or replace function private.demo_manage(owner uuid,action text,details jsonb) returns jsonb
+language plpgsql security definer set search_path='' as $$
+declare actor public.accounts; patient public.patients; scene private.demo_scenarios;
+  journey public.trips; session_start timestamptz; session_end timestamptz; session_day date;
+  centre public.dialysis_centres; schedule public.treatment_schedules; pickup timestamptz;
+  prior_confirmation timestamptz; prior_confirmer uuid; point jsonb;
+  original_claims text; original_sub text; owner_auth uuid; result jsonb;
+begin
+  if not exists(select 1 from public.accounts a where a.id=owner and a.role='coordinator' and a.status='active' and a.demo_admin and a.demo_owner_id is null
+    and not exists(select 1 from private.seeded_accounts s where s.account_id=a.id)) then
+    raise exception 'Demo administrator required.' using errcode='42501';
+  end if;
+  -- Service-only entry point; existing schedule/link triggers still see the verified
+  -- coordinator actor. Keep role=service_role for the narrowly scoped reset guard.
+  select auth_user_id into owner_auth from public.accounts where id=owner and role='coordinator' and status='active' and demo_admin and demo_owner_id is null for share;
+  if owner_auth is null then raise exception 'Sign in as the demo administrator first.' using errcode='42501'; end if;
+  original_claims:=current_setting('request.jwt.claims',true); original_sub:=current_setting('request.jwt.claim.sub',true);
+  perform set_config('request.jwt.claims',(coalesce(nullif(original_claims,''),'{}')::jsonb||jsonb_build_object('sub',owner_auth::text))::text,true);
+  perform set_config('request.jwt.claim.sub',owner_auth::text,true);
+  -- Serialize setup/reset/control for this owner's fixtures, not unrelated bookings.
+  perform pg_advisory_xact_lock(hashtextextended('demo:'||owner::text,0));
+  if action='setup' then
+    if (select count(*) from private.seeded_accounts s where s.owner_id=owner)<>10 then
+      raise exception 'Apply database/seed.sql before preparing the seeded accounts.' using errcode='P5003';
+    end if;
+    insert into private.demo_scenarios(owner_id) values(owner) on conflict do nothing;
+  end if;
+  select * into scene from private.demo_scenarios where owner_id=owner for update;
+  if not found and action<>'state' then raise exception 'Prepare the demo first.' using errcode='22023'; end if;
+  if action='attach' then
+    select a.* into actor from public.accounts a join private.seeded_accounts s on s.account_id=a.id
+      where a.id=(details->>'account_id')::uuid and s.owner_id=owner for update of a;
+    if not found or not exists(select 1 from auth.users u where u.id=actor.id and u.email=actor.email and u.email_confirmed_at is not null
+      and u.raw_app_meta_data->>'demo_account_id'=actor.id::text and u.raw_app_meta_data->>'demo_owner_id'=owner::text) then
+      raise exception 'Invalid demo identity.' using errcode='42501';
+    end if;
+    update public.accounts set auth_user_id=actor.id where id=actor.id and (auth_user_id is null or auth_user_id=actor.id);
+    if not found then raise exception 'Identity already linked.' using errcode='42501'; end if;
+  elsif action='reset' or (action='setup' and scene.trip_id is null) then
+    if action='reset' and details->'confirmed' is distinct from 'true'::jsonb then raise exception 'Confirm demo reset.' using errcode='22023'; end if;
+    select p.* into patient from public.patients p join private.seeded_accounts s on s.account_id=p.account_id where s.owner_id=owner and s.seed_key='patient1' for update of p;
+    perform 1 from public.accounts a join private.seeded_accounts s on s.account_id=a.id where s.owner_id=owner and a.role='driver' order by a.id for update of a;
+    perform set_config('app.demo_reset_owner',owner::text,true);
+    -- Keep historical fixtures and feedback; archive only this scenario's journey.
+    if scene.trip_id is not null then
+      update public.trips set deleted_at=now(),updated_at=now() where id=scene.trip_id and demo_owner_id=owner;
+      insert into public.trip_history(trip_id,actor_id,event,details) values(scene.trip_id,owner,'deleted',jsonb_build_object('demo_reset',true));
+    end if;
+    -- Preserve the reused drivers' real saved availability rather than forcing
+    -- all-day fixtures. Pick a daytime window with enough room for route planning.
+    select candidate+interval '90 minutes' into session_start
+      from generate_series(date_trunc('hour',now()+interval '1 hour'),now()+interval '7 days',interval '30 minutes') candidate
+      where (candidate at time zone 'Asia/Singapore')::time between time '06:00' and time '20:00'
+        and exists(select 1 from private.seeded_accounts membership join public.accounts a on a.id=membership.account_id
+          join public.driver_vehicles v on v.driver_id=a.id
+          where membership.owner_id=owner and a.role='driver' and a.status='active' and v.status='approved'
+            and private.driver_covers_window(a.id,candidate,candidate+interval '2 hours')
+            and not exists(select 1 from public.trips t where t.assigned_driver_id=a.id and t.deleted_at is null
+              and t.pickup_at<candidate+interval '2 hours' and private.effective_trip_end(t)>candidate))
+      order by candidate limit 1;
+    if session_start is null then raise exception 'Set availability for a seeded driver before preparing the walkthrough.' using errcode='22023'; end if;
+    session_end:=session_start+interval '1 hour'; session_day:=(session_start at time zone 'Asia/Singapore')::date;
+    select * into centre from public.dialysis_centres order by (postal_code='640491') desc,id limit 1;
+    if centre.id is null then raise exception 'Dialysis centre directory is required.' using errcode='22023'; end if;
+    if scene.schedule_id is null then
+      insert into public.treatment_schedules(patient_id,centre_id,days,start_time,end_time,effective_from,effective_to,kind)
+        values(patient.id,centre.id,array[extract(isodow from session_day)::integer],(session_start at time zone 'Asia/Singapore')::time,
+          (session_end at time zone 'Asia/Singapore')::time,session_day,session_day,'single') returning * into schedule;
+    else
+      update public.treatment_schedules set days=array[extract(isodow from session_day)::integer],start_time=(session_start at time zone 'Asia/Singapore')::time,
+        end_time=(session_end at time zone 'Asia/Singapore')::time,effective_from=session_day,effective_to=session_day,version=version+1
+        where id=scene.schedule_id and patient_id=patient.id returning * into schedule;
+    end if;
+    insert into public.trips(patient_id,patient_name,source_schedule_id,root_schedule_id,occurrence_key,original_session_date,session_date,direction,origin,destination,
+      treatment_start,treatment_end,arrival_by,source_version,patient_version,created_by)
+      values(patient.id,patient.full_name,schedule.id,schedule.id,'demo:'||gen_random_uuid()::text,session_day,session_day,'outbound',
+        patient.pickup_address||', Singapore '||patient.postal_code,centre.address||', Singapore '||centre.postal_code,
+        session_start,session_end,session_start-interval '15 minutes',schedule.version,patient.version,owner) returning * into journey;
+    insert into public.trip_history(trip_id,actor_id,event,details) values(journey.id,owner,'generated',jsonb_build_object('demo',true));
+    update private.demo_scenarios set schedule_id=schedule.id,trip_id=journey.id,traffic='normal',progress=0 where owner_id=owner;
+  elsif action in ('due','traffic','move') then
+    select * into journey from public.trips where id=scene.trip_id and demo_owner_id=owner and deleted_at is null;
+    if not found then raise exception 'Demo trip not found.' using errcode='P0002'; end if;
+    perform 1 from public.patients where id=journey.patient_id for update;
+    perform 1 from public.accounts a join private.seeded_accounts s on s.account_id=a.id where a.id=journey.assigned_driver_id and s.owner_id=owner for update of a;
+    select * into journey from public.trips where id=scene.trip_id and demo_owner_id=owner and deleted_at is null for update;
+    if action='due' then
+      if journey.lifecycle<>'scheduled' or journey.assigned_driver_id is null then raise exception 'Assign an upcoming demo trip first.' using errcode='22023'; end if;
+      pickup:=date_trunc('minute',now())-interval '1 minute';
+      if not private.driver_covers_window(journey.assigned_driver_id,pickup,pickup+make_interval(mins=>journey.duration_minutes)) or exists(
+        select 1 from public.trips t where t.id<>journey.id and t.deleted_at is null and t.lifecycle in ('scheduled','in-progress')
+          and (t.assigned_driver_id=journey.assigned_driver_id or t.patient_id=journey.patient_id)
+          and t.pickup_at<pickup+make_interval(mins=>journey.duration_minutes) and private.effective_trip_end(t)>pickup) then
+        raise exception 'Demo timing conflicts with availability or another booking.' using errcode='PT409';
+      end if;
+      prior_confirmation:=journey.confirmed_at; prior_confirmer:=journey.confirmed_by;
+      update public.trips set pickup_at=pickup,dropoff_at=pickup+make_interval(mins=>duration_minutes),
+        treatment_start=pickup+make_interval(mins=>duration_minutes+15),treatment_end=pickup+make_interval(mins=>duration_minutes+75),
+        arrival_by=pickup+make_interval(mins=>duration_minutes),session_date=(pickup at time zone 'Asia/Singapore')::date,updated_at=now() where id=journey.id;
+      update public.trips set confirmed_at=prior_confirmation,confirmed_by=prior_confirmer,
+        traffic_review_required=(scene.traffic='delay'),status=case when scene.traffic='delay' or driver_unavailable_at is not null or review_required then 'at-risk' else 'on-track' end where id=journey.id;
+    elsif action='traffic' then
+      if details->>'scenario' not in ('normal','delay') or details->>'scenario' is null then raise exception 'Invalid demo traffic.' using errcode='22023'; end if;
+      if journey.lifecycle not in ('scheduled','in-progress') then raise exception 'Demo journey has ended.' using errcode='22023'; end if;
+      update private.demo_scenarios set traffic=details->>'scenario' where owner_id=owner;
+      if journey.assigned_driver_id is not null then
+        update public.trips set traffic_review_required=(details->>'scenario'='delay'),
+          status=case when details->>'scenario'='delay' or driver_unavailable_at is not null or review_required or recovery_critical then 'at-risk' else 'on-track' end where id=journey.id;
+        insert into public.trip_history(trip_id,actor_id,event,details) values(journey.id,owner,
+          case when details->>'scenario'='delay' then 'traffic_risk_detected' else 'traffic_risk_cleared' end,jsonb_build_object('simulated',true));
+      end if;
+    else
+      if journey.lifecycle<>'in-progress' or journey.assigned_driver_id is null then raise exception 'Start the demo trip first.' using errcode='22023'; end if;
+      if jsonb_typeof(details->'percent') is distinct from 'number' or (details->>'percent')::numeric not between 0 and 100
+        or jsonb_typeof(details->'point') is distinct from 'object' then raise exception 'Invalid simulated position.' using errcode='22023'; end if;
+      point:=details->'point';
+      if (point->>'latitude')::numeric not between 1.144 and 1.494 or (point->>'longitude')::numeric not between 103.535 and 104.502 then raise exception 'Invalid simulated position.' using errcode='22023'; end if;
+      insert into public.trip_locations(trip_id,driver_id,latitude,longitude,accuracy_metres,recorded_at,received_at)
+        values(journey.id,journey.assigned_driver_id,(point->>'latitude')::double precision,(point->>'longitude')::double precision,5,now(),now())
+        on conflict(trip_id) do update set driver_id=excluded.driver_id,latitude=excluded.latitude,longitude=excluded.longitude,
+          accuracy_metres=5,recorded_at=now(),received_at=now();
+      update private.demo_scenarios set progress=(details->>'percent')::integer where owner_id=owner;
+    end if;
+  elsif action not in ('state','setup','attach') then raise exception 'Invalid demo action.' using errcode='22023';
+  end if;
+  result:=jsonb_build_object('actors',(select coalesce(jsonb_agg(private.account_details(a) order by s.seed_key),'[]'::jsonb) from public.accounts a join private.seeded_accounts s on s.account_id=a.id where s.owner_id=owner),
+    'scenario',(select to_jsonb(s) from private.demo_scenarios s where s.owner_id=owner),
+    'trip',(select to_jsonb(t) from public.trips t join private.demo_scenarios s on s.trip_id=t.id where s.owner_id=owner),
+    'visible_actor_ids',(select coalesce(jsonb_agg(a.id),'[]'::jsonb) from private.seeded_accounts s join public.accounts a on a.id=s.account_id
+      where s.owner_id=owner and a.status='active' and exists(select 1 from private.demo_scenarios visible_scene join public.trips t on t.id=visible_scene.trip_id join public.patients p on p.id=t.patient_id
+        where visible_scene.owner_id=owner and t.deleted_at is null and (a.role='coordinator' or (a.role='patient' and p.account_id=a.id)
+          or (a.role='driver' and a.id=t.assigned_driver_id) or (a.role='caregiver' and exists(select 1 from public.caregiver_links l where l.patient_id=p.id and l.caregiver_id=a.id and l.active))))));
+  perform set_config('request.jwt.claims',coalesce(original_claims,''),true);
+  perform set_config('request.jwt.claim.sub',coalesce(original_sub,''),true);
+  return result;
+end;
+$$;
+create or replace function public.demo_manage(owner uuid,action text,details jsonb) returns jsonb
+language sql security invoker set search_path='' as $$ select private.demo_manage(owner,action,details); $$;
+create or replace function private.demo_trip_context(target uuid) returns jsonb
+language sql stable security definer set search_path='' as $$
+  select jsonb_build_object('traffic',coalesce(s.traffic,'normal'),'progress',coalesce(s.progress,0)) from public.trips t
+    join public.accounts owner on owner.id=t.demo_owner_id left join private.demo_scenarios s on s.trip_id=t.id and s.owner_id=t.demo_owner_id
+    where t.id=target and t.deleted_at is null
+      and owner.demo_admin and owner.role='coordinator' and owner.status='active';
+$$;
+create or replace function public.demo_trip_context(target uuid) returns jsonb
+language sql stable security invoker set search_path='' as $$ select private.demo_trip_context(target); $$;
+revoke all on function private.demo_manage(uuid,text,jsonb),public.demo_manage(uuid,text,jsonb),private.demo_trip_context(uuid),public.demo_trip_context(uuid) from public,anon,authenticated;
+do $$ begin if exists(select 1 from pg_roles where rolname='service_role') then
+  grant usage on schema private to service_role;
+  grant execute on function private.demo_manage(uuid,text,jsonb),public.demo_manage(uuid,text,jsonb),private.demo_trip_context(uuid),public.demo_trip_context(uuid) to service_role;
+end if; end; $$;
 
 notify pgrst, 'reload schema';
 commit;

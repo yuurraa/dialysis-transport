@@ -10,6 +10,7 @@ import { InfoButton, Overlay, PageHeading, ListToolbar, ListPagination, ChoiceGr
 import { ApiError, apiGet, apiRequest } from '../lib/api';
 
 export interface Trip {
+  demo_owner_id?:string|null;
   id: string; version: number; patient_id: string; patient_name: string; source_schedule_id: string; session_date: string;
   direction: 'outbound' | 'return'; origin: string; destination: string; treatment_start: string; treatment_end: string;
   started_at?: string | null; completed_at?: string | null; first_started_at?:string|null; handover_at?:string|null;
@@ -24,9 +25,13 @@ export interface Trip {
   arrival_by: string | null; pickup_not_before: string | null; pickup_at: string | null; status: string;
 }
 interface TripsData { trips: Trip[]; total: number; page: number; pageSize: number; counts: Record<string, number>; next_trip: Trip | null; active_trip?: Trip | null }
-const categories = [{ key: 'unfilled', label: 'Unfilled' }, { key: 'at-risk', label: 'At-Risk' }, { key: 'on-track', label: 'On-Track' }, { key: 'resolved', label: 'Resolved' }, { key: 'cancelled', label: 'Cancelled' }];
-const tripSortOptions = [{ value: 'treatment_start', label: 'Treatment date', ascending: 'Earliest first', descending: 'Latest first' }, { value: 'patient_name', label: 'Patient name' }, { value: 'direction', label: 'Direction', ascending: 'Outbound first', descending: 'Return first' }, { value: 'status', label: 'Status', ascending: 'At-Risk → Cancelled → On-Track → Resolved → Unfilled', descending: 'Unfilled → Resolved → On-Track → Cancelled → At-Risk' }];
-const journeyCategories = [{ key: 'upcoming', label: 'Upcoming' }, { key: 'in-progress', label: 'In progress' }, { key: 'completed', label: 'Completed' }, { key: 'cancelled', label: 'Cancelled' }];
+const sharedEndStatuses = [{ key: 'completed', label: 'Completed' }, { key: 'cancelled', label: 'Cancelled' }];
+const assignmentCategories = [{ key: 'unfilled', label: 'Unfilled' }, { key: 'at-risk', label: 'At-Risk' }, { key: 'on-track', label: 'On-Track' }];
+// `resolved` remains a stored operational value; every role sees Completed.
+const categories = [...assignmentCategories, ...sharedEndStatuses.map(category=>({...category,key:category.key==='completed'?'resolved':category.key}))];
+const coordinatorCategories = [...assignmentCategories, ...sharedEndStatuses];
+const tripSortOptions = [{ value: 'treatment_start', label: 'Treatment date', ascending: 'Earliest first', descending: 'Latest first' }, { value: 'patient_name', label: 'Patient name' }, { value: 'direction', label: 'Direction', ascending: 'Outbound first', descending: 'Return first' }, { value: 'status', label: 'Status', ascending: 'At-Risk → Cancelled → On-Track → Completed → Unfilled', descending: 'Unfilled → Completed → On-Track → Cancelled → At-Risk' }];
+const journeyCategories = [{ key: 'upcoming', label: 'Upcoming' }, { key: 'in-progress', label: 'In progress' }, ...sharedEndStatuses];
 const assignmentIcon=<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="9" cy="7" r="3" /><path d="M3 21v-3a6 6 0 0 1 12 0v3M17 8h6m-3-3v6" /></svg>;
 function TripStatus({ status, lifecycle, coordinator = false, driver = false }: { status: string; lifecycle?: Trip['lifecycle']; coordinator?: boolean; driver?: boolean }) {
   const category = categories.find(item => item.key === status);
@@ -88,11 +93,12 @@ const validTripDate = (value: string) => /^(?!0000)\d{4}-\d{2}-\d{2}$/.test(valu
   && Number.isFinite(Date.parse(`${value}T00:00:00Z`)) && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value;
 interface Filters { page: number; from: string; until: string; status: string; search: string; direction: string; sort: string; order: string }
 export default function TripsPage({ coordinator, driver = false,caregiver=false, onSessionExpired, tripId, onNavigate }: { coordinator: boolean; driver?: boolean;caregiver?:boolean; onSessionExpired: () => void; tripId?:string; onNavigate:(path:string)=>void }) {
-  const statusOptions = coordinator ? categories : journeyCategories;
+  const statusOptions = coordinator ? coordinatorCategories : journeyCategories;
   const defaultStatus = coordinator ? 'unfilled,at-risk,on-track' : 'upcoming,in-progress';
   const sortOptions = [{ value: 'pickup_time', label: 'Pickup date/time', ascending: 'Earliest first', descending: 'Latest first' }, ...tripSortOptions.filter(option => (coordinator || driver || caregiver || option.value !== 'patient_name')).map(option => option.value === 'status' && !coordinator ? { ...option, ascending: 'Cancelled → Completed → In progress → Upcoming', descending: 'Upcoming → In progress → Completed → Cancelled' } : option)];
   const [defaultRange] = useState(() => { const from = singaporeToday(); return { from, until: '' }; });
   const [historyTrip, setHistoryTrip] = useState<string | null>(null);
+  const [tripActionsHost,setTripActionsHost]=useState<HTMLDivElement|null>(null);
   const [pickupAction, setPickupAction] = useState<'confirm' | 'cancel' | 'unavailable' | null>(null);
   const [pickupBusy, setPickupBusy] = useState(false);
   const [pickupError, setPickupError] = useState('');
@@ -110,7 +116,7 @@ export default function TripsPage({ coordinator, driver = false,caregiver=false,
   const navigation=useRef({id:tripId,generation:0});
   if(navigation.current.id!==tripId)navigation.current={id:tripId,generation:navigation.current.generation+1};
   const renderGeneration=navigation.current.generation;
-  const [detailTab,setDetailTab]=useState<'details'|'journey'>('details');
+  const [detailTab,setDetailTab]=useState<'details'|'journey'|'rate'>('details');
   const [detailLoading,setDetailLoading]=useState(false),[detailError,setDetailError]=useState('');
   const [detailRetry,setDetailRetry]=useState(0);
   const detailPanel=useRef<HTMLElement>(null);
@@ -119,13 +125,25 @@ export default function TripsPage({ coordinator, driver = false,caregiver=false,
     setDetails(null);setHistoryTrip(null);setPickupAction(null);setAssigning(null);setRecovering(null);setDeleting(null);setBulkDeleting(null);setFilterDraft(null);setSorting(false);setSelecting(false);setSelectedTrips(new Set());setBusy(false);setPickupBusy(false);setDetailTab('details');setDetailError('');
     if(!tripId){setDetailLoading(false);return;}
     setDetailLoading(true);detailPanel.current?.focus();
-    apiGet<Trip>(`/trips/${tripId}`).then(trip=>{if(active)setDetails(trip);}).catch(reason=>{
+    apiGet<Trip>(`/trips/${tripId}`).then(trip=>{if(active){setDetails(trip);if(!coordinator&&!driver&&!caregiver&&trip.lifecycle==='completed'&&trip.assigned_driver_id&&new URLSearchParams(window.location.search).get('tab')==='rate')setDetailTab('rate');}}).catch(reason=>{
       if(!active)return;
       if(reason instanceof ApiError&&reason.status===401)onSessionExpired();
       setDetailError(reason instanceof ApiError&&[403,404].includes(reason.status)?'This trip is no longer available to your account.':'Trip details could not be loaded. Please try again.');
     }).finally(()=>{if(active)setDetailLoading(false);});
     return()=>{active=false;};
-  },[tripId,detailRetry,onSessionExpired]);
+  },[tripId,detailRetry,onSessionExpired,coordinator,driver,caregiver]);
+  const canRate=!coordinator&&!driver&&!caregiver&&details?.lifecycle==='completed'&&!!details.assigned_driver_id;
+  useEffect(()=>{
+    const requested=()=>{if(details?.id&&window.location.pathname===`/dashboard/trips/${details.id}`){if(canRate)setDetailTab('rate');else setDetailRetry(value=>value+1);}};
+    window.addEventListener('trip-rating-requested',requested);
+    return()=>window.removeEventListener('trip-rating-requested',requested);
+  },[canRate,details?.id]);
+  function chooseDetailTab(tab:'details'|'journey'|'rate'){
+    setDetailTab(tab);
+    const url=new URL(window.location.href);
+    if(tab==='rate')url.searchParams.set('tab','rate');else url.searchParams.delete('tab');
+    window.history.replaceState(window.history.state,'',`${url.pathname}${url.search}${url.hash}`);
+  }
   const [deleting, setDeleting] = useState<Trip | null>(null);
   const [bulkDeleting, setBulkDeleting] = useState<Trip[] | null>(null);
   const [bulkDeleteResult, setBulkDeleteResult] = useState('');
@@ -145,6 +163,11 @@ export default function TripsPage({ coordinator, driver = false,caregiver=false,
   const [syncing, setSyncing] = useState(false);
   const syncSequence = useRef(0);
   const [reload, setReload] = useState(0);
+  useEffect(()=>{
+    const changed=()=>{setDetailRetry(value=>value+1);setReload(value=>value+1);};
+    window.addEventListener('demo-trip-changed',changed);
+    return()=>window.removeEventListener('demo-trip-changed',changed);
+  },[]);
   const alive = useRef(false);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
   useEffect(() => {
@@ -355,12 +378,11 @@ export default function TripsPage({ coordinator, driver = false,caregiver=false,
         <div className="trip-detail-summary"><div className="trip-detail-summary-main">
           <div className="trip-detail-identity"><p className="trip-detail-person">{details.patient_name}</p><span aria-hidden="true">·</span><p className="trip-detail-id">Patient ID: {details.patient_id}</p></div>
           <div className="trip-detail-heading"><span>{tripDate(details.treatment_start)}</span><span aria-hidden="true">·</span><span>{details.direction==='outbound'?'Outbound':'Return'}</span><TripStatus lifecycle={details.lifecycle} status={details.status} coordinator={coordinator} driver={driver}/></div>
-        </div>{(coordinator||canReportUnavailability||patientActions&&(canConfirmPickup||upcomingDetails))&&<div className="patient-actions trip-detail-page-actions">{coordinator&&<button className="patient-primary trip-recovery-control" type="button" disabled={!canRecover} onClick={()=>setRecovering(details)}>Generate recovery options</button>}{canReportUnavailability && <button className="button-danger" type="button" onClick={() => openPickupAction('unavailable')}>Report unavailability</button>}{patientActions && canConfirmPickup && <button className="patient-primary" type="button" onClick={() => openPickupAction('confirm')}>Acknowledge trip</button>}{patientActions && upcomingDetails && <button className="button-danger" type="button" onClick={() => openPickupAction('cancel')}>Cancel trip</button>}{coordinator && (!details.lifecycle || details.lifecycle === 'scheduled') && !details.assigned_driver_id && <button className="button-danger" type="button" aria-label="Delete Trip" title="Delete Trip" onClick={() => confirmDelete(details)}>Delete Trip</button>}</div>}</div>
-        <nav className="trip-detail-tabs" aria-label="Trip views">{(['details','journey'] as const).map(tab=><button key={tab} type="button" aria-pressed={detailTab===tab} onClick={()=>setDetailTab(tab)}>{tab==='details'?'Details':'Journey'}</button>)}</nav>
+        </div>{(driver||coordinator||canReportUnavailability||patientActions&&(canConfirmPickup||upcomingDetails))&&<div ref={setTripActionsHost} className="patient-actions trip-detail-page-actions">{coordinator&&<button className="patient-primary trip-recovery-control" type="button" disabled={!canRecover} onClick={()=>setRecovering(details)}>Generate recovery options</button>}{canReportUnavailability && <button className="button-danger" type="button" onClick={() => openPickupAction('unavailable')}>Report unavailability</button>}{patientActions && canConfirmPickup && <button className="patient-primary" type="button" onClick={() => openPickupAction('confirm')}>Acknowledge trip</button>}{patientActions && upcomingDetails && <button className="button-danger" type="button" onClick={() => openPickupAction('cancel')}>Cancel trip</button>}{coordinator && (!details.lifecycle || details.lifecycle === 'scheduled') && !details.assigned_driver_id && <button className="button-danger" type="button" aria-label="Delete Trip" title="Delete Trip" onClick={() => confirmDelete(details)}>Delete Trip</button>}</div>}</div>
+        <nav className="trip-detail-tabs" aria-label="Trip views">{(['details','journey',...(canRate?['rate' as const]:[])] as const).map(tab=><button key={tab} type="button" aria-pressed={detailTab===tab} onClick={()=>chooseDetailTab(tab)}>{tab==='details'?'Details':tab==='journey'?'Journey':'Rate'}</button>)}</nav>
         {detailTab==='details'&&<section className="trip-detail-overview" aria-label="Trip information">
           <JourneyDetails trip={details}/>
           {details.driver_unavailable_at&&<p className="trip-action-note">Driver unavailability reported. The coordinator needs to review this assignment.</p>}
-          {details.assigned_driver_id&&details.confirmed_at&&<p className="trip-action-note">Trip acknowledged.</p>}
           {driverDetails&&<section className="trip-detail-section trip-detail-assignment"><h2>Driver and vehicle</h2>
             <dl className="trip-detail-timings">
               <div><dt>Driver</dt><dd>{driverDetails.driver_name || '—'}</dd></div>
@@ -369,7 +391,6 @@ export default function TripsPage({ coordinator, driver = false,caregiver=false,
               <div><dt>Vehicle plate</dt><dd>{driverDetails.plate || '—'}</dd></div>
             </dl>
           </section>}
-          {!coordinator&&!driver&&!caregiver&&details.lifecycle==='completed'&&details.assigned_driver_id&&<TripFeedback key={details.id} tripId={details.id} notify={setToast} onSessionExpired={onSessionExpired}/>}
           {driver&&details.assignment&&<section className="trip-detail-section trip-detail-assignment trip-detail-passenger"><h2>Passenger needs</h2>
             <dl className="trip-detail-timings">
               <div><dt>Patient contact</dt><dd>{details.assignment.patient_phone}</dd></div>
@@ -379,11 +400,12 @@ export default function TripsPage({ coordinator, driver = false,caregiver=false,
           </section>}
         </section>}
 
-        <TripProgress key={details.id} display={detailTab==='details'?'overview':detailTab} onNotify={notifyProgress} trip={details} driver={driver} onChanged={updateTripProgress} onUnavailable={()=>{setDetails(null);setHistoryTrip(null);setPickupAction(null);setRecovering(null);setDetailError('This trip is no longer available to your account.');}} onSessionExpired={onSessionExpired}/>
+        {detailTab==='rate'&&canRate&&<TripFeedback key={`feedback:${details.id}`} tripId={details.id} notify={setToast} onSessionExpired={onSessionExpired}/>}
+        <TripProgress key={`progress:${details.id}`} actionsHost={tripActionsHost} display={detailTab==='journey'?'journey':'overview'} onNotify={notifyProgress} trip={details} driver={driver} onChanged={updateTripProgress} onUnavailable={()=>{setDetails(null);setHistoryTrip(null);setPickupAction(null);setRecovering(null);setDetailError('This trip is no longer available to your account.');}} onSessionExpired={onSessionExpired}/>
       </>}
     </section>:<>
     {!coordinator && <section className="dashboard-trips patient-next-pickup trip-next-summary" aria-labelledby="patient-pickup-title"><h2 id="patient-pickup-title">{activeTrip?'Current trip':'Next pickup'}</h2>
-      {next ? <><div className="trip-next-reading"><strong>{tripDate(next.treatment_start)} · {next.direction === 'outbound' ? 'Outbound' : 'Return'}</strong>{(driver||caregiver) && <span>{next.patient_name}</span>}<span className={next.pickup_at ? 'trip-next-confirmed' : 'trip-next-note'}>{activeTrip ? 'In progress' : next.pickup_at ? `Pickup at ${tripTime(next.pickup_at)}` : 'Pickup time to be confirmed'}</span></div><InfoButton label="View details" onClick={() => onNavigate(`/dashboard/trips/${next.id}`)} /></> : <p className="patient-overview-note">{loading ? 'Loading pickup details…' : error || syncError ? 'Your pickup details are currently unavailable.' : syncing ? 'Refreshing pickup details…' : driver ? 'No upcoming pickups assigned.' : 'Your upcoming journeys will appear here.'}</p>}
+      {next ? <><div className="trip-next-reading"><strong>{tripDate(next.treatment_start)} · {next.direction === 'outbound' ? 'Outbound' : 'Return'}</strong>{(driver||caregiver) && <span>{next.patient_name}</span>}<span className={next.pickup_at ? 'trip-next-confirmed' : 'trip-next-note'}>{activeTrip ? 'In progress' : next.pickup_at ? `Pickup at ${tripTime(next.pickup_at)}` : 'Pickup time to be confirmed'}</span></div><InfoButton label="View details" onClick={() => onNavigate(`/dashboard/trips/${next.id}`)} /></> : <p className="patient-overview-note">{loading ? 'Loading pickup details…' : error || syncError ? 'Your pickup details are currently unavailable.' : syncing ? 'Refreshing pickup details…' : driver ? 'No upcoming pickups assigned.' : caregiver ? "Your patients' upcoming journeys will appear here." : 'Your upcoming journeys will appear here.'}</p>}
     </section>}
     <section className={`dashboard-trips page-panel trips-panel${coordinator ? ' coordinator-trips-panel' : ''}`} aria-labelledby="trips-title" aria-busy={loading}>
       <PageHeading id="trips-title" title={tripTitle} eyebrow={coordinator ? 'Trip management' : 'Upcoming transport'} level={2}

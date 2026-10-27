@@ -1,4 +1,5 @@
 import TripNotifications from '../components/TripNotifications';
+import DemoTools from '../components/DemoTools';
 import { DashboardViewStateProvider } from '../components/DashboardViewState';
 import { ApiError, apiGet } from '../lib/api';
 import { ListError, PageHeading } from '../components/DashboardUI';
@@ -20,6 +21,7 @@ const unavailableTripsIcon = <span className="dashboard-data-status-icon" aria-h
 
 interface Props {
   account: Account;
+  demoAdmin?:boolean;
   avatarUrl?: string;
   path: string;
   onNavigate: (path: string, replace?: boolean) => void;
@@ -31,7 +33,8 @@ interface Props {
 }
 
 /** Shared role workspace with server-authorized trip data for patients and coordinators. */
-export default function Dashboard({ account, avatarUrl, path, onNavigate, onSignOut, signingOut, notify, onSessionExpired, onPatientProfileMissing }: Props) {
+export default function Dashboard({ account, demoAdmin, avatarUrl, path, onNavigate, onSignOut, signingOut, notify, onSessionExpired, onPatientProfileMissing }: Props) {
+  const [demoOpen,setDemoOpen]=useState(false);
   const [now, setNow] = useState(() => new Date());
   useEffect(() => {
     const timer = window.setInterval(() => setNow(new Date()), 1000);
@@ -204,7 +207,7 @@ export default function Dashboard({ account, avatarUrl, path, onNavigate, onSign
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9" /><circle cx="12" cy="9" r="3" /><path d="M6 19a6 6 0 0 1 12 0" /></svg>
           </button>
           <section className="dashboard-dropdown dashboard-notifications" id="dashboard-notifications" aria-label="Notifications" style={{display: dropdown === 'notifications' ? undefined : 'none'}}>
-            <TripNotifications key={account.id} open={dropdown === 'notifications'} onUnread={setUnreadNotifications} onError={notify} onSessionExpired={onSessionExpired} onOpenTrip={trip=>{setDropdown(null);notificationsButton.current?.focus();onNavigate(`/dashboard/trips/${trip.id}`);}} onOpenPage={page=>{setDropdown(null);notificationsButton.current?.focus();onNavigate(`/dashboard/${page}`);}} />
+            <TripNotifications key={account.id} open={dropdown === 'notifications'} onUnread={setUnreadNotifications} onError={notify} onSessionExpired={onSessionExpired} onOpenTrip={(trip,rate)=>{setDropdown(null);notificationsButton.current?.focus();const path=`/dashboard/trips/${trip.id}`;onNavigate(path);if(rate&&account.role==='patient'&&trip.lifecycle==='completed'&&trip.assigned_driver_id){window.history.replaceState(window.history.state,'',`${path}?tab=rate`);window.dispatchEvent(new Event('trip-rating-requested'));}}} onOpenPage={page=>{setDropdown(null);notificationsButton.current?.focus();onNavigate(`/dashboard/${page}`);}} />
           </section>
           {dropdown === 'account' && <section className="dashboard-dropdown" id="dashboard-account-menu" aria-label="Account">
             <div className="dashboard-profile">
@@ -215,6 +218,7 @@ export default function Dashboard({ account, avatarUrl, path, onNavigate, onSign
             </div>
             <div className="dashboard-dropdown-actions">
               <a aria-label="My Account" href="/dashboard/account" onClick={event => follow(event, '/dashboard/account')} aria-current={accountPage ? 'page' : undefined}>My Account</a>
+              {demoAdmin&&<button type="button" onClick={()=>{setDropdown(null);setDemoOpen(true);}}>Demo Tools</button>}
               <button className="dashboard-signout" aria-label={signingOut ? 'Signing out…' : 'Sign out'} type="button" onClick={onSignOut} disabled={signingOut}>{signingOut ? 'Signing out…' : 'Sign Out'}</button>
             </div>
           </section>}
@@ -222,6 +226,7 @@ export default function Dashboard({ account, avatarUrl, path, onNavigate, onSign
       </div>
     </header>
 
+    {demoAdmin&&<DemoTools account={account} open={demoOpen} onOpen={()=>setDemoOpen(true)} onClose={()=>setDemoOpen(false)} onNavigate={onNavigate} notify={notify}/>}
     <div className="dashboard-workspace">
     <main className="dashboard-main" id="dashboard-main" tabIndex={-1}>
       {driver && !accountPage && !driverTripsPage && driverLoadError ? <section className="dashboard-trips patients-panel page-panel"><ListError title="Driver dashboard could not be loaded" message="Your vehicle registration could not be loaded. Please try again." onRetry={() => setDriverReload(value => value + 1)} /></section> : driver && !accountPage && !driverTripsPage && driverRegistered === null ? <div className="account-loading patients-loading" role="status"><span className="account-spinner" aria-hidden="true" /><span>Loading...</span></div> : connectionsPage ? <CaregiverConnections role={account.role==='caregiver'?'caregiver':'patient'} notify={notify} onSessionExpired={onSessionExpired}/> : caregiverTransport ? <section className={linkedPatients?.length&&!linksError?'caregiver-transport-workspace':'dashboard-trips patients-panel page-panel caregiver-connections'} aria-label="Linked patient transport">{linksError?<ListError title="Linked patients could not be loaded" message="Please try again." onRetry={()=>setLinksRetry(value=>value+1)}/>:linkedPatients===null?<div className="account-loading patients-loading" role="status"><span className="account-spinner" aria-hidden="true"/><span>Loading...</span></div>:!linkedPatients.length?<><PageHeading id="caregiver-transport-title" title={schedulesPage?'Treatment schedules':'Patient trips'} eyebrow={schedulesPage?'Treatment Management':'Linked Patient Trip Management'}/><div className="connections-empty">{unavailableTripsIcon}<h2>No linked patients</h2><p>Link a patient to manage their transport.</p><div className="patient-actions"><button type="button" className="patient-primary" onClick={()=>onNavigate('/dashboard/connections')}>Link a patient</button></div></div></>:schedulesPage?<TreatmentSchedules coordinator={false} caregiverPatients={linkedPatients} notify={notify} onSessionExpired={onSessionExpired}/>:<TripsPage coordinator={false} caregiver tripId={tripDetailsId} onNavigate={onNavigate} onSessionExpired={onSessionExpired}/>}</section> : driversPage ? <DriversPage notify={notify} onSessionExpired={onSessionExpired} /> : availabilityPage ? <DriverAvailability notify={notify} onSessionExpired={onSessionExpired} vehicleRegistered={Boolean(driverRegistered)} onViewVehicle={() => onNavigate('/dashboard/vehicle')} /> : driverTripsPage ? <TripsPage coordinator={false} driver tripId={tripDetailsId} onNavigate={onNavigate} onSessionExpired={onSessionExpired} /> : driver && !accountPage ? <div className="patient-account-profile"><DriverRegistration notify={notify} onSessionExpired={onSessionExpired} registered={Boolean(driverRegistered)} onVehicleChange={vehicleChanged} /></div> : schedulesPage ? <TreatmentSchedules coordinator={account.role === 'coordinator'} notify={notify} onSessionExpired={onSessionExpired} /> : caregiversPage ? <CaregiversPage notify={notify} onSessionExpired={onSessionExpired}/> : patientsPage ? <PatientsPage notify={notify} onSessionExpired={onSessionExpired} /> : accountPage && ['driver','caregiver'].includes(account.role) ? <div className="patient-account-profile"><DriverProfile role={account.role==='caregiver'?'caregiver':'driver'} accountId={account.id} notify={notify} onSessionExpired={onSessionExpired} /></div> : accountPage ? <>{!patient && <section className="dashboard-trips" aria-labelledby={account.role === 'coordinator' ? 'account-details-title' : 'role-profile-title'}><PageHeading id={account.role === 'coordinator' ? 'account-details-title' : 'role-profile-title'} title="Account Details" eyebrow="Account Management" description={<span className="profile-id">{roleNames[account.role]} ID: {account.id}</span>} />{account.role === 'coordinator' && <fieldset className="patient-form-fields coordinator-account-fields" disabled aria-label="Coordinator account details">

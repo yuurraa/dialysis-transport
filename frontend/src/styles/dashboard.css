@@ -1,6 +1,39 @@
 /* Authenticated workspace, navigation, page containers and shell breakpoints. */
 
+.demo-session-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  margin: var(--demo-content-gap) var(--page-gutter) 0;
+  padding: 8px 12px;
+  border: 1px solid var(--ui-border);
+  border-radius: 8px;
+  background: var(--ui-field);
+  color: var(--ui-text);
+  font-size: .875rem;
+  flex-shrink: 0;
+}
+.demo-session-strip > div { display: flex; flex-wrap: wrap; gap: 8px; }
+.demo-session-strip ~ .dashboard-workspace .dashboard-main { padding-top: var(--demo-content-gap); }
+.demo-session-strip button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 12px;
+  border: 1px solid var(--ui-control-border);
+  border-radius: var(--ui-control-radius);
+  background: var(--ui-raised);
+  color: var(--ui-text);
+  font-size: inherit;
+  font-weight: 600;
+}
+.demo-session-strip button:hover:not(:disabled) { background: var(--ui-hover); }
+
 .dashboard-page {
+  --dashboard-content-gap: 24px;
+  --demo-content-gap: 12px;
   --page-gutter: max(clamp(24px, 10vw, 176px), calc((100vw - 1320px) / 2));
 }
 
@@ -1030,7 +1063,7 @@
 /* Journey timetable: page-level hierarchy, ruled records, one highlighted next action. */
 
 .dashboard-main {
-  padding-top: 24px;
+  padding-top: var(--dashboard-content-gap);
 }
 
 .dashboard-trips {
@@ -1083,6 +1116,8 @@
 
 @media (max-width: 760px) {
   .dashboard-page {
+    --dashboard-content-gap: 16px;
+    --demo-content-gap: 8px;
     height: auto;
     min-height: 100dvh;
     overflow: visible;
@@ -1095,7 +1130,7 @@
 
   .dashboard-main {
     display: block;
-    padding-block: 16px;
+    padding-block: var(--dashboard-content-gap);
     overflow: visible;
     scrollbar-gutter: auto;
   }

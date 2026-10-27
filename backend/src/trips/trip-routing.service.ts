@@ -11,7 +11,7 @@ export interface RoadRoute {
   origin_coordinates:Coordinates; destination_coordinates:Coordinates;
   distance_metres:number; duration_seconds:number; duration_minutes:number; assessed_at:string;
 }
-interface RoutableTrip { id:string; version:number; origin:string; destination:string; duration_minutes:number; status:string; review_required:boolean; assigned_driver_id:string|null; route_snapshot:RoadRoute|null; lifecycle:string; pickup_at:string|null; dropoff_at:string|null; arrival_by:string|null }
+interface RoutableTrip { id:string; version:number; origin:string; destination:string; duration_minutes:number; status:string; review_required:boolean; assigned_driver_id:string|null; route_snapshot:RoadRoute|null; lifecycle:string; pickup_at:string|null; dropoff_at:string|null; arrival_by:string|null; demo_owner_id?:string|null }
 const failed=()=>new ServiceUnavailableException({code:'route_unavailable',message:'Route assessment is unavailable.'});
 
 @Injectable()
@@ -65,6 +65,7 @@ export class TripRoutingService {
   async traffic(client:SupabaseClient,id:string,monitor=false) {
     const signal=AbortSignal.timeout(12000);
     const trip=await this.trip(client,id,signal,monitor);
+    if(trip.demo_owner_id)return this.simulatedTraffic(trip,signal);
     const pickup=trip.pickup_at?Date.parse(trip.pickup_at):NaN;
     // Background alerts stay tied to actionable journeys; an open map can always show roads now.
     if(monitor){
@@ -176,7 +177,41 @@ export class TripRoutingService {
     this.check(error);
   }
 
+  private async demoContext(trip:RoutableTrip,signal:AbortSignal) {
+    if(process.env.DEMO_ENABLED!=='true')throw failed();
+    const context=await this.database.forIntegration().rpc('demo_trip_context',{target:trip.id}).abortSignal(signal);
+    this.check(context.error);if(!context.data)throw failed();
+    return context.data as {traffic:'normal'|'delay';progress:number};
+  }
+
+  /** Scripted observations are confined to tagged fixtures; never enter shared LTA caches. */
+  private async simulatedTraffic(trip:RoutableTrip,signal:AbortSignal) {
+    const context=await this.demoContext(trip,signal);
+    const route=trip.route_snapshot??await this.route(trip.origin,trip.destination,signal);
+    const delay=context.traffic==='delay'?15:0,now=Date.now();
+    const active=trip.lifecycle==='in-progress',assigned=!!trip.assigned_driver_id&&trip.lifecycle==='scheduled';
+    const remaining=active?Math.max(0,1-context.progress/100):1;
+    const departure=assigned?Math.max(now,Date.parse(trip.pickup_at!)):now;
+    const baseline=departure+route.duration_seconds*remaining*1000;
+    const eta=baseline+delay*60000,stamp=new Date(now).toISOString();
+    const middle=route.geometry[Math.floor(route.geometry.length/2)]??[1.35,103.8];
+    return {state:'current',simulated:true,assessment_scope:active||assigned?'trip-arrival':'road-conditions',
+      risk:delay?'at-risk':'no-delay-detected',impact:delay?'high':'low',coverage_percent:100,
+      availability:{incidents:'current',speeds:'current'},assessed_at:stamp,incidents_retrieved_at:stamp,speeds_retrieved_at:stamp,
+      estimate_expires_at:new Date(now+120000).toISOString(),estimated_departure_at:new Date(departure).toISOString(),
+      baseline_arrival_at:active||assigned?new Date(baseline).toISOString():null,
+      estimated_arrival_from:active||assigned?new Date(eta).toISOString():null,estimated_arrival_until:active||assigned?new Date(eta).toISOString():null,
+      delay_from_minutes:delay,delay_until_minutes:delay,departure_basis:active?'live-location':'scheduled',trip_version:trip.version,
+      incidents:delay?[{latitude:middle[0],longitude:middle[1],type:'Demo',message:'Simulated road delay'}]:[],speed_bands:[]};
+  }
+
   private async recoveryAssessment(trip:RoutableTrip,signal:AbortSignal){
+    if(trip.demo_owner_id){
+      const context=await this.demoContext(trip,signal),route=await this.route(trip.origin,trip.destination,signal);
+      const minutes=Math.max(5,Math.ceil(route.duration_seconds/300)*5)+(context.traffic==='delay'?15:0)+10;
+      if(minutes>360)throw failed();
+      return {minutes,expires:Date.now()+60000,estimated:true,bufferMinutes:10};
+    }
     const [route,snapshot]=await Promise.all([this.route(trip.origin,trip.destination,signal),this.lta.getTraffic(signal)]);
     if(!snapshot.incidentsRetrievedAt||!snapshot.speedBandsRetrievedAt)throw new ServiceUnavailableException({code:'recovery_unavailable',message:'Recovery needs current incident and speed observations.'});
     const expires=Math.min(Date.parse(snapshot.incidentsRetrievedAt)+120000,Date.parse(snapshot.speedBandsRetrievedAt)+300000);

@@ -1,4 +1,5 @@
 import { supabase } from './supabase';
+import { demoSessionEvent, getDemoSession } from './demoSession';
 
 export class ApiError extends Error {
   constructor(readonly status: number, readonly code?: string) {
@@ -12,10 +13,14 @@ export function apiGet<T>(path: string, accessToken?: string): Promise<T> {
 }
 
 export async function apiRequest<T>(path: string, method: 'GET' | 'POST' | 'PATCH' | 'DELETE', body?: unknown, accessToken?: string): Promise<T> {
-  const token = accessToken ?? (supabase ? (await supabase.auth.getSession()).data.session?.access_token : undefined);
+  const identity=getDemoSession();
+  const token = accessToken ?? identity?.access_token ?? (supabase ? (await supabase.auth.getSession()).data.session?.access_token : undefined);
+  if(!accessToken&&identity!==getDemoSession())throw new DOMException('Account changed.','AbortError');
   const origin = (import.meta.env.VITE_API_URL ?? '').replace(/\/$/, '');
   const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), 15000);
+  const changed=()=>controller.abort();
+  window.addEventListener(demoSessionEvent,changed);
+  const timeout = window.setTimeout(() => controller.abort(), path==='/demo/setup'?60000:15000);
   try {
     const response = await fetch(`${origin}/api${path}`, {
       method,
@@ -35,5 +40,6 @@ export async function apiRequest<T>(path: string, method: 'GET' | 'POST' | 'PATC
     return await response.json() as T;
   } finally {
     window.clearTimeout(timeout);
+    window.removeEventListener(demoSessionEvent,changed);
   }
 }
