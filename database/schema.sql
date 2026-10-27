@@ -1772,6 +1772,121 @@ language sql stable security definer set search_path='' as $$
 $$;
 revoke all on function private.driver_route_connected(uuid,public.trips,timestamptz),private.driver_fits_trip(uuid,public.trips,timestamptz) from public,anon,authenticated;
 
+-- Feedback belongs to the patient and the final driver of a completed journey.
+create table if not exists private.driver_ratings (
+  trip_id uuid primary key references public.trips(id) on delete restrict,
+  patient_id uuid not null references public.patients(id) on delete restrict,
+  driver_id uuid not null references public.drivers(account_id) on delete restrict,
+  stars integer not null check(stars between 1 and 5),
+  created_at timestamptz not null default now()
+);
+create index if not exists driver_ratings_driver on private.driver_ratings(driver_id);
+create table if not exists private.driver_preferences (
+  patient_id uuid primary key references public.patients(id) on delete restrict,
+  driver_id uuid references public.drivers(account_id) on delete restrict,
+  version integer not null default 1 check(version>0),
+  updated_at timestamptz not null default now()
+);
+alter table private.driver_ratings enable row level security;
+alter table private.driver_preferences enable row level security;
+revoke all on private.driver_ratings,private.driver_preferences from public,anon,authenticated;
+
+create or replace function private.driver_feedback_summary(driver uuid) returns jsonb
+language sql stable security definer set search_path='' as $$
+  select jsonb_build_object('completed_trips',(select count(*) from public.trips where assigned_driver_id=driver and lifecycle='completed' and deleted_at is null),
+    'average_rating',round(avg(stars),1),'rating_count',count(*)) from private.driver_ratings where driver_id=driver;
+$$;
+create or replace function private.preferred_driver_for(patient uuid) returns uuid
+language sql stable security definer set search_path='' as $$ select driver_id from private.driver_preferences where patient_id=patient; $$;
+create or replace function private.last_completed_driver_for(patient uuid) returns uuid
+language sql stable security definer set search_path='' as $$
+  select assigned_driver_id from public.trips where patient_id=patient and lifecycle='completed' and deleted_at is null and assigned_driver_id is not null
+    order by completed_at desc nulls last,id desc limit 1;
+$$;
+create or replace function private.preference_driver_eligible(driver uuid,patient uuid) returns boolean
+language sql stable security definer set search_path='' as $$
+  select exists(select 1 from public.accounts a join public.drivers d on d.account_id=a.id
+    join public.driver_vehicles v on v.driver_id=a.id join public.patients p on p.id=patient
+    where a.id=driver and a.role='driver' and a.status='active' and v.status='approved' and v.passenger_capacity>=1
+      and (p.mobility<>'wheelchair' or v.wheelchair_accessible));
+$$;
+revoke all on function private.driver_feedback_summary(uuid),private.preferred_driver_for(uuid),private.last_completed_driver_for(uuid),private.preference_driver_eligible(uuid,uuid) from public,anon,authenticated;
+
+create or replace function private.trip_feedback(target uuid) returns jsonb
+language plpgsql stable security definer set search_path='' as $$
+declare journey public.trips;
+begin
+  select * into journey from public.trips where id=target and deleted_at is null;
+  if not found or not private.owns_active_patient(journey.patient_id) then raise exception 'Patient feedback access denied.' using errcode='42501'; end if;
+  if journey.lifecycle<>'completed' or journey.assigned_driver_id is null then raise exception 'Feedback requires a completed trip.' using errcode='22023'; end if;
+  return jsonb_build_object('trip_id',target,'driver_id',journey.assigned_driver_id,
+    'rating',(select stars from private.driver_ratings where trip_id=target),
+    'can_prefer',private.preference_driver_eligible(journey.assigned_driver_id,journey.patient_id),
+    'preference',coalesce((select jsonb_build_object('driver_id',p.driver_id,'driver_name',d.full_name,'version',p.version)
+      from private.driver_preferences p left join public.drivers d on d.account_id=p.driver_id where p.patient_id=journey.patient_id),jsonb_build_object('driver_id',null,'driver_name',null,'version',0)));
+end;
+$$;
+create or replace function private.rate_driver(target uuid,rating integer) returns jsonb
+language plpgsql security definer set search_path='' as $$
+declare journey public.trips; saved private.driver_ratings;
+begin
+  if rating is null or rating not between 1 and 5 then raise exception 'Choose a rating from 1 to 5.' using errcode='22023'; end if;
+  select * into journey from public.trips where id=target and deleted_at is null;
+  if not found or not private.owns_active_patient(journey.patient_id) then raise exception 'Patient feedback access denied.' using errcode='42501'; end if;
+  perform 1 from public.patients where id=journey.patient_id for update;
+  perform 1 from public.accounts where id=journey.assigned_driver_id for key share;
+  select * into journey from public.trips where id=target and deleted_at is null for update;
+  if not found or not private.owns_active_patient(journey.patient_id) then raise exception 'Patient feedback access denied.' using errcode='42501'; end if;
+  if journey.lifecycle<>'completed' or journey.assigned_driver_id is null then raise exception 'Feedback requires a completed trip.' using errcode='22023'; end if;
+  insert into private.driver_ratings(trip_id,patient_id,driver_id,stars) values(target,journey.patient_id,journey.assigned_driver_id,rating)
+    on conflict(trip_id) do nothing returning * into saved;
+  if saved.trip_id is null then
+    select * into saved from private.driver_ratings where trip_id=target;
+    if saved.stars<>rating then raise exception 'A rating has already been submitted.' using errcode='PT409'; end if;
+  end if;
+  return jsonb_build_object('trip_id',target,'rating',saved.stars);
+end;
+$$;
+create or replace function private.set_driver_preference(driver uuid,expected_version integer) returns jsonb
+language plpgsql security definer set search_path='' as $$
+declare patient uuid; saved private.driver_preferences;
+begin
+  select id into patient from public.patients where private.owns_active_patient(id) for update;
+  if patient is null or not private.owns_active_patient(patient) then raise exception 'Patient preference access denied.' using errcode='42501'; end if;
+  select * into saved from private.driver_preferences where patient_id=patient for update;
+  if expected_version is null or expected_version<>coalesce(saved.version,0) then raise exception 'Driver preference changed.' using errcode='PT409'; end if;
+  if driver is not null then
+    perform 1 from public.accounts where id=driver for key share;
+    if not private.preference_driver_eligible(driver,patient) or not exists(select 1 from public.trips
+      where patient_id=patient and assigned_driver_id=driver and lifecycle='completed' and deleted_at is null) then
+      raise exception 'Choose an eligible driver from a completed trip.' using errcode='22023'; end if;
+  end if;
+  insert into private.driver_preferences(patient_id,driver_id) values(patient,driver)
+    on conflict(patient_id) do update set driver_id=excluded.driver_id,version=driver_preferences.version+1,updated_at=now() returning * into saved;
+  return jsonb_build_object('driver_id',saved.driver_id,'driver_name',(select full_name from public.drivers where account_id=saved.driver_id),'version',saved.version);
+end;
+$$;
+create or replace function private.my_driver_statistics() returns jsonb
+language plpgsql stable security definer set search_path='' as $$
+declare driver uuid;
+begin
+  select a.id into driver from public.accounts a join public.drivers d on d.account_id=a.id
+    where a.auth_user_id=(select auth.uid()) and a.role='driver' and a.status='active';
+  if driver is null then raise exception 'Driver access required.' using errcode='42501'; end if;
+  return private.driver_feedback_summary(driver);
+end;
+$$;
+create or replace function public.trip_feedback(target uuid) returns jsonb
+language sql stable security invoker set search_path='' as $$ select private.trip_feedback(target); $$;
+create or replace function public.rate_driver(target uuid,rating integer) returns jsonb
+language sql security invoker set search_path='' as $$ select private.rate_driver(target,rating); $$;
+create or replace function public.set_driver_preference(driver uuid,expected_version integer) returns jsonb
+language sql security invoker set search_path='' as $$ select private.set_driver_preference(driver,expected_version); $$;
+create or replace function public.my_driver_statistics() returns jsonb
+language sql stable security invoker set search_path='' as $$ select private.my_driver_statistics(); $$;
+revoke all on function private.trip_feedback(uuid),public.trip_feedback(uuid),private.rate_driver(uuid,integer),public.rate_driver(uuid,integer),private.set_driver_preference(uuid,integer),public.set_driver_preference(uuid,integer),private.my_driver_statistics(),public.my_driver_statistics() from public,anon;
+grant execute on function private.trip_feedback(uuid),public.trip_feedback(uuid),private.rate_driver(uuid,integer),public.rate_driver(uuid,integer),private.set_driver_preference(uuid,integer),public.set_driver_preference(uuid,integer),private.my_driver_statistics(),public.my_driver_statistics() to authenticated;
+
 create or replace function private.assignment_route_requirements(target uuid,starts timestamptz) returns jsonb
 language plpgsql stable security definer set search_path='' as $$
 declare chosen public.trips; result jsonb;
@@ -1807,11 +1922,18 @@ begin
   select * into chosen from public.trips where id=target and deleted_at is null;
   if not found then raise exception 'Trip not found.' using errcode='P0002'; end if;
   if starts is null or not isfinite(starts) then raise exception 'Choose a pickup time.' using errcode='22023'; end if;
-  select jsonb_build_object('trip',to_jsonb(chosen),'duration_minutes',chosen.duration_minutes,
-    'drivers',coalesce(jsonb_agg(jsonb_build_object('id',a.id,'name',d.full_name,'phone',d.phone,'vehicle_id',v.id,'plate',v.plate_number,
-      'make',v.make,'model',v.model,'passenger_capacity',v.passenger_capacity,'wheelchair_accessible',v.wheelchair_accessible) order by d.full_name,a.id),'[]'::jsonb))
-    into result from public.accounts a join public.drivers d on d.account_id=a.id join public.driver_vehicles v on v.driver_id=a.id
-    where private.driver_fits_trip(a.id,chosen,starts);
+  with eligible as materialized (
+    select a.id,d.full_name,d.phone,v.id as vehicle_id,v.plate_number,v.make,v.model,v.passenger_capacity,v.wheelchair_accessible,
+      coalesce(a.id=private.preferred_driver_for(chosen.patient_id),false) as preferred,
+      coalesce(a.id=private.last_completed_driver_for(chosen.patient_id),false) as continuity,
+      private.driver_feedback_summary(a.id) as feedback
+    from public.accounts a join public.drivers d on d.account_id=a.id join public.driver_vehicles v on v.driver_id=a.id
+    where private.driver_fits_trip(a.id,chosen,starts)
+  ) select jsonb_build_object('trip',to_jsonb(chosen),'duration_minutes',chosen.duration_minutes,
+    'drivers',coalesce(jsonb_agg(jsonb_build_object('id',id,'name',full_name,'phone',phone,'vehicle_id',vehicle_id,'plate',plate_number,
+      'make',make,'model',model,'passenger_capacity',passenger_capacity,'wheelchair_accessible',wheelchair_accessible,
+      'preferred',preferred,'continuity',continuity,'average_rating',feedback->'average_rating','rating_count',feedback->'rating_count')
+      order by preferred desc,continuity desc,(feedback->>'average_rating')::numeric desc nulls last,full_name,id),'[]'::jsonb)) into result from eligible;
   return result;
 end;
 $$;
@@ -2959,8 +3081,15 @@ begin
   select jsonb_agg(jsonb_build_object('id',o.id,'driver_id',o.driver_id,'driver_name',d.full_name,'vehicle_id',o.vehicle_id,
     'plate',v.plate_number,'make',v.make,'model',v.model,'pickup_at',o.pickup_at,'dropoff_at',o.pickup_at+make_interval(mins=>o.duration_minutes),
     'duration_minutes',o.duration_minutes,'same_driver',o.driver_id=journey.assigned_driver_id,'expires_at',o.expires_at,
-    'estimated_duration',o.estimated_duration,'buffer_minutes',o.buffer_minutes)
-    order by abs(extract(epoch from (o.pickup_at-journey.pickup_at))), (o.driver_id=journey.assigned_driver_id) desc,o.pickup_at,d.full_name,o.driver_id)
+    'estimated_duration',o.estimated_duration,'buffer_minutes',o.buffer_minutes,
+    'preferred',coalesce(o.driver_id=private.preferred_driver_for(journey.patient_id),false),
+    'continuity',coalesce(o.driver_id=private.last_completed_driver_for(journey.patient_id),false),
+    'average_rating',private.driver_feedback_summary(o.driver_id)->'average_rating')
+    order by abs(extract(epoch from (o.pickup_at-journey.pickup_at))), (o.driver_id=journey.assigned_driver_id) desc,
+      coalesce(o.driver_id=private.preferred_driver_for(journey.patient_id),false) desc,
+      coalesce(o.driver_id=private.last_completed_driver_for(journey.patient_id),false) desc,
+      (private.driver_feedback_summary(o.driver_id)->>'average_rating')::numeric desc nulls last,
+      o.pickup_at,d.full_name,o.driver_id)
   into options from private.trip_recovery_options o join public.drivers d on d.account_id=o.driver_id join public.driver_vehicles v on v.id=o.vehicle_id
     where o.trip_id=target and o.trip_version=expected_version and o.handover_origin is null and o.approved_at is null and o.expires_at>now();
   if options is null then return null; end if;
@@ -2999,7 +3128,10 @@ begin
       then array[base,base-interval '15 minutes',base-interval '30 minutes',original.arrival_by-make_interval(mins=>reserved_minutes)]
       else array[base,base+interval '15 minutes',base+interval '30 minutes'] end) proposed where proposed>now()
     loop
-      for candidate in select a.id,d.full_name,d.phone,v.id as vehicle_id,v.plate_number,v.make,v.model
+      for candidate in select a.id,d.full_name,d.phone,v.id as vehicle_id,v.plate_number,v.make,v.model,
+        coalesce(a.id=private.preferred_driver_for(original.patient_id),false) as preferred,
+        coalesce(a.id=private.last_completed_driver_for(original.patient_id),false) as continuity,
+        (private.driver_feedback_summary(a.id)->>'average_rating')::numeric as average_rating
         from public.accounts a join public.drivers d on d.account_id=a.id join public.driver_vehicles v on v.driver_id=a.id
         where (handover_origin is null or a.id<>original.assigned_driver_id)
           and (original.driver_unavailable_at is null or a.id<>original.assigned_driver_id)
@@ -3015,13 +3147,15 @@ begin
           options:=options||jsonb_build_array(jsonb_build_object('driver_id',candidate.id,'driver_name',candidate.full_name,'phone',candidate.phone,
             'vehicle_id',candidate.vehicle_id,'plate',candidate.plate_number,'make',candidate.make,'model',candidate.model,
             'pickup_at',starts,'dropoff_at',starts+make_interval(mins=>reserved_minutes),'duration_minutes',reserved_minutes,
-            'same_driver',candidate.id=original.assigned_driver_id,'change_minutes',abs(extract(epoch from starts-original.pickup_at))/60));
+            'same_driver',candidate.id=original.assigned_driver_id,'change_minutes',abs(extract(epoch from starts-original.pickup_at))/60,
+            'preferred',candidate.preferred,'continuity',candidate.continuity,'average_rating',candidate.average_rating));
         end if;
       end loop;
     end loop;
   end if;
   select coalesce(jsonb_agg(value),'[]'::jsonb) into options from (
     select value from jsonb_array_elements(options) order by (value->>'change_minutes')::numeric,(value->>'same_driver')::boolean desc,
+      (value->>'preferred')::boolean desc,(value->>'continuity')::boolean desc,(value->>'average_rating')::numeric desc nulls last,
       (value->>'dropoff_at')::timestamptz,value->>'driver_name',value->>'driver_id' limit 12) ranked;
   select coalesce(jsonb_agg(distinct value),'[]'::jsonb) into legs from jsonb_array_elements(legs);
   return jsonb_build_object('trip',to_jsonb(original),'route',route,'requirements',legs,'options',options);

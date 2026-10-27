@@ -9,7 +9,7 @@ test('driver vehicle registration preserves failed input and supports rejection,
   await seedSession(page);
   await page.route('**/api/auth/me', route => route.fulfill({json:{account:{...activeAccount,id:driverId,role:'driver'}}}));
   let vehicle: object | null = null; let failure = true; let plateConflict = true; let submissions = 0;
-  await page.route('**/api/drivers/me', route => route.fulfill({json:{vehicle}}));
+  await page.route('**/api/drivers/me', route => route.fulfill({json:{vehicle,statistics:{completed_trips:2,average_rating:4.5,rating_count:2}}}));
   await page.route('**/api/drivers/me/vehicle', route => {
     submissions++;
     if(failure) return route.fulfill({status:503,json:{message:'Unavailable'}});
@@ -63,6 +63,8 @@ test('driver vehicle registration preserves failed input and supports rejection,
   await page.reload();
   await expect(page.getByLabel('Registration status',{exact:true})).toHaveValue('Approved');
   await expect(page.getByRole('button',{name:'Edit registration',exact:true})).toBeVisible();
+  await expect(page.getByText('Completed trips',{exact:true}).locator('..').locator('dd')).toHaveText('2');
+  await expect(page.getByText('Driver rating',{exact:true}).locator('..').locator('dd')).toContainText('4.5 / 5');
 });
 
 test('coordinator sees all drivers and reviews only submitted registrations with version conflicts handled', async ({ page }) => {

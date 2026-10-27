@@ -3,6 +3,7 @@ import TripProgress from '../components/TripProgress';
 import TripHistoryDialog from '../components/TripHistoryDialog';
 import TripAssignmentDialog from '../components/TripAssignmentDialog';
 import TripRecoveryDialog from '../components/TripRecoveryDialog';
+import TripFeedback from '../components/TripFeedback';
 import { Toast, ToastRegion } from '../components/Toast';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { InfoButton, Overlay, PageHeading, ListToolbar, ListPagination, ChoiceGroup, SortOverlay, ListError, sortSummary } from '../components/DashboardUI';
@@ -29,7 +30,7 @@ const journeyCategories = [{ key: 'upcoming', label: 'Upcoming' }, { key: 'in-pr
 const assignmentIcon=<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="9" cy="7" r="3" /><path d="M3 21v-3a6 6 0 0 1 12 0v3M17 8h6m-3-3v6" /></svg>;
 function TripStatus({ status, lifecycle, coordinator = false, driver = false }: { status: string; lifecycle?: Trip['lifecycle']; coordinator?: boolean; driver?: boolean }) {
   const category = categories.find(item => item.key === status);
-  return <span className={`trip-status-badge trip-status-${lifecycle === 'cancelled' ? 'cancelled' : category?.key ?? 'unknown'}`}>{lifecycle === 'cancelled' ? 'Cancelled' : lifecycle === 'completed' ? 'Completed' : lifecycle === 'in-progress' ? coordinator && status === 'at-risk' ? 'In progress · At-Risk' : 'In progress' : !category ? 'Status unavailable' : coordinator ? category.label : status === 'unfilled' ? 'Awaiting driver' : status === 'at-risk' ? 'Under review' : driver ? 'Assigned' : 'Driver assigned'}</span>;
+  return <span className={`trip-status-badge trip-status-${lifecycle === 'cancelled' ? 'cancelled' : category?.key ?? 'unknown'}`}>{lifecycle === 'cancelled' ? 'Cancelled' : lifecycle === 'completed' ? 'Completed' : lifecycle === 'in-progress' ? coordinator && status === 'at-risk' ? 'In progress · At-Risk' : 'In progress' : !category ? 'Status unavailable' : coordinator ? category.label : status === 'unfilled' ? 'Awaiting driver' : status === 'at-risk' ? driver ? 'Under review' : 'At risk' : driver ? 'Assigned' : 'Driver assigned'}</span>;
 }
 export const singaporeToday = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Singapore', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
 export const addDays = (date: string, days: number) => {
@@ -368,6 +369,7 @@ export default function TripsPage({ coordinator, driver = false,caregiver=false,
               <div><dt>Vehicle plate</dt><dd>{driverDetails.plate || '—'}</dd></div>
             </dl>
           </section>}
+          {!coordinator&&!driver&&!caregiver&&details.lifecycle==='completed'&&details.assigned_driver_id&&<TripFeedback key={details.id} tripId={details.id} notify={setToast} onSessionExpired={onSessionExpired}/>}
           {driver&&details.assignment&&<section className="trip-detail-section trip-detail-assignment trip-detail-passenger"><h2>Passenger needs</h2>
             <dl className="trip-detail-timings">
               <div><dt>Patient contact</dt><dd>{details.assignment.patient_phone}</dd></div>

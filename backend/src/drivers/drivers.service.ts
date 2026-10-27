@@ -37,9 +37,13 @@ export class DriversService {
 
   async own(header?: string) {
     const { client, account } = await this.access(header, 'driver');
-    const result = await client.from('driver_vehicles').select('id,driver_id,licence_number,plate_number,make,model,passenger_capacity,wheelchair_accessible,status,version,submitted_at,reviewed_at,registered_at,review_reason').eq('driver_id', account.id).maybeSingle();
+    const [result,statistics] = await Promise.all([
+      client.from('driver_vehicles').select('id,driver_id,licence_number,plate_number,make,model,passenger_capacity,wheelchair_accessible,status,version,submitted_at,reviewed_at,registered_at,review_reason').eq('driver_id', account.id).maybeSingle(),
+      client.rpc('my_driver_statistics'),
+    ]);
     this.check(result.error);
-    return { vehicle: result.data };
+    this.check(statistics.error);
+    return { vehicle: result.data, statistics:statistics.data };
   }
 
   async availability(header: string | undefined, id: string) {

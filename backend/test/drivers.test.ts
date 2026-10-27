@@ -18,7 +18,7 @@ const vehicle = { licence_number:'MOCK123', plate_number:'TEST123', make:'Fixtur
 const gateway = { forUser: () => ({
   rpc: async (name: string,args?: Record<string,unknown>) => {
     calls.push({name,args});
-    return {data: name === 'list_drivers' ? {drivers:[],total:0,page:1,pageSize:10} : name === 'save_driver_status' ? {id,account_status:args?.new_status,status_version:Number(args?.expected_version)+1} : {...vehicle,version:1,status:'pending'},error:failure ? {code:failure,message:'PRIVATE_DETAIL'} : null};
+    return {data: name === 'my_driver_statistics' ? {completed_trips:2,average_rating:4.5,rating_count:2} : name === 'list_drivers' ? {drivers:[],total:0,page:1,pageSize:10} : name === 'save_driver_status' ? {id,account_status:args?.new_status,status_version:Number(args?.expected_version)+1} : {...vehicle,version:1,status:'pending'},error:failure ? {code:failure,message:'PRIVATE_DETAIL'} : null};
   },
   from: () => {
     const query = {select: () => query,eq: (key: string,value: unknown) => {ownership=[key,value];return query;},maybeSingle:async () => ({data:null,error:failure ? {code:failure} : null})};
@@ -45,7 +45,8 @@ test('driver and coordinator endpoints enforce active roles before database acce
   role='driver';assert.equal((await request()).status,403);assert.equal((await request(`/${id}/review`,'PATCH',{version:1,decision:'approved',reason:''})).status,403);
   status='inactive';assert.equal((await request('/me')).status,403);status='active';
   assert.equal(calls.length,0);
-  assert.equal((await request('/me')).status,200);assert.deepEqual(ownership,['driver_id',id]);
+  const own=await request('/me');assert.equal(own.status,200);assert.deepEqual(ownership,['driver_id',id]);
+  assert.deepEqual(own.body.statistics,{completed_trips:2,average_rating:4.5,rating_count:2});
 });
 test('coordinator reviews require an explicit decision, version and rejection reason',async () => {
   role='coordinator';calls=[];

@@ -12,6 +12,7 @@ export interface DriverVehicle extends VehicleDetails {
 }
 export const registrationLabels: Record<string, string> = { 'not-submitted': 'Not submitted', pending: 'Pending review', approved: 'Approved', rejected: 'Rejected' };
 const emptyVehicle: VehicleDetails = { licence_number: '', plate_number: '', make: '', model: '', passenger_capacity: 3, wheelchair_accessible: false };
+interface DriverStatistics { completed_trips:number; average_rating:number|null; rating_count:number }
 
 export function VehicleFields({ draft, onChange, disabled = false, status, feedback }: { draft: VehicleDetails; onChange: (value: VehicleDetails) => void; disabled?: boolean; status?: string; feedback?: string }) {
   return <fieldset className="patient-form-fields" disabled={disabled} aria-label="Vehicle registration details">
@@ -34,6 +35,7 @@ export function driverError(reason: unknown) {
 
 export default function DriverRegistration({ notify, onSessionExpired, registered = false, onVehicleChange }: { notify: (message: string) => void; onSessionExpired: () => void; registered?: boolean; onVehicleChange?: (vehicle: DriverVehicle | null) => void }) {
   const [vehicle, setVehicle] = useState<DriverVehicle | null>(null);
+  const [statistics,setStatistics]=useState<DriverStatistics|null>(null);
   const [draft, setDraft] = useState<VehicleDetails>(emptyVehicle);
   const [editing, setEditing] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -51,9 +53,9 @@ export default function DriverRegistration({ notify, onSessionExpired, registere
   useEffect(() => {
     let active = true;
     setLoading(true); setError('');
-    apiGet<{ vehicle: DriverVehicle | null }>('/drivers/me').then(result => {
+    apiGet<{ vehicle: DriverVehicle | null; statistics?:DriverStatistics }>('/drivers/me').then(result => {
       if (!active) return;
-      onVehicleChange?.(result.vehicle); setVehicle(result.vehicle); setDraft(result.vehicle ?? emptyVehicle); setEditing(!result.vehicle); setConflict(false); setSaveError('');
+      onVehicleChange?.(result.vehicle); setVehicle(result.vehicle); setStatistics(result.statistics??null); setDraft(result.vehicle ?? emptyVehicle); setEditing(!result.vehicle); setConflict(false); setSaveError('');
     }).catch(reason => { if (active) { if (reason instanceof ApiError && reason.status === 401) onSessionExpired(); setError(driverError(reason)); } })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
@@ -83,6 +85,7 @@ export default function DriverRegistration({ notify, onSessionExpired, registere
       : error ? <ListError title="Registration could not be loaded" message={error} onRetry={() => setReload(value => value + 1)} />
       : <form ref={form} className={`patient-profile-form${editing ? ' patient-editing' : ''}`} aria-label="Vehicle registration" onSubmit={requestSubmission} aria-busy={saving}>
         <div className="patient-readonly-fields panel-scroll" tabIndex={0} role="region" aria-label="Your vehicle details">
+          {registered&&<dl className="driver-journey-statistics"><div><dt>Completed trips</dt><dd>{statistics?.completed_trips??'—'}</dd></div><div><dt>Driver rating</dt><dd>{statistics?.average_rating==null?'—':`${statistics.average_rating.toFixed(1)} / 5`}<span>{statistics?`${statistics.rating_count} ${statistics.rating_count===1?'rating':'ratings'}`:'Unavailable'}</span></dd></div></dl>}
           {vehicle && <fieldset className="patient-form-fields vehicle-registration-dates" disabled aria-label="Registration dates">
             <div className="patient-field"><label htmlFor="vehicle-submitted-date">Submitted on</label><input id="vehicle-submitted-date" readOnly value={new Intl.DateTimeFormat('en-SG', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Singapore' }).format(new Date(vehicle.submitted_at))} /></div>
             <div className="patient-field"><label htmlFor="vehicle-registered-date">Registered on</label><input id="vehicle-registered-date" readOnly value={registeredOn ? new Intl.DateTimeFormat('en-SG', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Singapore' }).format(new Date(registeredOn)) : '—'} /></div>

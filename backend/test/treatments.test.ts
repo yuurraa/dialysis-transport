@@ -172,7 +172,16 @@ test('trip commands enforce role boundaries and validate identifiers, pickup ins
   for(const input of [null,[],{recipient_id:id}])await assert.rejects(service.deleteReadNotifications('Bearer fixture',input));
   await service.deleteReadNotifications('Bearer fixture',{});
   assert.equal(calls.at(-1)?.[0],'delete_read_trip_notifications');assert.equal(calls.at(-1)?.[1],undefined);
-
-
-
+  for(const other of ['caregiver','coordinator','driver']){
+    role=other;await assert.rejects(service.feedback('Bearer fixture',id),/access denied/);
+    await assert.rejects(service.rateDriver('Bearer fixture',id,{rating:5}),/access denied/);
+    await assert.rejects(service.setDriverPreference('Bearer fixture',{driver_id:id,version:0}),/access denied/);
+  }
+  role='patient';
+  for(const body of [null,{},[],{rating:0},{rating:6},{rating:1.5},{rating:'5'},{rating:5,driver_id:id}])await assert.rejects(service.rateDriver('Bearer fixture',id,body));
+  for(const body of [null,{}, {driver_id:'bad',version:0},{driver_id:id,version:-1},{driver_id:id,version:1.5},{driver_id:id,version:0,patient_id:id}])await assert.rejects(service.setDriverPreference('Bearer fixture',body));
+  await service.feedback('Bearer fixture',id);await service.rateDriver('Bearer fixture',id,{rating:5});await service.setDriverPreference('Bearer fixture',{driver_id:id,version:0});
+  assert.deepEqual(calls.slice(-3),[['trip_feedback',{target:id}],['rate_driver',{target:id,rating:5}],['set_driver_preference',{driver:id,expected_version:0}]]);
+  await service.setDriverPreference('Bearer fixture',{driver_id:null,version:1});
+  assert.deepEqual(calls.at(-1),['set_driver_preference',{driver:null,expected_version:1}]);
 });

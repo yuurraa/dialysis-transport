@@ -692,6 +692,7 @@ test('driver personal signup is atomic, owns its profile and preserves the exist
     assert.ok(!(await act(emailOnly,'select public.list_trip_notifications(1) as data'))[0].data.notifications.some(row=>row.event==='confirmed'));
     journey=(await act(emailOnly,'select public.cancel_trip($1,$2) as data',[journey.id,journey.version]))[0].data;
     assert.equal(journey.cancelled_by,caregiver.id);assert.equal(journey.lifecycle,'cancelled');
+    await assert.rejects(act(emailOnly,'select public.trip_feedback($1)',[journey.id]),/Patient feedback access denied/i);
     assert.ok((await notices(patient)).notifications.some(row=>row.event==='cancelled'&&row.message.startsWith('Caregiver cancelled trip')));
     assert.ok(!(await notices(emailOnly)).notifications.some(row=>row.event==='cancelled'),'Do not notify the acting caregiver.');
     link=(await act(emailOnly,'select public.manage_caregiver_link($1,$2,false,$3,false) as data',[person,caregiver.id,link.version]))[0].data;
@@ -1481,6 +1482,28 @@ test('driver execution is explicit and live location is scoped to an assigned ac
     await own(driver,'select public.report_trip_location($1,$2,1.3,103.8,10,$3)',[trip.id,sharing,new Date().toISOString()]);
     trip=(await own(driver,"select public.execute_trip($1,'complete',$2) as trip",[trip.id,trip.version]))[0].trip;
     assert.equal(trip.lifecycle,'completed');assert.equal(trip.status,'resolved');assert.ok(trip.completed_at);
+    for(const who of [driver,coordinator,stranger]){
+      await assert.rejects(own(who,'select public.trip_feedback($1)',[trip.id]),/access denied/i);
+      await assert.rejects(own(who,'select public.rate_driver($1,5)',[trip.id]),/access denied/i);
+      await assert.rejects(own(who,'select public.set_driver_preference($1,0)',[ids.driver_id]),/access denied/i);
+    }
+    await assert.rejects(own(patient,'select public.rate_driver($1,5)',[other.id]),/completed/i);
+    await assert.rejects(own(patient,'select public.rate_driver($1,6)',[trip.id]),/rating/i);
+    assert.equal((await own(patient,'select public.rate_driver($1,5) as data',[trip.id]))[0].data.rating,5);
+    assert.equal((await own(patient,'select public.rate_driver($1,5) as data',[trip.id]))[0].data.rating,5);
+    await assert.rejects(own(patient,'select public.rate_driver($1,4)',[trip.id]),error=>error.code==='PT409');
+    const feedback=(await own(patient,'select public.trip_feedback($1) as data',[trip.id]))[0].data;
+    assert.equal(feedback.driver_id,ids.driver_id);assert.equal(feedback.rating,5);assert.equal(feedback.preference.version,0);
+    let preference=(await own(patient,'select public.set_driver_preference($1,0) as data',[ids.driver_id]))[0].data;
+    assert.equal(preference.driver_id,ids.driver_id);
+    await assert.rejects(own(patient,'select public.set_driver_preference(null,0)'),error=>error.code==='PT409');
+    preference=(await own(patient,'select public.set_driver_preference(null,$1) as data',[preference.version]))[0].data;
+    assert.equal(preference.driver_id,null);
+    preference=(await own(patient,'select public.set_driver_preference($1,$2) as data',[ids.driver_id,preference.version]))[0].data;
+    const statistics=(await own(driver,'select public.my_driver_statistics() as data'))[0].data;
+    assert.deepEqual(statistics,{completed_trips:1,average_rating:5,rating_count:1});
+    await assert.rejects(own(patient,'select public.my_driver_statistics()'),/Driver access/i);
+    await assert.rejects(own(driver,'select * from private.driver_ratings'),/permission/i);
     const resolved=(await own(coordinator,"select public.list_trips(1,$1,null,'resolved') as data",[ids.first]))[0].data;
     assert.equal(resolved.total,1);assert.equal(resolved.trips[0].id,trip.id);
     assert.equal(resolved.counts.resolved,1);assert.equal(resolved.counts.cancelled,0);
@@ -1495,6 +1518,8 @@ test('driver execution is explicit and live location is scoped to an assigned ac
     assert.equal((await local.query('select lifecycle from public.trips where id=$1',[other.id])).rows[0].lifecycle,'scheduled');
     await local.exec(schema);
     assert.equal((await local.query('select lifecycle from public.trips where id=$1',[trip.id])).rows[0].lifecycle,'completed');
+    assert.equal((await own(patient,'select public.trip_feedback($1) as data',[trip.id]))[0].data.rating,5);
+    assert.equal((await own(patient,'select public.trip_feedback($1) as data',[trip.id]))[0].data.preference.driver_id,ids.driver_id);
   } finally {await local.close();}
 });
 
@@ -1586,6 +1611,9 @@ test('recovery proposals preserve reservations and require trusted validation pl
     const pending=(await service('select public.pending_trip_recovery_options($1,$2) as data',[trip.id,trip.version]))[0].data;
     assert.equal(pending.options[0].id,option.id);
     assert.equal(pending.options[0].estimated_duration,true);assert.equal(pending.options[0].buffer_minutes,15);
+    await local.query('insert into private.driver_preferences(patient_id,driver_id) values($1,$2)',[ids.patient_id,option.driver_id]);
+    const preferredCache=(await service('select public.pending_trip_recovery_options($1,$2) as data',[trip.id,trip.version]))[0].data;
+    assert.ok(preferredCache.options.filter(row=>row.driver_id===option.driver_id).every(row=>row.preferred===true),'Cached proposals retain current preference metadata and ranking.');
     // Even an elapsed worker lease cannot replace proposals being reviewed.
     await local.query("update private.trip_recovery_checks set next_check_at=now()-interval '1 minute' where trip_id=$1",[trip.id]);
     assert.ok(!(await service('select public.claim_trip_recovery_checks() as work'))[0].work.some(row=>row.id===trip.id));

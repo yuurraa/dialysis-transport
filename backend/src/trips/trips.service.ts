@@ -1,8 +1,7 @@
-import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, NotFoundException, NotImplementedException, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, NotFoundException, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 import { TripRoutingService } from './trip-routing.service';
 import { AuthService } from '../auth/auth.service';
 import { SupabaseService } from '../supabase.module';
-import type { PatientScope } from '../types';
 
 /** UC-04, UC-05, UC-05.1 and UC-09 to UC-12: operations, recovery and patient actions. */
 @Injectable()
@@ -306,14 +305,24 @@ export class TripsService {
   }
 
   /** Require patient identity and their completed trip with the rated driver. */
-  async rateDriver(scope: PatientScope, tripId: string, rating: number): Promise<unknown> {
-    // TODO: Implement using Supabase and database constraints.
-    throw new NotImplementedException('rateDriver is awaiting implementation.');
+  async feedback(header:string|undefined,tripId:string):Promise<unknown> {
+    const client=await this.access(header,false,['patient']);this.assignmentId(tripId);
+    const result=await client.rpc('trip_feedback',{target:tripId});this.check(result.error,'Feedback');return result.data;
+  }
+
+  async rateDriver(header:string|undefined,tripId:string,body:unknown):Promise<unknown> {
+    const client=await this.access(header,false,['patient']);this.assignmentId(tripId);
+    if(!body||typeof body!=='object'||Array.isArray(body)||Object.keys(body).length!==1||!('rating' in body)
+      ||!Number.isInteger(body.rating)||(body.rating as number)<1||(body.rating as number)>5)throw new BadRequestException('Choose a rating from 1 to 5.');
+    const result=await client.rpc('rate_driver',{target:tripId,rating:body.rating});this.check(result.error,'Rating');return result.data;
   }
 
   /** Allow patients to set, update or remove a preferred driver; caregivers cannot do this. */
-  async setDriverPreference(scope: PatientScope, driverId: string | null): Promise<unknown> {
-    // TODO: Implement using Supabase and database constraints.
-    throw new NotImplementedException('setDriverPreference is awaiting implementation.');
+  async setDriverPreference(header:string|undefined,body:unknown):Promise<unknown> {
+    const client=await this.access(header,false,['patient']);
+    if(!body||typeof body!=='object'||Array.isArray(body)||Object.keys(body).length!==2||!('driver_id' in body)||!('version' in body)
+      ||!Number.isSafeInteger(body.version)||(body.version as number)<0||(body.version as number)>2147483646)throw new BadRequestException('A driver and preference version are required.');
+    if(body.driver_id!==null){if(typeof body.driver_id!=='string')throw new BadRequestException('Choose a valid driver.');this.assignmentId(body.driver_id);}
+    const result=await client.rpc('set_driver_preference',{driver:body.driver_id,expected_version:body.version});this.check(result.error,'Driver preference');return result.data;
   }
 }

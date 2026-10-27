@@ -61,7 +61,7 @@ The run initially exposed test-harness date conversion and outdated browser expe
 
 These results cover disposable SQL fixtures, mocked provider/GPS browser flows and backend boundaries. They do not prove hosted schema deployment, real concurrent PostgreSQL lock behaviour, live OneMap/LTA credentials, physical-device tracking or real Google consent. The optional concurrency setup is documented above; do not point that test at the hosted project.
 
-That test checkpoint predates the recovery backend/UI. Upcoming-trip provider reassessment, coordinator endpoints/popup, automatic proposal generation and safe active-trip handover have since been implemented locally, without another test run. Caregiver linking, feedback/preferences and optional Calendar synchronisation follow recovery verification in [the roadmap](use-case-map.md#implementation-order).
+That test checkpoint predates the recovery backend/UI. Upcoming-trip provider reassessment, coordinator endpoints/popup, automatic proposal generation and safe active-trip handover have since been implemented locally, without another test run. Caregiver linking and feedback/preferences are now implemented locally; their permission and workflow verification and optional Calendar synchronisation follow recovery verification in [the roadmap](use-case-map.md#implementation-order).
 
 ### Setup needed before live routing and traffic checks
 
@@ -175,7 +175,7 @@ Assignment and coordinator calendar inspection use effective weekly slots and re
 
 Reapply `database/schema.sql` for `driver_vehicles.registered_at`. The migration fills the most recent approval from the current approved row or existing private audit snapshots, including vehicles awaiting reapproval. New approvals set this timestamp; resubmissions and rejections retain it. No mock account updates are required.
 
-Drivers land on Trips after login/signup and when opening the dashboard root; the logo also opens Trips. Before first approval, navigation contains Trips and Register Vehicle. Following approval it contains Trips, Availability and My Vehicle. The vehicle route stays `/dashboard/vehicle` for existing bookmarks. My Vehicle includes the current vehicle/licence fields, status, submitted date and current approval date (a dash until the current submission is approved), with the existing Edit registration and confirmation flow. My Vehicle stays visible during reapproval, while availability still requires the vehicle's current status to be approved. Ride totals and ratings are not part of this page.
+Drivers land on Trips after login/signup and when opening the dashboard root; the logo also opens Trips. Before first approval, navigation contains Trips and Register Vehicle. Following approval it contains Trips, Availability and My Vehicle. The vehicle route stays `/dashboard/vehicle` for existing bookmarks. My Vehicle includes the current vehicle/licence fields, status, submitted date and current approval date (a dash until the current submission is approved), with the existing Edit registration and confirmation flow. My Vehicle stays visible during reapproval, while availability still requires the vehicle's current status to be approved. My Vehicle also shows completed-trip totals and aggregate driver ratings, calculated from persisted completed journeys and patient feedback.
 
 
 ### Driver personal account editing
@@ -247,7 +247,7 @@ Future assignments that lose eligibility after account, vehicle or availability 
 
 Schedule-review UI loads `GET /api/schedules/change-requests/:id/assignments`. It lists affected driver/pickup/direction rows and requires acknowledgement before approval. The review body includes `assignment_token`; the database rechecks the affected set and each locked trip version, so newly assigned or changed journeys require reloading. Unchanged trips retain their driver. The four-argument legacy review RPC remains available but cannot release assignments without acknowledgement. Request edits, trip reconciliation, releases and history commit together or roll back together.
 
-Patient cancellation, persistent notifications and route estimates are implemented in the subsequent sections. Trip start/completion and live tracking are implemented below. Recovery and ratings remain pending. Keep the assignment columns, constraints and RLS if rolling back the UI; remove assignments through the protected operation before reverting database structures.
+Patient cancellation, persistent notifications and route estimates are implemented in the subsequent sections. Trip start/completion and live tracking are implemented below. Recovery and patient feedback/preferences are implemented locally, with user-run workflow verification still required. Keep the assignment columns, constraints and RLS if rolling back the UI; remove assignments through the protected operation before reverting database structures.
 
 ### Shared four-week planning window
 
@@ -280,6 +280,12 @@ Cancelled journeys cannot be assigned, unassigned, coordinator-deleted or restor
 
 A stale action requires explicit reload through role-scoped `GET /api/trips/:id`, even when the trip is outside the current list filters. Failed saves retain the popup; errors use the shared toast. The persistent inbox and visible history timeline use these same durable events, as described below.
 
+
+### Driver feedback and preferences
+
+Patient/caregiver trip badges say At risk instead of Under review. UC-12 adds `GET /api/trips/:id/feedback`, `POST /api/trips/:id/rating` with `{rating:1..5}`, and `PATCH /api/trips/driver-preference` with `{driver_id:uuid|null,version}`. These endpoints require the active patient owner; linked caregivers, drivers and coordinators cannot submit feedback/preferences. Ratings are available only for completed journeys and bind the final assigned driver on the server. One rating is allowed per trip; identical retries are idempotent and different subsequent values return PT409/HTTP409. Preference choices must be active, approved, suitable drivers who completed a trip for the patient. Clearing is allowed even if that driver has since become ineligible. Stale preference versions require a refresh before retrying.
+
+Private RLS-protected rating/preference tables have no ordinary direct table access. `my_driver_statistics` returns only the current active driver's completed-journey total and aggregate average/count, without individual ratings or patient identifiers. `/api/drivers/me` includes these statistics for My Vehicle. Coordinator assignment options rank only eligible drivers by preference, last completed driver, average rating and deterministic name/ID; fresh and cached recovery options preserve pickup-change/current-driver priorities before those tie-breakers. Eligibility is still rechecked during assignment/approval. Apply the consolidated schema before deploying both application layers. Existing database/backend/frontend cases were extended without adding cases; tests were not run.
 
 ### PostgREST retry storm recovery
 

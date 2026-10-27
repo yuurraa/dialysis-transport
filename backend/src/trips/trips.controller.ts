@@ -15,6 +15,15 @@ export class TripsController {
     return this.service.generateTrips(header, body);
   }
 
+  @Get(':id/feedback')
+  feedback(@Headers('authorization') header:string|undefined,@Param('id') id:string){return this.service.feedback(header,id);}
+
+  @Post(':id/rating')
+  rateDriver(@Headers('authorization') header:string|undefined,@Param('id') id:string,@Body() body:unknown){return this.service.rateDriver(header,id,body);}
+
+  @Patch('driver-preference')
+  preference(@Headers('authorization') header:string|undefined,@Body() body:unknown){return this.service.setDriverPreference(header,body);}
+
   @Post(':id/recovery-options')
   @Header('Cache-Control','no-store')
   recovery(@Headers('authorization') header:string|undefined,@Param('id') id:string,@Body() body:unknown){

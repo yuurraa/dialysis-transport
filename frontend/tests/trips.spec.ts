@@ -254,6 +254,22 @@ test('patient acknowledges and cancels an upcoming trip with stale-version recov
   await page.getByRole('dialog',{name:'Trip filters',exact:true}).getByRole('checkbox',{name:/^Cancelled/}).check();
   await page.getByRole('button',{name:'Apply Filters',exact:true}).click();
   await expect(page.getByRole('region',{name:'Trip list',exact:true})).toContainText('Cancelled');
+  trip={...trip,lifecycle:'completed',status:'resolved'};
+  let rating:number|null=null;
+  let preference:{driver_id:string|null;driver_name:string|null;version:number}={driver_id:null,driver_name:null,version:0};
+  await page.route('**/api/trips/*/feedback',route=>route.fulfill({json:{trip_id:trip.id,driver_id:trip.assigned_driver_id,rating,can_prefer:true,preference}}));
+  await page.route('**/api/trips/*/rating',route=>{expect(route.request().postDataJSON()).toEqual({rating:5});rating=5;return route.fulfill({json:{trip_id:trip.id,rating}});});
+  await page.route('**/api/trips/driver-preference',route=>{const body=route.request().postDataJSON();expect(body.version).toBe(preference.version);preference={driver_id:body.driver_id,driver_name:body.driver_id?'Fixture Driver':null,version:preference.version+1};return route.fulfill({json:preference});});
+  await page.goto(`/dashboard/trips/${trip.id}`);
+  const feedback=page.getByRole('region',{name:'Driver feedback',exact:true});
+  await feedback.getByRole('button',{name:'5 stars',exact:true}).click();
+  await feedback.getByRole('button',{name:'Submit rating',exact:true}).click();
+  await expect(feedback).toContainText('Your rating: 5 / 5');
+  await expect(feedback.getByRole('button',{name:'Submit rating',exact:true})).toHaveCount(0);
+  await feedback.getByRole('button',{name:'Make this driver preferred',exact:true}).click();
+  await expect(feedback).toContainText('Preferred driver: Fixture Driver');
+  await feedback.getByRole('button',{name:'Remove preference',exact:true}).click();
+  await expect(feedback).toContainText('Preferred driver: None');
 });
 
 test('driver starts a journey, explicitly shares location and completes without retaining tracking', async ({page,context}) => {

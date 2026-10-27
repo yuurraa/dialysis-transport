@@ -3,7 +3,7 @@ import { Overlay } from './DashboardUI';
 import { ApiError, apiGet, apiRequest } from '../lib/api';
 import type { Trip } from '../pages/TripsPage';
 
-interface RecoveryOption { id:string;driver_id:string;vehicle_id?:string;driver_name:string;plate:string;make:string;model:string;pickup_at:string;dropoff_at:string;duration_minutes:number;same_driver:boolean;expires_at:string;estimated_duration?:boolean;buffer_minutes?:number }
+interface RecoveryOption { id:string;driver_id:string;vehicle_id?:string;driver_name:string;plate:string;make:string;model:string;pickup_at:string;dropoff_at:string;duration_minutes:number;same_driver:boolean;expires_at:string;estimated_duration?:boolean;buffer_minutes?:number;preferred?:boolean;continuity?:boolean }
 interface RecoveryOptions { trip:Trip;options:RecoveryOption[];critical:boolean;handover_origin?:string|null }
 const time=(value:string)=>new Intl.DateTimeFormat('en-SG',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit',timeZone:'Asia/Singapore'}).format(new Date(value));
 
@@ -66,7 +66,7 @@ export default function TripRecoveryDialog({trip,onClose,onChanged,onAssessed,on
     {loading?<p role="status">Finding recovery options…</p>:assessmentError?<p role="status">{assessmentError}</p>:data?.options.length?<fieldset className="trip-recovery-options"><legend className="sr-only">Choose a recovery option</legend>{Array.from(drivers,([key,choices])=>{
       const driver=choices[0];
       return <div key={key} className="trip-recovery-driver">
-        <div className="trip-recovery-driver-heading"><strong>{driver.driver_name}{driver.same_driver?' · Same driver':''}</strong><span>{driver.plate} · {driver.make} {driver.model}</span></div>
+        <div className="trip-recovery-driver-heading"><strong>{driver.driver_name}{driver.same_driver?' · Same driver':driver.preferred?' · Preferred driver':driver.continuity?' · Previous driver':''}</strong><span>{driver.plate} · {driver.make} {driver.model}</span></div>
         {choices.map(row=><label key={row.id} className="trip-recovery-option"><input type="radio" name="recovery-option" value={row.id} aria-label={`${driver.driver_name}, ${driver.plate}, pickup ${time(row.pickup_at)}, arrival ${time(row.dropoff_at)}`} checked={selected===row.id} disabled={busy} onChange={()=>setSelected(row.id)}/><span><span>Pickup {time(row.pickup_at)} → Arrival {time(row.dropoff_at)}</span><span>{row.duration_minutes} min{row.estimated_duration?` approx. (includes ${row.buffer_minutes} min buffer)`:null}</span></span></label>)}
       </div>;
     })}</fieldset>:data?<p role="status">No feasible recovery options. Manual coordination is required.</p>:null}
