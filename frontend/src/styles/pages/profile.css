@@ -122,3 +122,32 @@
 .vehicle-registration-dates {
   margin-bottom: 20px;
 }
+.caregiver-transport-workspace { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
+.caregiver-connections > .page-heading .page-heading-actions { flex: 0 0 auto; width: auto; margin-left: auto; }
+.caregiver-connections > .page-heading .page-heading-actions:has(.list-toolbar) { flex: 0 1 30rem; width: 100%; }
+.connections-add-action { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-top: auto; padding-top: 12px; border-top: 1px solid var(--ui-border); flex-shrink: 0; }
+.connections-add-action > span { color: var(--ui-muted); font-size: .875rem; }
+.connections-add-action .patient-actions { margin-left: auto; }
+.connections-embedded .connections-add-action { margin-top: 16px; }
+.dashboard-dialog .connections-unlink-control { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 44px; width: 44px; height: 44px; padding: 0; }
+.caregiver-connections:not(.connections-embedded) { width: 100%; flex: 1; overflow: visible; max-height: none; }
+.connections-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; flex: 1; min-height: clamp(280px, 48svh, 460px); padding: 32px 20px; text-align: center; }
+.connections-empty-icon { display: grid; place-items: center; width: 64px; height: 64px; margin-bottom: 4px; border-radius: 50%; background: var(--ui-raised); color: var(--ui-accent); }
+.connections-empty h2 { margin: 0; font-size: 1.125rem; font-weight: 600; letter-spacing: -.02em; }
+.connections-empty p { max-width: 38ch; margin: 0; color: var(--ui-muted); font-size: .875rem; line-height: 1.6; }
+.connections-empty .patient-actions { justify-content: center; margin-top: 8px; }
+.connections-embedded .connections-empty { min-height: 240px; padding: 24px 12px; border-top: 0; }
+.connections-list { width: 100%; min-width: 0; }
+.connections-record { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 0; border-bottom: 1px solid var(--ui-border); }
+.connections-record > div { display: grid; flex: 1; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
+.connections-avatar { display: grid; place-items: center; flex: 0 0 44px; height: 44px; border-radius: 50%; background: var(--ui-raised); color: var(--ui-accent); font-size: .875rem; font-weight: 600; }
+.connections-record-caption { color: var(--ui-muted); font-size: .875rem; }
+.connections-consent { display: flex; align-items: flex-start; gap: 10px; margin-top: 16px; font-size: .875rem; }
+.connections-consent input { flex-shrink: 0; width: 18px; height: 18px; min-height: 18px; margin-top: 3px; accent-color: var(--ui-accent); }
+.patient-form-fields.connections-form { grid-template-columns: minmax(0, 1fr); }
+.connections-preview { margin-top: 16px; }
+.coordinator-links { margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--ui-border); }
+.coordinator-links h3 { margin: 0 0 12px; font-size: 1rem; font-weight: 600; }
+.coordinator-links p, .coordinator-links ul { margin: 0; font-size: .875rem; line-height: 1.6; }
+.coordinator-links p { color: var(--ui-muted); }
+.coordinator-links ul { list-style: none; padding: 0; display: grid; gap: 8px; overflow-wrap: anywhere; }

@@ -5,7 +5,8 @@ import { ListError, Overlay } from './DashboardUI';
 interface HistoryEvent { id: string; event: string; actor: string; created_at: string }
 interface HistoryPage { events: HistoryEvent[]; total: number; page: number; pageSize: number }
 const labels: Record<string,string> = {
-  started:'Trip started',completed:'Trip completed',traffic_risk_detected:'Traffic disruption reported',driver_unavailable:'Driver unavailable',generated:'Trip added',refreshed:'Trip details updated',requirements_changed:'Requirements changed',deleted:'Trip deleted',
+  handover_approved:'Safe handover approved',recovery_approved:'Recovery approved',recovery_critical:'Manual intervention required',
+  started:'Trip started',completed:'Trip completed',traffic_risk_detected:'Traffic disruption reported',traffic_risk_cleared:'Traffic concern cleared',driver_unavailable:'Driver unavailable',generated:'Trip added',refreshed:'Trip details updated',requirements_changed:'Requirements changed',deleted:'Trip deleted',
   restored:'Trip restored',schedule_change_approved:'Schedule change approved',assigned:'Driver assigned',unassigned:'Driver unassigned',confirmed:'Trip acknowledged',cancelled:'Trip cancelled',
 };
 const actors: Record<string,string> = {coordinator:'Transport coordinator',patient:'Patient',driver:'Driver',caregiver:'Caregiver',system:'System'};

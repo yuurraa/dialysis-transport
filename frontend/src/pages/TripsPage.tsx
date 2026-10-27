@@ -2,6 +2,7 @@ import { useDashboardViewState } from '../components/DashboardViewState';
 import TripProgress from '../components/TripProgress';
 import TripHistoryDialog from '../components/TripHistoryDialog';
 import TripAssignmentDialog from '../components/TripAssignmentDialog';
+import TripRecoveryDialog from '../components/TripRecoveryDialog';
 import { Toast, ToastRegion } from '../components/Toast';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { InfoButton, Overlay, PageHeading, ListToolbar, ListPagination, ChoiceGroup, SortOverlay, ListError, sortSummary } from '../components/DashboardUI';
@@ -10,7 +11,7 @@ import { ApiError, apiGet, apiRequest } from '../lib/api';
 export interface Trip {
   id: string; version: number; patient_id: string; patient_name: string; source_schedule_id: string; session_date: string;
   direction: 'outbound' | 'return'; origin: string; destination: string; treatment_start: string; treatment_end: string;
-  started_at?: string | null; completed_at?: string | null;
+  started_at?: string | null; completed_at?: string | null; first_started_at?:string|null; handover_at?:string|null;
   duration_minutes?: number;
   driver_unavailable_at?: string | null;
   review_required?: boolean;
@@ -85,10 +86,10 @@ function JourneyDetails({ trip }: { trip: Trip }) {
 const validTripDate = (value: string) => /^(?!0000)\d{4}-\d{2}-\d{2}$/.test(value)
   && Number.isFinite(Date.parse(`${value}T00:00:00Z`)) && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value;
 interface Filters { page: number; from: string; until: string; status: string; search: string; direction: string; sort: string; order: string }
-export default function TripsPage({ coordinator, driver = false, onSessionExpired, tripId, onNavigate }: { coordinator: boolean; driver?: boolean; onSessionExpired: () => void; tripId?:string; onNavigate:(path:string)=>void }) {
+export default function TripsPage({ coordinator, driver = false,caregiver=false, onSessionExpired, tripId, onNavigate }: { coordinator: boolean; driver?: boolean;caregiver?:boolean; onSessionExpired: () => void; tripId?:string; onNavigate:(path:string)=>void }) {
   const statusOptions = coordinator ? categories : journeyCategories;
   const defaultStatus = coordinator ? 'unfilled,at-risk,on-track' : 'upcoming,in-progress';
-  const sortOptions = [{ value: 'pickup_time', label: 'Pickup date/time', ascending: 'Earliest first', descending: 'Latest first' }, ...tripSortOptions.filter(option => (coordinator || driver || option.value !== 'patient_name')).map(option => option.value === 'status' && !coordinator ? { ...option, ascending: 'Cancelled → Completed → In progress → Upcoming', descending: 'Upcoming → In progress → Completed → Cancelled' } : option)];
+  const sortOptions = [{ value: 'pickup_time', label: 'Pickup date/time', ascending: 'Earliest first', descending: 'Latest first' }, ...tripSortOptions.filter(option => (coordinator || driver || caregiver || option.value !== 'patient_name')).map(option => option.value === 'status' && !coordinator ? { ...option, ascending: 'Cancelled → Completed → In progress → Upcoming', descending: 'Upcoming → In progress → Completed → Cancelled' } : option)];
   const [defaultRange] = useState(() => { const from = singaporeToday(); return { from, until: '' }; });
   const [historyTrip, setHistoryTrip] = useState<string | null>(null);
   const [pickupAction, setPickupAction] = useState<'confirm' | 'cancel' | 'unavailable' | null>(null);
@@ -103,6 +104,7 @@ export default function TripsPage({ coordinator, driver = false, onSessionExpire
   const [selectedTrips, setSelectedTrips] = useState<Set<string>>(() => new Set());
   const [filterError, setFilterError] = useState('');
   const [assigning, setAssigning] = useState<Trip | null>(null);
+  const [recovering,setRecovering]=useState<Trip|null>(null);
   const [details, setDetails] = useState<Trip | null>(null);
   const navigation=useRef({id:tripId,generation:0});
   if(navigation.current.id!==tripId)navigation.current={id:tripId,generation:navigation.current.generation+1};
@@ -113,7 +115,7 @@ export default function TripsPage({ coordinator, driver = false, onSessionExpire
   const detailPanel=useRef<HTMLElement>(null);
   useEffect(()=>{
     let active=true;
-    setDetails(null);setHistoryTrip(null);setPickupAction(null);setAssigning(null);setDeleting(null);setBulkDeleting(null);setFilterDraft(null);setSorting(false);setSelecting(false);setSelectedTrips(new Set());setBusy(false);setPickupBusy(false);setDetailTab('details');setDetailError('');
+    setDetails(null);setHistoryTrip(null);setPickupAction(null);setAssigning(null);setRecovering(null);setDeleting(null);setBulkDeleting(null);setFilterDraft(null);setSorting(false);setSelecting(false);setSelectedTrips(new Set());setBusy(false);setPickupBusy(false);setDetailTab('details');setDetailError('');
     if(!tripId){setDetailLoading(false);return;}
     setDetailLoading(true);detailPanel.current?.focus();
     apiGet<Trip>(`/trips/${tripId}`).then(trip=>{if(active)setDetails(trip);}).catch(reason=>{
@@ -272,12 +274,13 @@ export default function TripsPage({ coordinator, driver = false, onSessionExpire
     } finally { if (alive.current&&generation===navigation.current.generation) setPickupBusy(false); }
   }
   const patientActions = !coordinator && !driver;
-  const upcomingDetails = !!details && (!details.lifecycle || details.lifecycle === 'scheduled')
+  const upcomingDetails = !!details && !details.first_started_at && (!details.lifecycle || details.lifecycle === 'scheduled')
     && Date.parse(details.pickup_at ?? details.pickup_not_before ?? new Date(Date.parse(details.arrival_by!) - (details.duration_minutes ?? 30) * 60000).toISOString()) > Date.now();
   const canConfirmPickup = upcomingDetails && !!details?.assigned_driver_id && !details.confirmed_at && !details.review_required && !details.driver_unavailable_at;
   const canReportUnavailability = driver && !!details?.assigned_driver_id && !details.driver_unavailable_at
     && ((!details.lifecycle || details.lifecycle === 'scheduled') && Date.parse(details.dropoff_at ?? '') > Date.now() || details.lifecycle === 'in-progress');
   const actionLabel = pickupAction === 'unavailable' ? 'Report unavailability' : pickupAction === 'cancel' ? 'Cancel trip' : 'Acknowledge trip';
+  const canRecover=coordinator&&!!details&&details.status==='at-risk'&&(details.lifecycle==='scheduled'||details.lifecycle==='in-progress')&&!!details.assigned_driver_id&&!details.review_required;
   async function refreshProgressMetadata(quiet=false) {
     if(tripId)return;
     const requestedQuery=query, request=++syncSequence.current;
@@ -332,7 +335,7 @@ export default function TripsPage({ coordinator, driver = false, onSessionExpire
   }
   const activeFilterCount = Number(filters.from !== defaultRange.from || filters.until !== defaultRange.until) + Number(filters.direction !== 'all') + Number(filters.status !== defaultStatus);
   const selected = statusOptions.find(category => category.key === filters.status);
-  const tripTitle = coordinator ? selected ? `${selected.label} trips` : filters.from === singaporeToday() && filters.until === filters.from ? "Today's trips" : 'Trip List' : driver ? 'Trips' : 'Your rides';
+  const tripTitle = coordinator ? selected ? `${selected.label} trips` : filters.from === singaporeToday() && filters.until === filters.from ? "Today's trips" : 'Trip List' : driver ? 'Trips' : caregiver?'Patient trips':'Your rides';
   const driverDetails = details?.assignment ?? (details?.lifecycle==='cancelled' ? details.cancelled_assignment : null);
   const activeTrip = data?.active_trip;
   const next = activeTrip ?? data?.next_trip;
@@ -351,12 +354,12 @@ export default function TripsPage({ coordinator, driver = false, onSessionExpire
         <div className="trip-detail-summary"><div className="trip-detail-summary-main">
           <div className="trip-detail-identity"><p className="trip-detail-person">{details.patient_name}</p><span aria-hidden="true">·</span><p className="trip-detail-id">Patient ID: {details.patient_id}</p></div>
           <div className="trip-detail-heading"><span>{tripDate(details.treatment_start)}</span><span aria-hidden="true">·</span><span>{details.direction==='outbound'?'Outbound':'Return'}</span><TripStatus lifecycle={details.lifecycle} status={details.status} coordinator={coordinator} driver={driver}/></div>
-        </div>{(coordinator&&(!details.lifecycle||details.lifecycle==='scheduled')&&!details.assigned_driver_id||canReportUnavailability||patientActions&&(canConfirmPickup||upcomingDetails))&&<div className="patient-actions trip-detail-page-actions">{canReportUnavailability && <button className="button-danger" type="button" onClick={() => openPickupAction('unavailable')}>Report unavailability</button>}{patientActions && canConfirmPickup && <button className="patient-primary" type="button" onClick={() => openPickupAction('confirm')}>Acknowledge trip</button>}{patientActions && upcomingDetails && <button className="button-danger" type="button" onClick={() => openPickupAction('cancel')}>Cancel trip</button>}{coordinator && (!details.lifecycle || details.lifecycle === 'scheduled') && !details.assigned_driver_id && <button className="button-danger" type="button" aria-label="Delete Trip" title="Delete Trip" onClick={() => confirmDelete(details)}>Delete Trip</button>}</div>}</div>
+        </div>{(coordinator||canReportUnavailability||patientActions&&(canConfirmPickup||upcomingDetails))&&<div className="patient-actions trip-detail-page-actions">{coordinator&&<button className="patient-primary trip-recovery-control" type="button" disabled={!canRecover} onClick={()=>setRecovering(details)}>Generate recovery options</button>}{canReportUnavailability && <button className="button-danger" type="button" onClick={() => openPickupAction('unavailable')}>Report unavailability</button>}{patientActions && canConfirmPickup && <button className="patient-primary" type="button" onClick={() => openPickupAction('confirm')}>Acknowledge trip</button>}{patientActions && upcomingDetails && <button className="button-danger" type="button" onClick={() => openPickupAction('cancel')}>Cancel trip</button>}{coordinator && (!details.lifecycle || details.lifecycle === 'scheduled') && !details.assigned_driver_id && <button className="button-danger" type="button" aria-label="Delete Trip" title="Delete Trip" onClick={() => confirmDelete(details)}>Delete Trip</button>}</div>}</div>
         <nav className="trip-detail-tabs" aria-label="Trip views">{(['details','journey'] as const).map(tab=><button key={tab} type="button" aria-pressed={detailTab===tab} onClick={()=>setDetailTab(tab)}>{tab==='details'?'Details':'Journey'}</button>)}</nav>
         {detailTab==='details'&&<section className="trip-detail-overview" aria-label="Trip information">
           <JourneyDetails trip={details}/>
           {details.driver_unavailable_at&&<p className="trip-action-note">Driver unavailability reported. The coordinator needs to review this assignment.</p>}
-          {details.assigned_driver_id&&details.confirmed_at&&<p className="trip-action-note">Trip acknowledged by patient.</p>}
+          {details.assigned_driver_id&&details.confirmed_at&&<p className="trip-action-note">Trip acknowledged.</p>}
           {driverDetails&&<section className="trip-detail-section trip-detail-assignment"><h2>Driver and vehicle</h2>
             <dl className="trip-detail-timings">
               <div><dt>Driver</dt><dd>{driverDetails.driver_name || '—'}</dd></div>
@@ -374,21 +377,21 @@ export default function TripsPage({ coordinator, driver = false, onSessionExpire
           </section>}
         </section>}
 
-        <TripProgress key={details.id} display={detailTab==='details'?'overview':detailTab} onNotify={notifyProgress} trip={details} driver={driver} onChanged={updateTripProgress} onUnavailable={()=>{setDetails(null);setHistoryTrip(null);setPickupAction(null);setDetailError('This trip is no longer available to your account.');}} onSessionExpired={onSessionExpired}/>
+        <TripProgress key={details.id} display={detailTab==='details'?'overview':detailTab} onNotify={notifyProgress} trip={details} driver={driver} onChanged={updateTripProgress} onUnavailable={()=>{setDetails(null);setHistoryTrip(null);setPickupAction(null);setRecovering(null);setDetailError('This trip is no longer available to your account.');}} onSessionExpired={onSessionExpired}/>
       </>}
     </section>:<>
     {!coordinator && <section className="dashboard-trips patient-next-pickup trip-next-summary" aria-labelledby="patient-pickup-title"><h2 id="patient-pickup-title">{activeTrip?'Current trip':'Next pickup'}</h2>
-      {next ? <><div className="trip-next-reading"><strong>{tripDate(next.treatment_start)} · {next.direction === 'outbound' ? 'Outbound' : 'Return'}</strong>{driver && <span>{next.patient_name}</span>}<span className={next.pickup_at ? 'trip-next-confirmed' : 'trip-next-note'}>{activeTrip ? 'In progress' : next.pickup_at ? `Pickup at ${tripTime(next.pickup_at)}` : 'Pickup time to be confirmed'}</span></div><InfoButton label="View details" onClick={() => onNavigate(`/dashboard/trips/${next.id}`)} /></> : <p className="patient-overview-note">{loading ? 'Loading pickup details…' : error || syncError ? 'Your pickup details are currently unavailable.' : syncing ? 'Refreshing pickup details…' : driver ? 'No upcoming pickups assigned.' : 'Your upcoming journeys will appear here.'}</p>}
+      {next ? <><div className="trip-next-reading"><strong>{tripDate(next.treatment_start)} · {next.direction === 'outbound' ? 'Outbound' : 'Return'}</strong>{(driver||caregiver) && <span>{next.patient_name}</span>}<span className={next.pickup_at ? 'trip-next-confirmed' : 'trip-next-note'}>{activeTrip ? 'In progress' : next.pickup_at ? `Pickup at ${tripTime(next.pickup_at)}` : 'Pickup time to be confirmed'}</span></div><InfoButton label="View details" onClick={() => onNavigate(`/dashboard/trips/${next.id}`)} /></> : <p className="patient-overview-note">{loading ? 'Loading pickup details…' : error || syncError ? 'Your pickup details are currently unavailable.' : syncing ? 'Refreshing pickup details…' : driver ? 'No upcoming pickups assigned.' : 'Your upcoming journeys will appear here.'}</p>}
     </section>}
     <section className={`dashboard-trips page-panel trips-panel${coordinator ? ' coordinator-trips-panel' : ''}`} aria-labelledby="trips-title" aria-busy={loading}>
       <PageHeading id="trips-title" title={tripTitle} eyebrow={coordinator ? 'Trip management' : 'Upcoming transport'} level={2}
-        actions={<ListToolbar search={search} onSearch={setSearch} label="Search trips" placeholder={coordinator || driver ? 'Patient or trip details' : 'Route, date, time or type'} filterCount={activeFilterCount} onFilter={() => { setFilterDraft({ ...filters }); setFilterError(''); }} onSort={() => setSorting(true)} sortLabel={sortSummary(sortOptions, filters.sort, filters.order)} />} />
+        actions={<ListToolbar search={search} onSearch={setSearch} label="Search trips" placeholder={coordinator || driver || caregiver ? 'Patient or trip details' : 'Route, date, time or type'} filterCount={activeFilterCount} onFilter={() => { setFilterDraft({ ...filters }); setFilterError(''); }} onSort={() => setSorting(true)} sortLabel={sortSummary(sortOptions, filters.sort, filters.order)} />} />
       {syncError && !error && <ListError title="Trip list needs refreshing" message="The latest pickups and trip statuses could not be loaded." onRetry={() => void refreshProgressMetadata()} />}
       {loading ? <div className="account-loading" role="status"><span className="account-spinner" aria-hidden="true" /><span>Loading...</span></div> : error ? <ListError title="Trips could not be loaded" message="Please try again to load your journeys and trip statuses." onRetry={() => setReload(value => value + 1)} /> : !data?.trips.length ? <div className="dashboard-data-status patients-status" role="status"><div><h3>{driver && !activeFilterCount && !filters.search ? 'No trips assigned.' : 'No trips scheduled.'}</h3><p>{driver && !activeFilterCount && !filters.search ? 'Assigned trips will appear here.' : 'No trips match these filters.'}</p></div></div>
         : <div className="trip-records panel-scroll" role="region" aria-label="Trip list" tabIndex={0}>{data.trips.map((trip, index) => <article className="trip-record" key={trip.id}>
           <div className="trip-record-heading">
             <h3 className="trip-record-title"><span className="trip-date-status"><span>{tripDate(trip.treatment_start)}</span><TripStatus lifecycle={trip.lifecycle} status={trip.status} coordinator={coordinator} driver={driver} /></span><span className="trip-direction-status"><span>{trip.direction === 'outbound' ? 'Outbound' : 'Return'}</span><InlineTripTiming trip={trip} /></span></h3>
-            {(coordinator || driver) && <p className="trip-patient-identity">{trip.patient_name}</p>}
+            {(coordinator || driver || caregiver) && <p className="trip-patient-identity">{trip.patient_name}</p>}
           </div>
           <div className="trip-route">
             <div className="trip-stop"><div className="trip-stop-heading"><strong>From:</strong></div><p><RouteAddress address={trip.origin} /></p></div>
@@ -411,6 +414,7 @@ export default function TripsPage({ coordinator, driver = false, onSessionExpire
     </Overlay>}
     {deleting && <Overlay className="trip-delete-dialog" title="Delete Trip" description="Permanently remove this journey?" busy={busy} onClose={() => { setDeleting(null); setDeleteError(''); }} error={deleteError} onDismissError={() => setDeleteError('')} footer={<><button className={conflict ? 'patient-primary' : 'button-danger'} type="button" disabled={busy} onClick={() => void (conflict ? reloadForDelete() : removeTrip())}>{busy ? 'Loading…' : conflict ? 'Reload trips' : 'Delete Trip'}</button><button type="button" disabled={busy} onClick={() => { setDeleting(null); setDeleteError(''); }}>Cancel</button></>}><div className="trip-delete-summary"><p className="trip-delete-person">{deleting.patient_name}</p><p>{tripDate(deleting.treatment_start)} · {deleting.direction === 'outbound' ? 'Outbound' : 'Return'}</p><p className="trip-delete-destination"><span>Destination</span>{deleting.destination}</p><p className="trip-delete-scope">This deletes one journey only. Its other outbound or return journey stays unchanged.</p></div></Overlay>
 }
+    {recovering&&<TripRecoveryDialog trip={recovering} onClose={()=>setRecovering(null)} onSessionExpired={onSessionExpired} onAssessed={saved=>{if(renderGeneration===navigation.current.generation)updateTripProgress(saved);}} onChanged={saved=>{if(renderGeneration!==navigation.current.generation)return;setRecovering(null);updateTripProgress(saved);setReload(value=>value+1);setToast('Recovery approved.');}}/>}
     {historyTrip && <TripHistoryDialog tripId={historyTrip} onClose={() => setHistoryTrip(null)} onSessionExpired={onSessionExpired} />}
     {pickupAction && details && <Overlay title={actionLabel} className="trip-delete-dialog" description={`${tripDate(details.treatment_start)} · ${details.direction === 'outbound' ? 'Outbound' : 'Return'}`} busy={pickupBusy} onClose={() => { setPickupAction(null); setPickupError(''); }} error={pickupError} onDismissError={() => setPickupError('')} footer={<>{pickupConflict ? <button className="patient-primary" type="button" disabled={pickupBusy} onClick={() => void submitPickupAction(true)}>Reload trip</button> : <button className={pickupAction === 'confirm' ? 'patient-primary' : 'button-danger'} type="button" disabled={pickupBusy || (pickupAction === 'confirm' ? !canConfirmPickup : pickupAction === 'unavailable' ? !canReportUnavailability : !upcomingDetails)} onClick={() => void submitPickupAction()}>{pickupBusy ? 'Saving…' : actionLabel}</button>}<button type="button" disabled={pickupBusy} onClick={() => { setPickupAction(null); setPickupError(''); }}>Back</button></>}>
       <dl className="schedule-detail-fields"><div><dt>From</dt><dd>{details.origin}</dd></div><div><dt>To</dt><dd>{details.destination}</dd></div>{details.pickup_at && <div><dt>Pickup</dt><dd>{tripTime(details.pickup_at)}</dd></div>}{details.assignment && <div><dt>Driver</dt><dd>{details.assignment.driver_name}</dd></div>}</dl>

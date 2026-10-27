@@ -15,6 +15,18 @@ export class TripsController {
     return this.service.generateTrips(header, body);
   }
 
+  @Post(':id/recovery-options')
+  @Header('Cache-Control','no-store')
+  recovery(@Headers('authorization') header:string|undefined,@Param('id') id:string,@Body() body:unknown){
+    return this.service.assessRecovery(header,id,body);
+  }
+
+  @Post(':id/recovery-approval')
+  @Header('Cache-Control','no-store')
+  approveRecovery(@Headers('authorization') header:string|undefined,@Param('id') id:string,@Body() body:unknown){
+    return this.service.approveRecovery(header,id,body);
+  }
+
   @Delete(':id')
   remove(@Headers('authorization') header: string | undefined, @Param('id') id: string, @Body() body: unknown) {
     return this.service.deleteTrip(header, id, body);
@@ -42,6 +54,12 @@ export class TripsController {
   @Patch('notifications/read-all')
   readAllNotifications(@Headers('authorization') header:string|undefined,@Body() body:unknown) {
     return this.service.readAllNotifications(header,body);
+  }
+
+  @Delete('notifications/read')
+  @Header('Cache-Control','no-store')
+  deleteReadNotifications(@Headers('authorization') header:string|undefined,@Body() body:unknown){
+    return this.service.deleteReadNotifications(header,body);
   }
 
   @Patch('notifications/:id/read')

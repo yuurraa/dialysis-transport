@@ -7,6 +7,10 @@ test('coordinator reads patient details but persists only Status and Notes', asy
   await page.route('**/api/auth/me', route => route.fulfill({ json: { account: { ...activeAccount, role: 'coordinator' } } }));
   let patient = { id: session.user.id, full_name: 'Test Patient', birth_date: '1990-04-12', gender: 'female', phone: '+65 81234567', pickup_address: 'Test pickup address', postal_code: '560123', unit_no: '#05-12', notes: '', mobility: 'wheelchair', assistance_required: true, status: 'active' };
   let writes = 0;
+  const caregiver={id:'66666666-6666-4666-8666-666666666666',full_name:'Test Caregiver',phone:'80000002',birth_date:'1990-01-01',gender:'female',status:'active',status_version:1};
+  await page.route('**/api/profiles/caregiver-links?patient=*',route=>route.fulfill({json:{links:[{id:'fixture-link',patient_name:patient.full_name,caregiver_name:caregiver.full_name,active:true}]}}));
+  await page.route('**/api/profiles/caregivers?*',route=>route.fulfill({json:{caregivers:[caregiver],total:1,page:1,pageSize:10}}));
+  await page.route(`**/api/profiles/caregivers/${caregiver.id}/links`,route=>route.fulfill({json:{links:[{id:'fixture-link',patient_name:patient.full_name,active:true}]}}));
   await page.route('**/api/profiles/patients**', async route => {
     if (route.request().method() === 'GET') return route.fulfill({ json: { patients: [patient], total: 1, page: 1, pageSize: 10 } });
     expect(route.request().method()).toBe('PATCH');
@@ -24,6 +28,7 @@ test('coordinator reads patient details but persists only Status and Notes', asy
   const details = page.getByRole('dialog', { name: 'Patient Details', exact: true });
   await expect(details).toBeVisible();
   await expect(details.getByRole('heading', { name: 'Patient Details', exact: true })).toBeVisible();
+  await expect(details.getByRole('region',{name:'Linked caregivers',exact:true})).toContainText('Test Caregiver');
   await expect(page.locator('.profile-id')).toHaveText(`Patient ID: ${patient.id}`);
   await expect(page.getByRole('dialog', { name: 'Patient Details', exact: true }).getByText('Patient Management', { exact: true })).toHaveCount(0);
   await expect(details.getByRole('heading', { name: 'Patient List', exact: true })).toHaveCount(0);
@@ -52,4 +57,12 @@ test('coordinator reads patient details but persists only Status and Notes', asy
   await page.reload();
   await expect(page.getByRole('cell', { name: 'Inactive', exact: true })).toBeVisible();
   expect(writes).toBe(1);
+  await page.getByRole('navigation',{name:'Dashboard'}).first().getByRole('link',{name:'Caregivers',exact:true}).click();
+  await expect(page.getByRole('heading',{name:'Caregiver List',exact:true})).toBeVisible();
+  await page.getByRole('button',{name:'View Test Caregiver',exact:true}).click();
+  const caregiverDetails=page.getByRole('dialog',{name:'Caregiver Details',exact:true});
+  await expect(caregiverDetails.getByRole('region',{name:'Linked patients',exact:true})).toContainText('Test Patient');
+  await caregiverDetails.getByRole('button',{name:'Edit Caregiver',exact:true}).click();
+  await expect(caregiverDetails.getByLabel('Full name',{exact:true})).toBeDisabled();
+  await expect(caregiverDetails.getByLabel('Status',{exact:true})).toBeEnabled();
 });

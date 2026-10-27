@@ -1174,7 +1174,7 @@
 
 .dashboard-icon-button:has(.notification-unread-dot) { position: relative; }
 .notification-unread-dot { position: absolute; top: 8px; right: 8px; width: 7px; height: 7px; border-radius: 50%; background: var(--ui-accent); }
-.dashboard-notifications { display: flex; flex-direction: column; max-height: min(560px, 70svh); overflow: hidden; }
+.dashboard-notifications { display: flex; flex-direction: column; max-height: min(560px, 70svh); overflow: hidden; padding-bottom: 0; }
 .dashboard-notifications > h2 { flex-shrink: 0; }
 .trip-notification-scroll { min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
 .trip-notification-list { list-style: none; padding: 0; margin: 0; }
@@ -1186,8 +1186,9 @@
 .trip-notification-dot { width: 6px; height: 6px; margin-top: 8px; border-radius: 50%; background: transparent; }
 .trip-notification-list li[data-unread=true] .trip-notification-dot { background: var(--ui-accent); }
 .trip-notification-list time { display: block; margin-top: 5px; font-size: .75rem; color: var(--ui-muted); }
-.trip-notification-footer { flex-shrink: 0; padding: 0 8px; border-top: 1px solid var(--ui-border); }
-.dashboard-notifications .trip-notification-footer button { width: 100%; min-height: 32px; padding: 4px 8px; font-size: .8125rem; transition: background-color 160ms ease, transform 160ms ease; }
+.trip-notification-footer { display: flex; gap: 8px; flex-shrink: 0; padding: 6px 8px; border-top: 1px solid var(--ui-border); }
+.dashboard-notifications .trip-notification-footer button { flex: 1 1 0; width: auto; min-width: 0; min-height: 34px; padding: 6px 8px; border: 1px solid var(--ui-control-border); border-radius: var(--ui-control-radius); background: var(--ui-field); color: var(--ui-text); font-size: .8125rem; white-space: nowrap; transition: background-color 160ms ease, transform 160ms ease; }
+.dashboard-notifications .trip-notification-footer button:disabled { border-color: var(--ui-border); background: var(--ui-field); color: var(--ui-muted); opacity: .6; }
 .dashboard-notifications .trip-notification-footer button:hover:not(:disabled) { background: var(--ui-hover); transform: translateY(-1px); }
 @media (prefers-reduced-motion: reduce) {
   .dashboard-notifications .trip-notification-footer button { transition: none; }

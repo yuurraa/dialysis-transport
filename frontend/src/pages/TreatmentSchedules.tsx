@@ -40,9 +40,11 @@ function GeneratedCoverage({ coverage }: { coverage?: TripCoverage }) {
   </section>;
 }
 
-export default function TreatmentSchedules({ coordinator, notify, onSessionExpired }: {
-  coordinator: boolean; notify: (message: string) => void; onSessionExpired: () => void;
+export default function TreatmentSchedules({ coordinator, notify, onSessionExpired,caregiverPatients }: {
+  coordinator: boolean; notify: (message: string) => void; onSessionExpired: () => void;caregiverPatients?:{patient_id:string;patient_name:string}[];
 }) {
+  const [selectedPatient,setSelectedPatient]=useState('');
+  const caregiver=caregiverPatients!==undefined;
   const [data, setData] = useState<Data | null>(null);
   const [viewingSchedule, setViewingSchedule] = useState<Schedule | null>(null);
   const [changingSchedule, setChangingSchedule] = useState<Schedule | null>(null);
@@ -102,11 +104,12 @@ export default function TreatmentSchedules({ coordinator, notify, onSessionExpir
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [reload, onSessionExpired, filters]);
-  function open() { setDraft(blank()); setConfirmingCreate(false); setError(''); }
+  function open() { setDraft(blank());setSelectedPatient(caregiverPatients?.length===1?caregiverPatients[0].patient_id:''); setConfirmingCreate(false); setError(''); }
   function close() { setDraft(null); setConfirmingCreate(false); setError(''); }
   async function save(event: FormEvent) {
     event.preventDefault();
     if (!draft || saving) return;
+    if(caregiver&&!caregiverPatients?.some(patient=>patient.patient_id===selectedPatient)){setError('Choose a linked patient.');return;}
     if (!draft.centre_id || !supportedDate(draft.effective_from) || !draft.start_time || !draft.end_time || (draft.kind === 'recurring' && (draft.days.length !== 1 || !supportedDate(draft.effective_to) || draft.effective_to < draft.effective_from)) || draft.end_time <= draft.start_time) { setError('Check the centre, dates and session times.'); return; }
     if (draft.kind === 'recurring') {
       const first = Date.parse(draft.effective_from) + ((draft.days[0] - dayFor(draft.effective_from) + 7) % 7) * 86400000;
@@ -116,7 +119,7 @@ export default function TreatmentSchedules({ coordinator, notify, onSessionExpir
     const payload = draft.kind === 'single' ? { kind: draft.kind, centre_id: draft.centre_id, session_date: draft.effective_from, start_time: draft.start_time, end_time: draft.end_time } : draft;
     setSaving(true); setError('');
     try {
-      await apiRequest('/schedules', 'POST', payload);
+      await apiRequest('/schedules', 'POST', {...payload,...(caregiver?{patient_id:selectedPatient}:{})});
       if (!alive.current) return;
       close(); notify('Treatment schedule created.'); setReload(value => value + 1);
     } catch (reason) {
@@ -267,6 +270,7 @@ export default function TreatmentSchedules({ coordinator, notify, onSessionExpir
       {confirmingCreate ? <>
         <p className="schedule-create-warning">Once created, any changes, rescheduling or deletion require coordinator approval.</p>
         <dl className="schedule-detail-fields">
+          {caregiver&&<div><dt>Patient</dt><dd>{caregiverPatients?.find(patient=>patient.patient_id===selectedPatient)?.patient_name}</dd></div>}
           <div><dt>Schedule</dt><dd>{draft.kind === 'single' ? 'Single Session' : `Every ${draft.days.map(day => weekdays[day - 1]).join(', ')}`}</dd></div>
           <div><dt>{draft.kind === 'single' ? 'Session date' : 'Date range'}</dt><dd>{draft.kind === 'single' ? formatDate(draft.effective_from) : `${formatDate(draft.effective_from)} – ${formatDate(draft.effective_to)}`}</dd></div>
           <div><dt>Treatment</dt><dd>{draft.start_time} – {draft.end_time}</dd></div>
@@ -274,6 +278,7 @@ export default function TreatmentSchedules({ coordinator, notify, onSessionExpir
         </dl>
       </> : (
       <fieldset className="patient-form-fields" disabled={saving}>
+        {caregiver&&<div className="patient-field patient-form-wide"><label className="patient-required" htmlFor="schedule-patient">Patient</label><Dropdown id="schedule-patient" label="Patient" required disabled={saving} value={selectedPatient} placeholder="Choose a linked patient" options={(caregiverPatients??[]).map(patient=>({value:patient.patient_id,label:patient.patient_name}))} onChange={setSelectedPatient}/></div>}
         {<div className="patient-field patient-form-wide"><label className="patient-required" htmlFor="schedule-kind">Schedule type</label><Dropdown id="schedule-kind" label="Schedule type" required disabled={saving} value={draft.kind} onChange={value => setDraft({ ...draft, kind: value as Details['kind'], days: [], effective_from: '', effective_to: '' })} options={[{value:'recurring',label:'Recurring'},{value:'single',label:'Single Session'}]} /><p className="treatment-hint">{draft.kind === 'recurring' ? 'Repeats weekly between the effective dates.' : 'Occurs once on the selected date.'}</p></div>}
         <div className="patient-field patient-form-wide"><CentrePicker centres={data?.centres ?? []} value={draft.centre_id} onChange={centre_id => setDraft({ ...draft, centre_id })} disabled={saving} /><p className="treatment-hint">Centre not listed? Contact your Transport Coordinator.</p></div>
         <div className="patient-field patient-form-wide"><label htmlFor="treatment-address">Centre address</label><textarea id="treatment-address" rows={2} disabled placeholder="Select a centre to view its address" value={selectedCentre ? `${selectedCentre.address}, Singapore ${selectedCentre.postal_code}` : ''} /></div>

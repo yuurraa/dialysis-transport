@@ -43,7 +43,7 @@ test('LTA publishes only complete validated feeds and shares refreshes without s
   const incident={Type:'Heavy Traffic',Latitude:1.3,Longitude:103.8,Message:'Fixture congestion'};
   const speed={LinkID:'123',RoadName:'Fixture road',SpeedBand:2,MinimumSpeed:'10',MaximumSpeed:'19',StartLat:1.3,StartLon:103.8,EndLat:1.301,EndLon:103.801};
   const requests:string[]=[];
-  let malformed=false,large=false,fail=false,hold=false,release:(()=>void)|undefined;
+  let malformed=false,large=false,fail=false,hold=false,quota=false,release:(()=>void)|undefined;
   context.mock.method(globalThis,'fetch',async(input:string|URL,options?:RequestInit)=>{
     const url=new URL(String(input));requests.push(url.pathname+url.search);
     assert.equal(url.origin,'https://datamall2.mytransport.sg');
@@ -52,6 +52,7 @@ test('LTA publishes only complete validated feeds and shares refreshes without s
     if(fail)return new Response('private provider diagnostics',{status:503});
     if(hold)return new Promise<Response>(resolve=>{release=()=>resolve(Response.json({value:[]}));});
     if(url.pathname.endsWith('/TrafficIncidents'))return Response.json({value:url.searchParams.get('$skip')==='0'?Array.from({length:500},()=>incident):[incident]});
+    if(quota)return Response.json({fault:{faultstring:'Private account identifier',detail:{errorcode:'policies.ratelimit.QuotaViolation'}}},{status:500});
     if(large)return Response.json({value:Number(url.searchParams.get('$skip'))<=50000?Array.from({length:500},()=>speed):[]});
     return Response.json({value:[{...speed,...(malformed?{MinimumSpeed:''}:{})},{...speed,LinkID:'open-ended',SpeedBand:8,MinimumSpeed:70,MaximumSpeed:999},{...speed,LinkID:'no-observation',SpeedBand:0,MinimumSpeed:'',MaximumSpeed:''}]});
   });
@@ -63,6 +64,18 @@ test('LTA publishes only complete validated feeds and shares refreshes without s
   assert.equal((await service.getTraffic()).incidents.length,501);
   assert.equal(requests.length,3);
   large=true;assert.equal((await new LtaService().getSpeedBands()).length,50500);large=false;
+  quota=true;
+  const limited=new LtaService(),partial=await limited.getTraffic(undefined,true);
+  assert.equal(partial.incidents.length,501);assert.equal(partial.speedBands.length,0);
+  assert.equal(partial.speedBandsRetrievedAt,null);assert.deepEqual(partial.availability,{incidents:'current',speeds:'rate-limited'});
+  const afterQuota=requests.length;
+  await assert.rejects(limited.getTraffic());
+  await limited.getTraffic(undefined,true);assert.equal(requests.length,afterQuota);
+  quota=false;
+  const realNow=Date.now;let elapsed=300001;
+  context.mock.method(Date,'now',()=>realNow()+elapsed);
+  assert.equal((await limited.getTraffic()).speedBands.length,2);
+  assert.ok(requests.length>afterQuota);elapsed=0;
   malformed=true;await assert.rejects(new LtaService().getTraffic());
   fail=true;await assert.rejects(new LtaService().getIncidents(),error=>{
     assert.ok(error instanceof Error);assert.ok(!error.message.includes('private provider'));return true;
@@ -87,18 +100,22 @@ test('Route traffic preserves observed coverage and shows roads for future/unass
   assert.ok(result.speed_bands[0].route_geometry.length>0);
   assert.ok(result.speed_bands[0].route_geometry.every(piece=>piece.length>=2&&piece.every(([latitude])=>latitude===1.3)));
   assert.ok(result.coverage_percent>40&&result.coverage_percent<65);
+  assert.equal(result.slow_route_percent,result.coverage_percent);
   assert.ok(result.minimum_seconds>120);assert.ok(result.maximum_seconds!>result.minimum_seconds);
   const stopped=routeTraffic(route,{...snapshot,speedBands:[{...forward,minimumSpeedKmh:0,maximumSpeedKmh:9,speedBand:1}]});
   assert.equal(stopped.maximum_seconds,null);
   const missing=routeTraffic(route,{...snapshot,speedBands:[reverse]});
   assert.equal(missing.coverage_percent,0);assert.equal(missing.minimum_seconds,120);
+  const boundary=routeTraffic({...route,geometry:[[1.3,103.8],[1.3,103.809],[1.30102,103.809]]},{...snapshot,speedBands:[{...forward,end:{latitude:1.3001,longitude:103.809}}]});
+  assert.equal(boundary.coverage_percent,90);assert.ok(boundary.coverage_fraction<.9);
   const saved={...route,origin:'Fixture home',destination:'Fixture centre',origin_coordinates:forward.start,destination_coordinates:forward.end,distance_metres:route.distanceMetres,duration_seconds:route.durationSeconds};
   let trip={id:'fixture-trip',version:1,origin:saved.origin,destination:saved.destination,lifecycle:'scheduled',assigned_driver_id:'fixture-driver' as string|null,pickup_at:new Date(Date.now()+5*86400000).toISOString() as string|null,dropoff_at:null,arrival_by:new Date(Date.now()+5*86400000+1800000).toISOString()};
   const chain={select(){return this;},eq(){return this;},is(){return this;},abortSignal(){return this;},async maybeSingle(){return {data:trip,error:null};}};
   const client={from:()=>chain,rpc:()=>({abortSignal:async()=>({data:{trip},error:null})})} as unknown as SupabaseClient;
   let feedReads=0;
   const database={forIntegration:()=>({rpc:()=>({abortSignal:async()=>({data:saved,error:null})})})} as unknown as SupabaseService;
-  const lta={getTraffic:async()=>{feedReads++;return snapshot;}} as unknown as LtaService;
+  let observations=snapshot;
+  const lta={getTraffic:async()=>{feedReads++;return observations;}} as unknown as LtaService;
   const service=new TripRoutingService(database,{} as OneMapService,lta);
   for(const lifecycle of ['scheduled','cancelled','completed']){
     trip={...trip,lifecycle};
@@ -107,13 +124,62 @@ test('Route traffic preserves observed coverage and shows roads for future/unass
     assert.ok('assessment_scope' in current&&current.assessment_scope==='road-conditions');
     assert.ok('estimated_arrival_from' in current&&current.estimated_arrival_from===null);
     assert.ok('speed_bands' in current&&current.speed_bands.length>0);
+    assert.ok('baseline_arrival_at' in current&&current.baseline_arrival_at===null);
+    assert.ok('delay_from_minutes' in current&&typeof current.delay_from_minutes==='number');
   }
   trip={...trip,lifecycle:'scheduled',assigned_driver_id:null,pickup_at:null};
   assert.equal((await service.traffic(client,trip.id)).state,'current');
+  observations={...snapshot,speedBands:[],speedBandsRetrievedAt:null,availability:{incidents:'current',speeds:'rate-limited'}};
+  const incidentOnly=await service.traffic(client,trip.id);
+  assert.equal(incidentOnly.state,'current');
+  assert.ok('incidents' in incidentOnly&&incidentOnly.incidents.length===1);
+  assert.ok('availability' in incidentOnly&&incidentOnly.availability.speeds==='rate-limited');
+  assert.ok('delay_from_minutes' in incidentOnly&&incidentOnly.delay_from_minutes===null);
+  assert.ok('impact' in incidentOnly&&incidentOnly.impact==='unknown');
+  assert.ok('risk' in incidentOnly&&incidentOnly.risk==='possible-delay');
+  observations=snapshot;
   const before=feedReads;
   assert.equal((await service.traffic(client,trip.id,true)).state,'unassigned');
   trip={...trip,assigned_driver_id:'fixture-driver',pickup_at:new Date(Date.now()+5*86400000).toISOString()};
   assert.equal((await service.traffic(client,trip.id,true)).state,'not_due');
   assert.equal(feedReads,before);
 
+  // A background proposal is reused without provider calls or booking approval.
+  const proposal={trip:{...trip,version:7},options:[{id:'proposal-1'}],critical:false};
+  const recoveryCalls:string[]=[];
+  const recoveryDatabase={forIntegration:()=>({rpc:(name:string)=>({abortSignal:async()=>{
+    recoveryCalls.push(name);
+    if(name==='trip_traffic_context')return {data:{trip:{...trip,version:7,status:'at-risk',review_required:false}},error:null};
+    if(name==='pending_trip_recovery_options')return {data:proposal,error:null};
+    throw new Error(`Unexpected recovery mutation: ${name}`);
+  }})})} as unknown as SupabaseService;
+  const recovering=new TripRoutingService(recoveryDatabase,{} as OneMapService,lta);
+  assert.deepEqual(await recovering.automaticRecovery(trip.id,7),proposal);
+  assert.deepEqual(recoveryCalls,['trip_traffic_context','pending_trip_recovery_options']);
+  assert.equal(feedReads,before);
+  await assert.rejects(recovering.automaticRecovery(trip.id,6),/changed/i);
+
+  // A zero lower speed bound reserves an explicitly approximate slot, not a false finite ETA.
+  observations={...snapshot,speedBands:[{...forward,minimumSpeedKmh:0,maximumSpeedKmh:9,speedBand:1}]};
+  const eligibleTrip={...trip,status:'at-risk',review_required:false};
+  const recoveryClient={from:()=>({...chain,async maybeSingle(){return {data:eligibleTrip,error:null};}})} as unknown as SupabaseClient;
+  let stored:Record<string,unknown>|undefined;
+  const approximateDatabase={forIntegration:()=>({rpc:(name:string,args:Record<string,unknown>)=>({abortSignal:async()=>{
+    if(name==='pending_trip_recovery_options')return {data:null,error:null};
+    if(name==='cached_driving_route')return {data:saved,error:null};
+    if(name==='trip_traffic_context')return {data:{trip:eligibleTrip},error:null};
+    if(name==='trip_recovery_candidates')return {data:{requirements:[],options:[]},error:null};
+    if(name==='store_assessed_trip_recovery_options'){stored=args;return {data:{options:[],critical:true},error:null};}
+    if(name==='trip_recovery_option')return {data:{option:{trip_id:trip.id,trip_version:trip.version,driver_id:trip.assigned_driver_id,pickup_at:trip.pickup_at,duration_minutes:360,expires_at:new Date(Date.now()+60000).toISOString(),estimated_duration:false}},error:null};
+    throw new Error(`Unexpected recovery RPC: ${name}`);
+  }})})} as unknown as SupabaseService;
+  const approximate=new TripRoutingService(approximateDatabase,{} as OneMapService,lta);
+  await approximate.recoveryOptions(recoveryClient,trip.id,trip.version);
+  assert.equal(stored?.estimated_duration,true);assert.equal(stored?.buffer_minutes,15);
+  assert.equal(stored?.reserved_minutes,Math.max(5,Math.ceil(Math.max(saved.duration_seconds,stopped.minimum_seconds)/300)*5)+15);
+  // A previously bounded proposal must be reassessed before approving newly uncertain traffic.
+  await assert.rejects(approximate.approveRecovery(recoveryClient,trip.id,trip.version,'bounded-proposal'),/Traffic changed/i);
+  observations={...snapshot,speedBands:[]};stored=undefined;
+  await assert.rejects(approximate.recoveryOptions(recoveryClient,trip.id,trip.version),/current route and usable traffic/i);
+  assert.equal(stored,undefined);
 });

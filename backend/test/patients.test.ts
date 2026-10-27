@@ -13,6 +13,7 @@ let role = 'coordinator';
 let status = 'active';
 let failure = false;
 let conflict = false;
+let linkFailure:string|undefined;
 let missing = false;
 let writes = 0;
 let saved: unknown;
@@ -25,6 +26,7 @@ const record = { id, version: 1, full_name: 'Test Patient', birth_date: '1990-04
 const gateway = { forUser: () => ({
   auth: { getUser: async (token: string) => token === 'invalid' ? { data: { user: null }, error: { status: 401 } } : { data: { user: { id, email_confirmed_at: '2026-01-01', identities: [{ provider: 'google' }] } }, error: null } },
   rpc: async (name: string, args?: { details: unknown; expected_version?: number }) => {
+    if(name==='manage_caregiver_link'&&linkFailure)return {data:null,error:{code:linkFailure}};
     if (name === 'update_my_driver') driverVersion = args?.expected_version;
     if (name === 'update_my_driver' || name === 'save_my_patient' || name === 'save_patient' || name === 'save_my_driver') { writes++; saved = args?.details; return { data: { ...record, ...(saved as object), account_id: id }, error: conflict ? { code: '40001' } : missing ? { code: 'P0002' } : null }; }
     return { data: { id, role, status }, error: null };
@@ -52,6 +54,7 @@ async function request(path = '', method = 'GET', body?: unknown, token: string 
   const response = await fetch(`${origin}/api/profiles/patients${path}`, { method, headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
   return { status: response.status, body: await response.json() };
 }
+async function caregiverRequest(path='',method='GET',body?:unknown){return fetch(`${origin}/api/profiles/caregivers${path}`,{method,headers:{Authorization:'Bearer valid','Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)});}
 test('patient endpoints require an active coordinator and verified session', async () => {
   for (const token of [null, 'invalid']) assert.equal((await request('', 'GET', undefined, token)).status, 401);
   for (const other of ['patient', 'driver', 'caregiver']) {
@@ -59,11 +62,36 @@ test('patient endpoints require an active coordinator and verified session', asy
     assert.equal((await request()).status, 403);
     assert.equal((await request('', 'POST', record)).status, 404);
     assert.equal((await request(`/${id}`, 'PATCH', record)).status, 403);
+    assert.equal((await caregiverRequest()).status,403);
+    assert.equal((await caregiverRequest(`/${id}/links`)).status,403);
+    assert.equal((await caregiverRequest(`/${id}`,'PATCH',{status:'inactive',version:1})).status,403);
   }
   role = 'coordinator'; status = 'inactive';
   assert.equal((await request()).status, 403);
   status = 'active';
   assert.equal(writes, 0);
+  const linking=async(path:string,body?:unknown)=>fetch(`${origin}/api/profiles/${path}`,{method:'POST',headers:{Authorization:'Bearer valid','Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)});
+  for(const other of ['patient','driver','coordinator']){
+    role=other;assert.equal((await linking('caregiver-invitations')).status,403);
+  }
+  role='caregiver';
+  assert.equal((await linking('caregiver-invitations/preview',{code:id})).status,403);
+  role='patient';
+  for(const body of [{code:'bad'},{code:id,caregiver_id:id},{code:id,role:'coordinator'}])assert.equal((await linking('caregiver-invitations/preview',body)).status,400);
+  assert.equal((await linking('caregiver-invitations/confirm',{code:id,caregiver_id:id,confirmed:false})).status,400);
+  const unauthorised=await fetch(`${origin}/api/profiles/caregiver-links`,{method:'PATCH',headers:{Authorization:'Bearer valid','Content-Type':'application/json'},body:JSON.stringify({patient_id:id,caregiver_id:id,active:true,patient_authorised:true})});
+  assert.equal(unauthorised.status,403);
+  role='coordinator';
+  assert.equal((await caregiverRequest()).status,200);
+  assert.equal((await caregiverRequest(`/${id}/links`)).status,200);
+  for(const query of ['?page=0','?sort=email','?status=deleted','?direction=sideways'])assert.equal((await caregiverRequest(query)).status,400);
+  for(const body of [{status:'inactive',version:1,full_name:'Changed'},{status:'inactive',version:0},{status:'deleted',version:1}])assert.equal((await caregiverRequest(`/${id}`,'PATCH',body)).status,400);
+  for(const [dbCode,code] of [['P5001','patient_link_limit'],['P5002','caregiver_link_limit']]){
+    linkFailure=dbCode;
+    const response=await fetch(`${origin}/api/profiles/caregiver-links`,{method:'PATCH',headers:{Authorization:'Bearer valid','Content-Type':'application/json'},body:JSON.stringify({patient_id:id,caregiver_id:id,active:true,patient_authorised:true})});
+    assert.equal(response.status,409);assert.equal((await response.json()).code,code);
+  }
+  linkFailure=undefined;
 });
 test('coordinators may update only Status and Notes, never create or overwrite personal details', async () => {
   assert.equal((await request('', 'POST', record)).status, 404);

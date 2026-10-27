@@ -626,6 +626,133 @@ test('driver personal signup is atomic, owns its profile and preserves the exist
     await local.query("update public.accounts set status='inactive' where id=$1",[account.id]);
     assert.deepEqual(await act(driver,'select * from public.drivers'),[]);
     await assert.rejects(act(driver,'select public.save_my_driver($1::jsonb)',[JSON.stringify(personal)]),/Driver access/);
+
+    // Caregiver code possession alone grants no access: the patient must confirm.
+    await local.query("insert into auth.identities(user_id,provider) values($1,'google')",[emailOnly]);
+    await assert.rejects(act(emailOnly,"select public.register_account('caregiver','Caregiver')"),/details.*required/i);
+    const caregiver=(await act(emailOnly,"select public.register_caregiver_account('Caregiver',$1::jsonb) as account",[JSON.stringify({...personal,full_name:'Fixture Caregiver'})]))[0].account;
+    assert.equal(caregiver.profile_complete,true);assert.equal(caregiver.full_name,'Fixture Caregiver');
+    await local.query("insert into public.accounts(auth_user_id,email,display_name,role) values($1,'patient@example.test','Patient','patient'),($2,'coordinator@example.test','Coordinator','coordinator')",[patient,coordinator]);
+    const person=(await local.query("insert into public.patients(account_id,full_name,phone,pickup_address,mobility) select id,'Fixture Patient','81234567','Fixture home','ambulant' from public.accounts where role='patient' returning id")).rows[0].id;
+    const invitation=(await act(emailOnly,'select public.create_caregiver_invitation() as data'))[0].data;
+    assert.ok(invitation.code);
+    const storedHash=(await local.query('select code_hash from private.caregiver_invitations')).rows[0].code_hash;
+    assert.notEqual(storedHash,invitation.code);assert.equal(storedHash,(await local.query('select md5($1) as hash',[invitation.code])).rows[0].hash);
+    const preview=(await act(patient,'select public.review_caregiver_invitation($1,null) as data',[invitation.code]))[0].data;
+    assert.equal(preview.caregiver_id,caregiver.id);assert.equal(preview.full_name,'Fixture Caregiver');
+    assert.equal((await act(emailOnly,'select private.caregiver_can_access_patient($1) as allowed',[person]))[0].allowed,false);
+    await assert.rejects(act(emailOnly,'select public.review_caregiver_invitation($1,null)',[invitation.code]),/Patient access/);
+    let link=(await act(patient,'select public.review_caregiver_invitation($1,$2) as data',[invitation.code,caregiver.id]))[0].data.link;
+    assert.equal(link.active,true);assert.equal((await act(emailOnly,'select private.caregiver_can_access_patient($1) as allowed',[person]))[0].allowed,true);
+    const notices=async who=>(await act(who,'select public.list_trip_notifications(1) as data'))[0].data;
+    for(const who of [patient,emailOnly])assert.equal((await notices(who)).notifications.filter(row=>row.event==='caregiver_authorised').length,1);
+    assert.equal((await act(patient,'select public.review_caregiver_invitation($1,$2) as data',[invitation.code,caregiver.id]))[0].data.error,'invalid_invitation');
+    assert.equal((await act(emailOnly,'select public.list_caregiver_links(null) as data'))[0].data.links.length,1);
+    assert.equal((await act(coordinator,"select public.list_coordinator_caregivers(1,'Fixture','active','full_name','asc') as data"))[0].data.caregivers[0].id,caregiver.id);
+    assert.equal((await act(coordinator,'select public.coordinator_caregiver_links($1) as data',[caregiver.id]))[0].data.links[0].patient_name,'Fixture Patient');
+    for(const who of [patient,emailOnly,driver]){
+      await assert.rejects(act(who,"select public.list_coordinator_caregivers(1,'','all','created_at','desc')"),/Coordinator/i);
+      await assert.rejects(act(who,'select public.coordinator_caregiver_links($1)',[caregiver.id]),/Coordinator/i);
+      await assert.rejects(act(who,"select public.set_caregiver_status($1,'inactive',1)",[caregiver.id]),/Coordinator/i);
+    }
+    await assert.rejects(act(driver,'select public.list_caregiver_links(null)'),/denied/);
+    // Linked caregivers share transport workflows, never patient profile ownership.
+    assert.deepEqual(await act(emailOnly,'select * from public.patients'),[]);
+    await assert.rejects(act(emailOnly,"update public.patients set full_name='Changed' where id=$1",[person]),/permission denied|row.level/i);
+    const setup=(await local.query("select id as centre,((now() at time zone 'Asia/Singapore')::date+1)::text as day from public.dialysis_centres limit 1")).rows[0];
+    const create="insert into public.treatment_schedules(patient_id,centre_id,kind,days,start_time,end_time,effective_from,effective_to) values($1,$2,'single',array[extract(isodow from $3::date)::integer],'10:00','11:00',$3,$3) returning *";
+    const source=(await act(emailOnly,create,[person,setup.centre,setup.day]))[0];
+    assert.ok((await notices(patient)).notifications.some(row=>row.event==='schedule_created'&&row.message==='Caregiver created a treatment schedule'));
+    assert.ok(!(await notices(emailOnly)).notifications.some(row=>row.event==='schedule_created'),'Do not notify the acting caregiver.');
+    await act(patient,create.replace("'10:00','11:00'","'13:00','14:00'"),[person,setup.centre,setup.day]);
+    assert.ok((await notices(emailOnly)).notifications.some(row=>row.event==='schedule_created'&&row.message==='Patient created a treatment schedule'));
+    assert.equal((await act(emailOnly,'select public.list_treatments() as data'))[0].data.schedules[0].patients.full_name,'Fixture Patient');
+    await local.query("insert into public.accounts(auth_user_id,email,display_name,role) values($1,'unlinked@example.test','Unlinked','patient')",[stranger]);
+    const unlinkedPerson=(await local.query("insert into public.patients(account_id,full_name,phone,pickup_address,mobility) select id,'Unlinked Patient','80000009','Fixture other home','ambulant' from public.accounts where auth_user_id=$1 returning id",[stranger])).rows[0].id;
+    await assert.rejects(act(emailOnly,create,[unlinkedPerson,setup.centre,setup.day]),/denied|row.level/i);
+    const otherSource=(await act(stranger,create,[unlinkedPerson,setup.centre,setup.day]))[0];
+    const change=(await act(emailOnly,"select public.request_treatment_change($1,'delete','{}'::jsonb,null,'Fixture change',$2) as data",[source.id,source.version]))[0].data;
+    assert.equal(change.requested_by,caregiver.id);
+    await act(emailOnly,'select public.withdraw_treatment_change($1,$2)',[change.id,change.version]);
+    for(const event of ['schedule_change_pending','schedule_change_withdrawn'])assert.ok((await notices(patient)).notifications.some(row=>row.event===event));
+    await assert.rejects(act(emailOnly,"select public.request_treatment_change($1,'delete','{}'::jsonb,null,'Other patient',$2)",[otherSource.id,otherSource.version]),/denied/i);
+    for(const selected of [source,otherSource])await act(coordinator,'select public.generate_treatment_trips($1,$2,$2,$3)',[selected.id,setup.day,selected.version]);
+    assert.equal((await act(emailOnly,'select public.list_trips(1,$1,null) as data',[setup.day]))[0].data.total,2);
+    let journey=(await act(emailOnly,"select * from public.trips where source_schedule_id=$1 and direction='outbound'",[source.id]))[0];
+    await local.query("update public.accounts set status='active' where id=$1",[account.id]);
+    await local.query("insert into public.driver_vehicles(driver_id,licence_number,plate_number,make,model,passenger_capacity,wheelchair_accessible,status,reviewed_at,reviewed_by) values($1,'CG-FIXTURE','CGLINK1','Fixture','Car',3,false,'approved',now(),(select id from public.accounts where role='coordinator'))",[account.id]);
+    await local.query('insert into public.driver_availability(driver_id,weekly_slots) values($1,array(select generate_series(0,335)))',[account.id]);
+    await local.query('select public.cache_driving_route($1,$2,$3::jsonb)',[journey.origin,journey.destination,JSON.stringify(fixtureRoadRoute)]);
+    journey=(await act(coordinator,'select public.prepare_trip_route($1,$2) as data',[journey.id,journey.version]))[0].data;
+    journey=(await act(coordinator,"select public.assign_trip($1,$2,$3::timestamptz-interval '30 minutes',$4) as data",[journey.id,account.id,journey.arrival_by,journey.version]))[0].data;
+    journey=(await act(emailOnly,'select public.confirm_trip($1,$2) as data',[journey.id,journey.version]))[0].data;
+    assert.equal(journey.confirmed_by,caregiver.id);
+    assert.equal((await act(emailOnly,'select public.trip_progress($1) as data',[journey.id]))[0].data.trip.id,journey.id);
+    assert.ok((await act(emailOnly,'select public.list_trip_notifications(1) as data'))[0].data.notifications.some(row=>row.event==='assigned'));
+    assert.ok(!(await act(emailOnly,'select public.list_trip_notifications(1) as data'))[0].data.notifications.some(row=>row.event==='confirmed'));
+    journey=(await act(emailOnly,'select public.cancel_trip($1,$2) as data',[journey.id,journey.version]))[0].data;
+    assert.equal(journey.cancelled_by,caregiver.id);assert.equal(journey.lifecycle,'cancelled');
+    assert.ok((await notices(patient)).notifications.some(row=>row.event==='cancelled'&&row.message.startsWith('Caregiver cancelled trip')));
+    assert.ok(!(await notices(emailOnly)).notifications.some(row=>row.event==='cancelled'),'Do not notify the acting caregiver.');
+    link=(await act(emailOnly,'select public.manage_caregiver_link($1,$2,false,$3,false) as data',[person,caregiver.id,link.version]))[0].data;
+    assert.equal(link.active,false);assert.equal((await act(emailOnly,'select private.caregiver_can_access_patient($1) as allowed',[person]))[0].allowed,false);
+    assert.deepEqual(await act(emailOnly,'select * from public.treatment_schedules'),[]);
+    assert.deepEqual(await act(emailOnly,'select * from public.trips'),[]);
+    assert.ok((await notices(emailOnly)).notifications.every(row=>row.notice_kind==='link'),'Only safe relationship notices remain after unlinking.');
+    assert.ok((await notices(patient)).notifications.some(row=>row.event==='caregiver_revoked'));
+    await act(patient,'select public.read_all_trip_notifications()');
+    assert.equal((await notices(patient)).unread,0);
+    assert.ok((await act(patient,'select public.delete_read_trip_notifications() as data'))[0].data.deleted>0);
+    await assert.rejects(act(emailOnly,'select public.trip_progress($1)',[journey.id]),/denied/i);
+    await assert.rejects(act(emailOnly,'select public.trip_history_page($1,1)',[journey.id]),/denied/i);
+    await assert.rejects(act(emailOnly,create,[person,setup.centre,setup.day]),/denied|row.level/i);
+    await assert.rejects(act(coordinator,'select public.manage_caregiver_link($1,$2,true,$3,false)',[person,caregiver.id,link.version]),/denied/);
+    link=(await act(coordinator,'select public.manage_caregiver_link($1,$2,true,$3,true) as data',[person,caregiver.id,link.version]))[0].data;
+    assert.equal(link.active,true);
+    await assert.rejects(act(emailOnly,'select public.manage_caregiver_link($1,$2,false,$3,false)',[person,caregiver.id,link.version-1]),/changed/);
+    const statusVersion=(await local.query('select status_version from public.accounts where id=$1',[caregiver.id])).rows[0].status_version;
+    await assert.rejects(act(coordinator,"select public.set_caregiver_status($1,'inactive',$2)",[caregiver.id,statusVersion+1]),/changed/i);
+    const changedStatus=(await act(coordinator,"select public.set_caregiver_status($1,'inactive',$2) as data",[caregiver.id,statusVersion]))[0].data;
+    assert.equal(changedStatus.status,'inactive');assert.equal(changedStatus.status_version,statusVersion+1);
+    assert.equal((await act(coordinator,"select public.list_coordinator_caregivers(1,'','inactive','created_at','desc') as data"))[0].data.total,1);
+    assert.equal((await local.query('select full_name from public.caregivers where account_id=$1',[caregiver.id])).rows[0].full_name,'Fixture Caregiver');
+    assert.equal((await act(emailOnly,'select private.caregiver_can_access_patient($1) as allowed',[person]))[0].allowed,false);
+    // Invalid responses commit the rate limit rather than rolling it back.
+    for(let i=0;i<10;i++)await act(patient,"select public.review_caregiver_invitation('00000000-0000-4000-8000-000000000000',null)");
+    assert.equal((await act(patient,'select public.review_caregiver_invitation($1,null) as data',[invitation.code]))[0].data.error,'invitation_rate_limited');
+    assert.equal((await local.query('select count(*)::int as total from private.caregiver_link_events')).rows[0].total,3);
+    const noticeCount=(await local.query('select count(*)::int as total from public.trip_notifications')).rows[0].total;
+    await local.exec(schema);
+    assert.equal((await local.query('select count(*)::int as total from public.trip_notifications')).rows[0].total,noticeCount,'Reapplying the schema must not replay link or schedule notices.');
+    assert.equal((await local.query('select version from public.caregiver_links where id=$1',[link.id])).rows[0].version,link.version);
+    await act(coordinator,"select public.set_caregiver_status($1,'active',$2)",[caregiver.id,changedStatus.status_version]);
+    const makePerson=async(role,index)=>{
+      const owner=(await local.query('insert into public.accounts(email,display_name,role) values($1,$2,$3) returning id',[`capacity.${role}.${index}@example.test`,`Fixture ${role} ${index}`,role])).rows[0].id;
+      if(role==='caregiver'){await local.query("insert into public.caregivers(account_id,full_name,phone,birth_date,gender) values($1,$2,'80000001','1990-01-01','female')",[owner,`Fixture caregiver ${index}`]);return owner;}
+      return (await local.query("insert into public.patients(account_id,full_name,phone,pickup_address,mobility) values($1,$2,'80000002','Fixture home','ambulant') returning id",[owner,`Fixture patient ${index}`])).rows[0].id;
+    };
+    const extraCaregivers=[];
+    for(let index=0;index<5;index++)extraCaregivers.push(await makePerson('caregiver',index));
+    const extraLinks=[];
+    for(const extra of extraCaregivers.slice(0,4))extraLinks.push((await act(coordinator,'select public.manage_caregiver_link($1,$2,true,null,true) as data',[person,extra]))[0].data);
+    await assert.rejects(act(coordinator,'select public.manage_caregiver_link($1,$2,true,null,true)',[person,extraCaregivers[4]]),error=>error.code==='P5001');
+    assert.equal((await act(coordinator,'select public.manage_caregiver_link($1,$2,true,$3,true) as data',[person,caregiver.id,link.version]))[0].data.id,link.id,'An existing pair remains idempotent at capacity.');
+    const removed=(await act(coordinator,'select public.manage_caregiver_link($1,$2,false,$3,false) as data',[person,extraCaregivers[0],extraLinks[0].version]))[0].data;
+    await act(coordinator,'select public.manage_caregiver_link($1,$2,true,null,true)',[person,extraCaregivers[4]]);
+    await assert.rejects(act(coordinator,'select public.manage_caregiver_link($1,$2,true,$3,true)',[person,extraCaregivers[0],removed.version]),error=>error.code==='P5001');
+    const extraPatients=[];
+    for(let index=0;index<4;index++){
+      const patientId=await makePerson('patient',index);
+      extraPatients.push((await act(coordinator,'select public.manage_caregiver_link($1,$2,true,null,true) as data',[patientId,caregiver.id]))[0].data);
+    }
+    const capacityCode='55555555-5555-4555-8555-555555555555';
+    await local.query("insert into private.caregiver_invitations(caregiver_id,code_hash,expires_at) values($1,md5($2),now()+interval '15 minutes')",[caregiver.id,capacityCode]);
+    await assert.rejects(act(stranger,'select public.review_caregiver_invitation($1,$2)',[capacityCode,caregiver.id]),error=>error.code==='P5002');
+    assert.equal((await local.query('select used_at from private.caregiver_invitations where code_hash=md5($1)',[capacityCode])).rows[0].used_at,null);
+    await act(coordinator,'select public.manage_caregiver_link($1,$2,false,$3,false)',[extraPatients[0].patient_id,caregiver.id,extraPatients[0].version]);
+    assert.equal((await act(stranger,'select public.review_caregiver_invitation($1,$2) as data',[capacityCode,caregiver.id]))[0].data.link.active,true);
+    assert.equal((await local.query('select count(*)::int as count from public.caregiver_links where patient_id=$1 and active',[person])).rows[0].count,5);
+    assert.equal((await local.query('select count(*)::int as count from public.caregiver_links where caregiver_id=$1 and active',[caregiver.id])).rows[0].count,5);
   } finally { await local.close(); }
 });
 
@@ -1167,7 +1294,13 @@ test('trip notifications are recipient-only, durable and history respects curren
     const patientInbox=await inbox(patient);const driverInbox=await inbox(driver);
     assert.equal(patientInbox.unread,1);assert.equal(driverInbox.unread,1);
     assert.match(patientInbox.notifications[0].message,/assigned/i);
+    assert.match(driverInbox.notifications[0].message,/^Trip assigned to you · /);
     const item=patientInbox.notifications[0];
+    trip=(await own(patient,'select public.confirm_trip($1,$2) as trip',[trip.id,trip.version]))[0].trip;
+    assert.equal((await inbox(patient)).total,1,'Patients do not receive their own acknowledgement.');
+    assert.ok((await inbox(coordinator)).notifications.some(row=>row.event==='confirmed'));
+    assert.ok((await inbox(driver)).notifications.some(row=>row.event==='confirmed'));
+    assert.ok((await inbox(driver)).notifications.some(row=>row.message.startsWith('Patient acknowledged trip · ')));
     assert.equal((await own(driver,'select * from public.trip_notifications where id=$1',[item.id])).length,0);
     await assert.rejects(own(driver,'select public.read_trip_notification($1)',[item.id]),/Notification access/);
     await own(patient,'select public.read_trip_notification($1)',[item.id]);
@@ -1181,15 +1314,66 @@ test('trip notifications are recipient-only, durable and history respects curren
     assert.ok((await inbox(driver)).notifications.some(item=>item.event==='cancelled'));
     assert.ok((await own(driver,'select public.trip_history_page($1,1) as data',[trip.id]))[0].data.events.some(event=>event.event==='cancelled'));
     assert.ok((await inbox(coordinator)).notifications.some(item=>item.event==='cancelled'));
+    assert.ok(!(await inbox(patient)).notifications.some(item=>item.event==='cancelled'),'Patients do not receive their own cancellation.');
+    await local.query("insert into public.trip_history(trip_id,event,details) values($1,'refreshed','{}'::jsonb)",[trip.id]);
     const driverUnread=(await inbox(driver)).unread;
+    const driverTotal=(await inbox(driver)).total;
+    await assert.rejects(own(stranger,'select public.delete_read_trip_notifications()'),/Notification access/);
+    await assert.rejects(own(patient,'delete from public.trip_notifications'),/permission denied/);
+    const cleaned=(await own(patient,'select public.delete_read_trip_notifications() as data'))[0].data;
+    assert.equal(cleaned.deleted,1);assert.equal(cleaned.unread,1);assert.equal(cleaned.total,1);
+    assert.equal(cleaned.notifications.length,1);assert.equal(cleaned.notifications[0].read_at,null);
+    assert.equal((await inbox(driver)).total,driverTotal,'Deleting read notices must never affect another recipient.');
+    assert.ok((await own(driver,'select public.trip_history_page($1,1) as history',[trip.id]))[0].history.events.some(event=>event.event==='assigned'));
     await assert.rejects(own(stranger,'select public.read_all_trip_notifications()'),/Notification access/);
     const marked=(await own(patient,'select public.read_all_trip_notifications() as data'))[0].data;
     assert.ok(marked.read_at);assert.equal(marked.unread,0);assert.equal((await inbox(patient)).unread,0);
     assert.equal((await inbox(driver)).unread,driverUnread,'Mark all must never change another recipient.');
     assert.equal((await own(patient,'select public.read_all_trip_notifications() as data'))[0].data.unread,0);
+    assert.equal((await own(patient,'select public.delete_read_trip_notifications() as data'))[0].data.deleted,1);
+    assert.equal((await own(patient,'select public.delete_read_trip_notifications() as data'))[0].data.deleted,0);
     const count=(await inbox(patient)).total;
+    const details={previous_driver_id:ids.driver_id,driver_id:ids.driver_id,previous_pickup_at:'2026-10-27T08:00:00Z',pickup_at:'2026-10-27T08:15:00Z'};
+    for(const event of ['traffic_risk_detected','recovery_approved','recovery_critical'])await local.query('insert into public.trip_history(trip_id,event,details) values($1,$2,$3::jsonb)',[trip.id,event,JSON.stringify(details)]);
+    const patientNotices=(await inbox(patient)).notifications;
+    assert.ok(patientNotices.some(row=>row.message.startsWith('Your trip may be delayed · ')));
+    assert.ok(patientNotices.some(row=>row.message.startsWith('Your pickup time has changed · ')));
+    assert.ok(patientNotices.some(row=>row.message.startsWith('Your trip needs attention. Your coordinator is arranging transport. · ')));
+    assert.ok((await inbox(coordinator)).notifications.some(row=>row.message.startsWith('Recovery approved · ')));
+    const driverNotices=(await inbox(driver)).notifications;
+    assert.ok(driverNotices.some(row=>row.message.startsWith('Traffic may delay your trip · ')));
+    assert.ok(driverNotices.some(row=>row.message.startsWith('Your pickup time has changed · ')));
+    assert.ok(driverNotices.some(row=>row.message.startsWith('Your trip needs attention. Await coordinator instructions. · ')));
+    for(const event of ['recovery_approved','handover_approved']){
+      const changed={...details,previous_driver_id:stranger};
+      assert.equal((await local.query('select private.driver_trip_event_label($1,$2,$3::jsonb) as label',[ids.driver_id,event,JSON.stringify(changed)])).rows[0].label,'Trip assigned to you');
+      assert.equal((await local.query('select private.driver_trip_event_label($1,$2,$3::jsonb) as label',[stranger,event,JSON.stringify(changed)])).rows[0].label,'Trip reassigned to another driver');
+    }
+    for(const [changes,label] of [[{previous_driver_id:'old-driver'},'Your driver and pickup time have changed'],[{previous_driver_id:'old-driver',pickup_at:details.previous_pickup_at},'Your driver has changed'],[{pickup_at:details.previous_pickup_at},'Your trip details have changed']]){
+      assert.equal((await local.query("select private.patient_trip_event_label('recovery_approved',$1::jsonb) as label",[JSON.stringify({...details,...changes})])).rows[0].label,label);
+    }
+    const retained=patientNotices.find(row=>row.event==='recovery_approved');
+    await own(patient,'select public.read_trip_notification($1)',[retained.id]);
+    await local.query("update public.trip_notifications set message='Recovery approved · 27 Oct 2026 · Outbound' where id=$1",[retained.id]);
+    await local.query("insert into public.trip_notifications(recipient_id,trip_id,event_id,event,message) select actor_id,trip_id,id,event,'Trip acknowledged' from public.trip_history where trip_id=$1 and event='confirmed' limit 1",[trip.id]);
+    const driverRetained=driverNotices.find(row=>row.event==='recovery_approved');
+    await own(driver,'select public.read_trip_notification($1)',[driverRetained.id]);
+    await local.query("update public.trip_notifications set message='Recovery approved · 27 Oct 2026 · Outbound' where id=$1",[driverRetained.id]);
+    for(const event of ['started','completed','driver_unavailable']){
+      const recorded=(await local.query('insert into public.trip_history(trip_id,actor_id,event,details) values($1,$2,$3,$4::jsonb) returning id',[trip.id,ids.driver_id,event,JSON.stringify({driver_id:ids.driver_id})])).rows[0];
+      assert.equal((await local.query('select count(*)::int as count from public.trip_notifications where event_id=$1 and recipient_id=$2',[recorded.id,ids.driver_id])).rows[0].count,0);
+      assert.ok((await inbox(coordinator)).notifications.some(row=>row.event===event));
+      // Recreate a legacy self-notice to verify schema reapplication removes it.
+      await local.query('insert into public.trip_notifications(recipient_id,trip_id,event_id,event,message) values($1,$2,$3,$4,$4)',[ids.driver_id,trip.id,recorded.id,event]);
+    }
     await local.exec(schema);
-    assert.equal((await inbox(patient)).total,count);
+    assert.equal((await inbox(patient)).total,count+6);
+    const restored=(await inbox(patient)).notifications.find(row=>row.id===retained.id);
+    assert.equal(restored.message,'Your pickup time has changed · 27 Oct 2026 · Outbound');assert.ok(restored.read_at);
+    assert.ok(!(await inbox(patient)).notifications.some(row=>row.event==='confirmed'));
+    const driverRestored=(await inbox(driver)).notifications.find(row=>row.id===driverRetained.id);
+    assert.equal(driverRestored.message,'Your pickup time has changed · 27 Oct 2026 · Outbound');assert.ok(driverRestored.read_at);
+    assert.ok(!(await inbox(driver)).notifications.some(row=>['started','completed','driver_unavailable'].includes(row.event)));
     await assert.rejects(own(patient,'select public.list_trip_notifications(0)'),/Invalid/);
   } finally {await local.close();}
 });
@@ -1344,10 +1528,21 @@ test('trusted traffic monitoring leases work and flags a trip once without clear
     assert.equal((await local.query('select traffic_review_required from public.trips where id=$1',[trip.id])).rows[0].traffic_review_required,true);
     assert.equal((await local.query("select count(*)::int as count from public.trip_history where trip_id=$1 and event='traffic_risk_detected'",[trip.id])).rows[0].count,1);
     for(const who of [patient,driver,coordinator])assert.ok((await own(who,'select public.list_trip_notifications(1) as data'))[0].data.notifications.some(row=>row.event==='traffic_risk_detected'));
+    const clear={...assessment,risk:'no-delay-detected',requires_attention:false,clear_verified:true,coverage_percent:99,arrival_until:new Date(trip.dropoff_at).toISOString()};
+    await assert.rejects(service('select public.record_trip_traffic_check($1,$2,$3::jsonb)',[trip.id,trip.version,JSON.stringify({...clear,coverage_percent:20})]),/clearance/i);
+    await service('select public.record_trip_traffic_check($1,$2,$3::jsonb)',[trip.id,trip.version,JSON.stringify(clear)]);
+    trip=(await local.query('select * from public.trips where id=$1',[trip.id])).rows[0];
+    assert.equal(trip.traffic_review_required,false);assert.equal(trip.status,'on-track');
+    await service('select public.record_trip_traffic_check($1,$2,$3::jsonb)',[trip.id,trip.version,JSON.stringify(clear)]);
+    assert.equal((await local.query("select count(*)::int as count from public.trip_history where trip_id=$1 and event='traffic_risk_cleared'",[trip.id])).rows[0].count,1);
+    await service('select public.record_trip_traffic_check($1,$2,$3::jsonb)',[trip.id,trip.version,JSON.stringify(assessment)]);
+    trip=(await local.query('select * from public.trips where id=$1',[trip.id])).rows[0];
     await own(driver,'select public.report_driver_unavailability($1,$2)',[trip.id,trip.version]);
+    trip=(await local.query('select * from public.trips where id=$1',[trip.id])).rows[0];
+    await service('select public.record_trip_traffic_check($1,$2,$3::jsonb)',[trip.id,trip.version,JSON.stringify(clear)]);
     await local.exec(schema);
     trip=(await local.query('select * from public.trips where id=$1',[trip.id])).rows[0];
-    assert.equal(trip.traffic_review_required,true);assert.ok(trip.driver_unavailable_at);
+    assert.equal(trip.traffic_review_required,false);assert.equal(trip.status,'at-risk');assert.ok(trip.driver_unavailable_at);
     trip=(await own(coordinator,'select public.unassign_trip($1,$2) as trip',[trip.id,trip.version]))[0].trip;
     assert.equal(trip.traffic_review_required,false);assert.equal(trip.status,'unfilled');
     assert.equal((await local.query('select count(*)::int as count from private.trip_traffic_checks where trip_id=$1',[trip.id])).rows[0].count,0);
@@ -1356,7 +1551,7 @@ test('trusted traffic monitoring leases work and flags a trip once without clear
 
 
 test('recovery proposals preserve reservations and require trusted validation plus coordinator approval', async () => {
-  const {local,own,trips,assign}=await assignmentFixture();
+  const {local,own,trips,assign,source,ids}=await assignmentFixture();
   const service=async(sql,params=[])=>{
     await local.exec('begin; set local role service_role;');
     try {const result=await local.query(sql,params);await local.exec('commit');return result.rows;}
@@ -1369,11 +1564,28 @@ test('recovery proposals preserve reservations and require trusted validation pl
     for(const who of [patient,driver,coordinator]){
       await assert.rejects(own(who,'select public.trip_recovery_candidates($1,$2,$3,false)',[trip.id,trip.version,trip.duration_minutes]),/permission/i);
       await assert.rejects(own(who,'select public.store_trip_recovery_options($1,$2,$3,false)',[trip.id,trip.version,trip.duration_minutes]),/permission/i);
+      await assert.rejects(own(who,'select public.store_assessed_trip_recovery_options($1,$2,45,false,null,true,15)',[trip.id,trip.version]),/permission/i);
+      await assert.rejects(own(who,'select public.claim_trip_recovery_checks()'),/permission/i);
+      await assert.rejects(own(who,'select public.pending_trip_recovery_options($1,$2)',[trip.id,trip.version]),/permission/i);
     }
-    const proposed=(await service('select public.store_trip_recovery_options($1,$2,$3,false) as data',[trip.id,trip.version,trip.duration_minutes]))[0].data;
+    const claimed=(await service('select public.claim_trip_recovery_checks() as work'))[0].work;
+    assert.ok(claimed.some(row=>row.id===trip.id&&row.version===trip.version));
+    assert.ok(!(await service('select public.claim_trip_recovery_checks() as work'))[0].work.some(row=>row.id===trip.id));
+    await assert.rejects(service('select public.store_assessed_trip_recovery_options($1,$2,30,false,null,true,0)',[trip.id,trip.version]),/Invalid recovery estimate/i);
+    await assert.rejects(service('select public.store_assessed_trip_recovery_options($1,$2,30,false,null,true,15)',[trip.id,trip.version]),/include its planning buffer/i);
+    const proposed=(await service('select public.store_assessed_trip_recovery_options($1,$2,45,false,null,true,15) as data',[trip.id,trip.version]))[0].data;
     assert.ok(proposed.options.length);assert.equal(proposed.critical,false);
     assert.equal(proposed.trip.assigned_driver_id,trip.assigned_driver_id);assert.equal(proposed.trip.version,trip.version);
     const option=proposed.options[0];
+    assert.equal(option.estimated_duration,true);assert.equal(option.buffer_minutes,15);assert.equal(option.duration_minutes,45);
+    const reused=(await service('select public.store_trip_recovery_options($1,$2,$3,false) as data',[trip.id,trip.version,trip.duration_minutes]))[0].data;
+    assert.deepEqual(reused.options.map(row=>row.id),proposed.options.map(row=>row.id));
+    const pending=(await service('select public.pending_trip_recovery_options($1,$2) as data',[trip.id,trip.version]))[0].data;
+    assert.equal(pending.options[0].id,option.id);
+    assert.equal(pending.options[0].estimated_duration,true);assert.equal(pending.options[0].buffer_minutes,15);
+    // Even an elapsed worker lease cannot replace proposals being reviewed.
+    await local.query("update private.trip_recovery_checks set next_check_at=now()-interval '1 minute' where trip_id=$1",[trip.id]);
+    assert.ok(!(await service('select public.claim_trip_recovery_checks() as work'))[0].work.some(row=>row.id===trip.id));
     await assert.rejects(own(coordinator,'select public.approve_trip_recovery($1,$2)',[option.id,trip.version]),/expired|changed/i);
     for(const who of [patient,driver,coordinator])await assert.rejects(own(who,"select public.attest_trip_recovery_option($1,clock_timestamp()+interval '20 seconds')",[option.id]),/permission/i);
     await service("select public.attest_trip_recovery_option($1,clock_timestamp()+interval '20 seconds')",[option.id]);
@@ -1382,6 +1594,8 @@ test('recovery proposals preserve reservations and require trusted validation pl
     assert.equal(trip.status,'on-track');assert.equal(trip.traffic_review_required,false);assert.equal(trip.confirmed_at,null);
     await assert.rejects(own(coordinator,'select public.approve_trip_recovery($1,$2)',[option.id,trip.version]),/expired|changed/i);
     assert.equal((await local.query("select count(*)::int as count from public.trip_history where trip_id=$1 and event='recovery_approved'",[trip.id])).rows[0].count,1);
+    const estimate=(await local.query("select details from public.trip_history where trip_id=$1 and event='recovery_approved'",[trip.id])).rows[0].details;
+    assert.equal(estimate.estimated_duration,true);assert.equal(estimate.buffer_minutes,15);assert.equal(trip.duration_minutes,45);
     trip=(await own(driver,'select public.report_driver_unavailability($1,$2) as trip',[trip.id,trip.version]))[0].trip;
     const critical=(await service('select public.store_trip_recovery_options($1,$2,$3,false) as data',[trip.id,trip.version,trip.duration_minutes]))[0].data;
     assert.equal(critical.options.length,0);assert.equal(critical.critical,true);
@@ -1389,5 +1603,46 @@ test('recovery proposals preserve reservations and require trusted validation pl
     await local.exec(schema);
     assert.equal((await local.query('select recovery_critical from public.trips where id=$1',[trip.id])).rows[0].recovery_critical,true);
     assert.ok((await own(coordinator,'select public.list_trip_notifications(1) as data'))[0].data.notifications.some(row=>row.event==='recovery_critical'));
+
+    // Active recovery requires a separately confirmed safe pickup and a replacement driver.
+    const replacement=(await local.query("insert into public.accounts(auth_user_id,email,display_name,role) values($1,'replacement@example.test','Replacement','driver') returning id",[stranger])).rows[0].id;
+    await local.query("insert into public.drivers(account_id,full_name,phone,birth_date,gender) values($1,'Replacement Driver','80000002','1990-01-01','male')",[replacement]);
+    await local.query("insert into public.driver_vehicles(driver_id,licence_number,plate_number,make,model,passenger_capacity,wheelchair_accessible,status,reviewed_at,reviewed_by) values($1,'HANDOVER','HAND001','Fixture','Replacement',4,false,'approved',now(),(select id from public.accounts where role='coordinator'))",[replacement]);
+    await local.query('insert into public.driver_availability(driver_id,weekly_slots) values($1,array(select generate_series(0,335)))',[replacement]);
+    await local.query("update public.trips set pickup_at=now()-interval '5 minutes',dropoff_at=now()+interval '25 minutes',duration_minutes=30,treatment_start=now()+interval '2 hours',treatment_end=now()+interval '3 hours',arrival_by=now()+interval '105 minutes',driver_unavailable_at=null,recovery_critical=false where id=$1",[trip.id]);
+    trip=(await local.query('select * from public.trips where id=$1',[trip.id])).rows[0];
+    trip=(await own(driver,"select public.execute_trip($1,'start',$2) as trip",[trip.id,trip.version]))[0].trip;
+    const firstStart=trip.started_at,originalOrigin=trip.origin;
+    trip=(await own(driver,'select public.report_driver_unavailability($1,$2) as trip',[trip.id,trip.version]))[0].trip;
+    const safePoint='Fixture safe pickup point';
+    await local.query('select public.cache_driving_route($1,$2,$3::jsonb)',[safePoint,trip.destination,JSON.stringify(fixtureRoadRoute)]);
+    for(const who of [patient,driver,coordinator])await assert.rejects(own(who,'select public.store_trip_handover_options($1,$2,$3,$4)',[trip.id,trip.version,30,safePoint]),/permission/i);
+    const handover=(await service('select public.store_trip_handover_options($1,$2,$3,$4) as data',[trip.id,trip.version,30,safePoint]))[0].data;
+    assert.ok(handover.options.length);assert.ok(handover.options.every(row=>row.driver_id!==ids.driver_id));
+    assert.equal(handover.trip.lifecycle,'in-progress');assert.equal(handover.trip.assigned_driver_id,ids.driver_id);assert.equal(handover.trip.origin,originalOrigin);
+    const handoverOption=handover.options.find(row=>row.driver_id===replacement);
+    assert.ok(handoverOption);
+    // An eligible saved pickup stays valid even when it is outside a freshly rounded grid.
+    await local.query("update private.trip_recovery_options set pickup_at=pickup_at+interval '1 minute' where id=$1",[handoverOption.id]);
+    assert.equal((await service('select public.trip_recovery_validation($1) as data',[handoverOption.id]))[0].data.feasible,true);
+    await service("select public.attest_trip_recovery_option($1,clock_timestamp()+interval '20 seconds')",[handoverOption.id]);
+    await assert.rejects(own(coordinator,'select public.approve_trip_recovery($1,$2)',[handoverOption.id,handover.trip.version]),/eligible/i);
+    await assert.rejects(own(coordinator,'select public.approve_trip_handover($1,$2,false)',[handoverOption.id,handover.trip.version]),/eligible/i);
+    await assert.rejects(own(patient,'select public.approve_trip_handover($1,$2,true)',[handoverOption.id,handover.trip.version]),/Coordinator/i);
+    trip=(await own(coordinator,'select public.approve_trip_handover($1,$2,true) as trip',[handoverOption.id,handover.trip.version]))[0].trip;
+    assert.equal(trip.lifecycle,'scheduled');assert.equal(trip.started_at,null);assert.equal(trip.first_started_at,firstStart);
+    assert.equal(trip.origin,safePoint);assert.equal(trip.assigned_driver_id,replacement);assert.equal(trip.route_snapshot.origin,safePoint);assert.ok(trip.handover_at);
+    await assert.rejects(own(patient,'select public.cancel_trip($1,$2)',[trip.id,trip.version]),/before pickup|handover/i);
+    await assert.rejects(local.query('update public.trips set origin=$2 where id=$1',[trip.id,originalOrigin]),/handover/i);
+    await own(coordinator,'select public.generate_treatment_trips($1,$2,$3,$4)',[source.id,ids.first,ids.last,source.version]);
+    assert.equal((await local.query('select origin from public.trips where id=$1',[trip.id])).rows[0].origin,safePoint);
+    const record=(await local.query("select details from public.trip_history where trip_id=$1 and event='handover_approved'",[trip.id])).rows[0].details;
+    assert.equal(record.previous_driver_id,ids.driver_id);assert.equal(record.previous_started_at,firstStart);
+    assert.ok((await own(coordinator,'select public.list_trip_notifications(1) as data'))[0].data.notifications.some(row=>row.event==='handover_approved'));
+    const handoverNotices=(await local.query("select recipient_id,message from public.trip_notifications where trip_id=$1 and event='handover_approved'",[trip.id])).rows;
+    assert.ok(handoverNotices.some(row=>row.recipient_id===ids.driver_id&&row.message.startsWith('Trip reassigned to another driver · ')));
+    assert.ok(handoverNotices.some(row=>row.recipient_id===replacement&&row.message.startsWith('Trip assigned to you · ')));
+    await local.exec(schema);
+    assert.equal(new Date((await local.query('select first_started_at from public.trips where id=$1',[trip.id])).rows[0].first_started_at).toISOString(),new Date(firstStart).toISOString());
   } finally {await local.close();}
 });

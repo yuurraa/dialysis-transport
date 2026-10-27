@@ -86,7 +86,7 @@ test('coordinator assigns and unassigns a driver while patient and driver views 
   let role='coordinator';let vehicleUnavailable=false;
   const driverId='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
   const date=new Date(Date.now()+3*86400000).toISOString().slice(0,10);
-  let trip: Record<string,any>={...fixtureTrip,id:'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',session_date:date,treatment_start:`${date}T10:00:00+08:00`,treatment_end:`${date}T11:00:00+08:00`,arrival_by:`${date}T09:45:00+08:00`};
+  let trip: Record<string,any>={...fixtureTrip,id:'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',lifecycle:'scheduled',session_date:date,treatment_start:`${date}T10:00:00+08:00`,treatment_end:`${date}T11:00:00+08:00`,arrival_by:`${date}T09:45:00+08:00`};
   const candidate={id:driverId,name:'Fixture Driver',phone:'82345678',vehicle_id:'cccccccc-cccc-4ccc-8ccc-cccccccccccc',plate:'TEST123',make:'Fixture',model:'Car',passenger_capacity:4,wheelchair_accessible:true};
   await page.route('**/api/auth/me',route=>route.fulfill({json:{account:{...activeAccount,role}}}));
   await page.route('**/api/drivers/me',route=>vehicleUnavailable?route.fulfill({status:503,json:{}}):route.fulfill({json:{vehicle:{status:'approved',registered_at:'2026-01-01T00:00:00Z'}}}));
@@ -162,6 +162,26 @@ test('coordinator assigns and unassigns a driver while patient and driver views 
   await expect(page.getByRole('region',{name:'Trip details',exact:true})).toContainText('Driver unavailability reported.');
 
   role='coordinator';await page.reload();
+  let recoveryUnavailable=true,approximateOption=true;
+  await page.route('**/api/trips/*/recovery-options',route=>recoveryUnavailable?route.fulfill({status:503,json:{code:'recovery_unavailable'}}):route.fulfill({json:{trip,options:approximateOption?[0,15,30].map(minutes=>({id:`approximate-option-${minutes}`,driver_id:'replacement',driver_name:'Replacement Driver',plate:'FIXTURE1',make:'Fixture',model:'Car',pickup_at:new Date(Date.parse('2026-10-21T03:00:00Z')+minutes*60000).toISOString(),dropoff_at:new Date(Date.parse('2026-10-21T03:45:00Z')+minutes*60000).toISOString(),duration_minutes:45,same_driver:false,expires_at:new Date(Date.now()+60000).toISOString(),estimated_duration:true,buffer_minutes:15})):[],critical:!approximateOption}}));
+  await page.getByRole('button',{name:'Generate recovery options',exact:true}).click();
+  const recovery=page.getByRole('dialog',{name:'Recovery options',exact:true});
+  await expect(recovery).toContainText('Recovery options are currently unavailable.');
+  await expect(recovery.getByRole('button',{name:'Approve recovery',exact:true})).toBeDisabled();
+  recoveryUnavailable=false;
+  await recovery.getByRole('button',{name:'Refresh options',exact:true}).click();
+  await expect(recovery).toContainText('45 min approx. (includes 15 min buffer)');
+  await expect(recovery.getByText('Replacement Driver',{exact:true})).toHaveCount(1);
+  await expect(recovery.getByText('FIXTURE1 · Fixture Car',{exact:true})).toHaveCount(1);
+  await expect(recovery.getByRole('radio')).toHaveCount(3);
+  await recovery.getByRole('radio').nth(1).check();
+  await expect(recovery.getByRole('radio').nth(1)).toBeChecked();
+  await expect(recovery.getByRole('radio').first()).not.toBeChecked();
+  await expect(recovery.getByRole('button',{name:'Approve recovery',exact:true})).toBeEnabled();
+  approximateOption=false;
+  await recovery.getByRole('button',{name:'Refresh options',exact:true}).click();
+  await expect(recovery).toContainText('No feasible recovery options. Manual coordination is required.');
+  await recovery.getByRole('button',{name:'Close',exact:true}).click();
   await page.getByRole('button',{name:'Manage driver assignment',exact:true}).click();
   dialog=page.getByRole('dialog',{name:'Driver assignment',exact:true});
   await dialog.getByRole('button',{name:'Unassign driver',exact:true}).click();
@@ -219,7 +239,7 @@ test('patient acknowledges and cancels an upcoming trip with stale-version recov
   await expect(confirmation.getByRole('button',{name:'Reload trip',exact:true})).toBeVisible();
   await confirmation.getByRole('button',{name:'Reload trip',exact:true}).click();
   await confirmation.getByRole('button',{name:'Acknowledge trip',exact:true}).click();
-  await expect(details).toContainText('Trip acknowledged by patient.');
+  await expect(details).toContainText('Trip acknowledged.');
   await details.getByRole('button',{name:'Cancel trip',exact:true}).click();
   const cancellation=page.getByRole('dialog',{name:'Cancel trip',exact:true});
   await cancellation.getByRole('button',{name:'Back',exact:true}).click();
@@ -242,7 +262,8 @@ test('driver starts a journey, explicitly shares location and completes without 
   await context.grantPermissions(['geolocation']);await context.setGeolocation({latitude:1.3,longitude:103.8,accuracy:10});
   let trip={...fixtureTrip,id:'dddddddd-dddd-4ddd-8ddd-dddddddddddd',version:3,lifecycle:'scheduled',assigned_driver_id:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',pickup_at:'2026-10-21T00:00:00Z',dropoff_at:'2026-10-21T00:30:00Z',started_at:null as string|null,completed_at:null as string|null,status:'on-track'};
   let following={...trip,id:'ffffffff-ffff-4fff-8fff-ffffffffffff',version:1,pickup_at:'2026-10-21T02:00:00Z',dropoff_at:'2026-10-21T02:30:00Z'};
-  let sharing=false;let point:unknown=null;let posts=0;
+  let sharing=false;let point:unknown=null;let posts=0;let trafficReads=0;
+  await page.route('**/api/trips/*/traffic',route=>{trafficReads++;return route.fulfill({json:{state:'current',assessment_scope:'trip-arrival',baseline_arrival_at:'2026-10-21T00:25:00Z',estimated_arrival_from:'2026-10-21T00:30:00Z',estimated_arrival_until:'2026-10-21T00:30:00Z',estimate_expires_at:'2026-10-21T00:06:00Z',incidents:[],speed_bands:[]}});});
   await page.route('**/api/auth/me',route=>route.fulfill({json:{account:{...activeAccount,role:'driver'}}}));
   await page.route('**/api/trips?*',route=>route.fulfill({json:{trips:[trip,following],total:2,page:1,pageSize:10,counts:{},next_trip:trip.lifecycle==='scheduled'?trip:following,active_trip:trip.lifecycle==='in-progress'?trip:null}}));
   await page.route('**/api/trips/*/progress',route=>route.fulfill({json:{trip,sharing,location:point}}));
@@ -266,6 +287,20 @@ test('driver starts a journey, explicitly shares location and completes without 
   await details.getByRole('button',{name:'Journey',exact:true}).click();
   await expect(details.getByRole('region',{name:'Driving route',exact:true})).toContainText('Approx. 20 min · 2.5 km');
   await expect(details.getByRole('region',{name:'Driving route map',exact:true})).toBeVisible();
+  const traffic=details.getByRole('region',{name:'Current traffic',exact:true});
+  await expect(traffic.getByText('Baseline ETA',{exact:true}).locator('..').locator('dd')).toContainText('08:25');
+  await expect(traffic.getByText('Current ETA',{exact:true}).locator('..').locator('dd')).toContainText('08:30');
+  const beforeTabSwitch=trafficReads;
+  await page.evaluate(()=>{
+    for(const state of ['hidden','visible','hidden','visible']){
+      Object.defineProperty(document,'visibilityState',{configurable:true,value:state});
+      document.dispatchEvent(new Event('visibilitychange'));
+    }
+    delete (document as unknown as {visibilityState?:string}).visibilityState;
+  });
+  await page.clock.runFor(1);
+  expect(trafficReads).toBe(beforeTabSwitch);
+  await expect(traffic.getByText('Current ETA',{exact:true}).locator('..').locator('dd')).toContainText('08:30');
   await details.getByRole('button',{name:'Start trip',exact:true}).click();
   const start=page.getByRole('dialog',{name:'Start trip',exact:true});await start.getByRole('button',{name:'Start trip',exact:true}).click();
   await expect(details.getByRole('button',{name:'Complete trip',exact:true})).toBeVisible();expect(posts).toBe(0);

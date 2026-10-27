@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { ApiError, apiGet, apiRequest } from '../lib/api';
 import { ListError, PageHeading } from '../components/DashboardUI';
-import { PersonalFields, type PersonalDetails } from '../components/PersonalFields';
+import { emptyPersonal, PersonalFields, type PersonalDetails } from '../components/PersonalFields';
 import { Toast, ToastRegion } from '../components/Toast';
 
 type Driver = PersonalDetails & { version: number };
 /** Personal account edits are independent of vehicle registration and approval. */
-export default function DriverProfile({ notify, onSessionExpired }: { notify: (message: string) => void; onSessionExpired: () => void }) {
+export default function DriverProfile({ notify, onSessionExpired,role='driver',accountId }: { notify: (message: string) => void; onSessionExpired: () => void;role?:'driver'|'caregiver';accountId?:string }) {
+  const label=role==='caregiver'?'Caregiver':'Driver';
   const [driver, setDriver] = useState<Driver | null>(null);
   const [draft, setDraft] = useState<PersonalDetails | null>(null);
   const [loading, setLoading] = useState(true);
@@ -29,27 +30,28 @@ export default function DriverProfile({ notify, onSessionExpired }: { notify: (m
   useEffect(() => {
     let active = true;
     setLoading(true); setError('');
-    apiGet<{ driver: Driver | null }>('/profiles/driver').then(result => {
+    apiGet<{ driver?: Driver | null;caregiver?:Driver|null }>(`/profiles/${role}`).then(result => {
       if (!active) return;
-      setDriver(result.driver); setDraft(result.driver); setEditing(false); setConflict(false); setSaveError('');
+      const profile=result[role]??null;
+      setDriver(profile); setDraft(profile??(role==='caregiver'?{...emptyPersonal}:null)); setEditing(!profile&&role==='caregiver'); setConflict(false); setSaveError('');
     }).catch(reason => {
       if (!active) return;
       if (reason instanceof ApiError && reason.status === 401) onSessionExpired();
-      setError('Your driver profile could not be loaded. Please try again.');
+      setError(`Your ${role} profile could not be loaded. Please try again.`);
     }).finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [attempt, onSessionExpired]);
+  }, [attempt, onSessionExpired,role]);
   function cancel() {
     if (saving) return;
     setDraft(driver); setEditing(false); setSaveError(''); setConflict(false);
   }
   async function save(event: FormEvent) {
     event.preventDefault();
-    if (!driver || !draft || !editing || saving || conflict) return;
+    if ((!driver&&role==='driver') || !draft || !editing || saving || conflict) return;
     setSaving(true); setSaveError('');
     try {
       const { full_name, phone, birth_date, gender } = draft;
-      const result = await apiRequest<Driver>('/profiles/driver', 'PATCH', { full_name, phone, birth_date, gender, version: driver.version });
+      const result = await apiRequest<Driver>(`/profiles/${role}`, 'PATCH', { full_name, phone, birth_date, gender,...(driver?{version:driver.version}:{}) });
       if (!alive.current) return;
       setDriver(result); setDraft(result); setEditing(false); notify('Profile saved.');
     } catch (reason) {
@@ -64,17 +66,17 @@ export default function DriverProfile({ notify, onSessionExpired }: { notify: (m
     } finally { if (alive.current) setSaving(false); }
   }
   return <section className="dashboard-trips patients-panel page-panel" aria-labelledby="driver-profile-title">
-    <PageHeading id="driver-profile-title" title="Account Details" eyebrow="Account Management" />
+    <PageHeading id="driver-profile-title" title="Account Details" eyebrow="Account Management" description={role==='caregiver'&&accountId?<span className="profile-id">Caregiver ID: {accountId}</span>:undefined}/>
     {loading ? <div className="account-loading patients-loading" role="status"><span className="account-spinner" aria-hidden="true" /><span>Loading...</span></div>
-      : error ? <ListError title="Driver details could not be loaded" message={error} onRetry={() => setAttempt(value => value + 1)} />
-      : driver && draft ? <form ref={form} className={`patient-profile-form${editing ? ' patient-editing' : ''}`} aria-label="Driver profile" aria-busy={saving} onSubmit={save} onKeyDown={event => { if (event.key === 'Escape' && editing && !saving) { event.preventDefault(); cancel(); } }}>
-          <div className="patient-readonly-fields panel-scroll" role="region" aria-label="Your driver details" tabIndex={0}><fieldset className="patient-form-fields" disabled={!editing || saving} aria-label="Driver personal information"><PersonalFields prefix="driver-profile" draft={draft} onChange={setDraft} /></fieldset></div>
+      : error ? <ListError title={`${label} details could not be loaded`} message={error} onRetry={() => setAttempt(value => value + 1)} />
+      : draft&&(driver||role==='caregiver') ? <form ref={form} className={`patient-profile-form${editing ? ' patient-editing' : ''}`} aria-label={`${label} profile`} aria-busy={saving} onSubmit={save} onKeyDown={event => { if (event.key === 'Escape' && editing && !saving) { event.preventDefault(); cancel(); } }}>
+          <div className="patient-readonly-fields panel-scroll" role="region" aria-label={`Your ${role} details`} tabIndex={0}><fieldset className="patient-form-fields" disabled={!editing || saving} aria-label={`${label} personal information`}><PersonalFields prefix={`${role}-profile`} draft={draft} onChange={setDraft} /></fieldset></div>
           <div className="patient-profile-actions"><div className="patient-actions">
             {editing ? <><button key="save-profile" className="patient-primary" type="submit" disabled={saving || conflict}>{saving ? 'Saving…' : 'Save profile'}</button><button type="button" disabled={saving} onClick={cancel}>Cancel</button></> : <button key="edit-profile" ref={edit} className="patient-primary" type="button" onClick={() => setEditing(true)}>Edit profile</button>}
             {conflict && <button type="button" disabled={saving} onClick={() => setAttempt(value => value + 1)}>Reload latest details</button>}
           </div></div>
         </form>
-      : <p role="status">Your driver details are unavailable. Sign in again to finish creating your account.</p>}
+      : <p role="status">Your {role} details are unavailable. Sign in again to finish creating your account.</p>}
     {saveError && <ToastRegion><Toast key={saveError} message={saveError} urgent onDismiss={() => setSaveError('')} /></ToastRegion>}
   </section>;
 }

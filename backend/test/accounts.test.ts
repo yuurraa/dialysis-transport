@@ -18,9 +18,9 @@ const gateway = {
     rpc: async (name: string, args?: Record<string, unknown>) => {
       if (dbFailure) return { data: null, error: { code: 'XX000', message: 'PRIVATE_DATABASE_DETAIL' } };
       if (name === 'current_account') return { data: current, error: null };
-      if (name === 'register_account' || name === 'register_patient_account' || name === 'register_driver_account') {
+      if (name === 'register_account' || name === 'register_patient_account' || name === 'register_driver_account' || name==='register_caregiver_account') {
         if (current) return { data: null, error: { code: '23505' } };
-        current = { ...account, role: name === 'register_patient_account' ? 'patient' : name === 'register_driver_account' ? 'driver' : String(args?.requested_role), display_name: String(args?.requested_name) };
+        current = { ...account, role: name === 'register_patient_account' ? 'patient' : name === 'register_driver_account' ? 'driver' : name==='register_caregiver_account'?'caregiver':String(args?.requested_role), display_name: String(args?.requested_name) };
       }
       return { data: current, error: null };
     },
@@ -48,10 +48,16 @@ test('requires a verified session and returns persisted account separately from 
   assert.equal(result.body.account, null);
   assert.equal(result.body.role, undefined);
 });
-test('rejects coordinator, extra privilege fields and invalid registration names', async () => {
+test('registration validates public roles, privilege fields and complete personal profiles', async () => {
   for (const body of [{ role: 'coordinator', displayName: 'Someone' }, { role: 'patient', displayName: '' }, { role: 'driver', displayName: 'Test', status: 'approved' }, { role: 'caregiver', displayName: 42 }, { role: ['patient'], displayName: 'Test' }]) {
     assert.equal((await request('/register', 'POST', body)).status, 400);
   }
+  current=null;
+  const personal={full_name:profile.full_name,phone:profile.phone,birth_date:profile.birth_date,gender:profile.gender};
+  for(const details of [undefined,{...personal,role:'coordinator'},{...personal,gender:''}])assert.equal((await request('/register','POST',{role:'caregiver',displayName:'Caregiver',...(details?{profile:details}:{})})).status,400);
+  const registered=await request('/register','POST',{role:'caregiver',displayName:'Caregiver',profile:personal});
+  assert.equal(registered.status,201);assert.equal(registered.body.role,'caregiver');
+  current=null;
 });
 
 test('temporary identity-provider failures return 503 without treating the session as invalid', async () => {

@@ -530,16 +530,20 @@
 
 .signup-profile .patient-form-fields {
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr));
-  gap: 16px;
+  gap: 12px;
 }
 
 .signup-profile .patient-form-fields > .patient-field {
   justify-content: space-between;
+  gap: 6px;
 }
 
 @media (min-width: 1051px) {
   .landing-entry:has(.signup-profile) {
     max-width: 560px;
+  }
+  .entry-card-account:has(.signup-profile) {
+    padding: 24px;
   }
 }
 
@@ -560,10 +564,21 @@
 }
 
 .landing-header {
+  position: relative;
+  z-index: 1;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
+}
+
+.landing-header::before {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  inset: 0 calc(-1 * var(--page-gutter));
+  pointer-events: none;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--ui-canvas) 68%, transparent) 0%, color-mix(in srgb, var(--ui-canvas) 54%, transparent) 25%, color-mix(in srgb, var(--ui-canvas) 32%, transparent) 50%, color-mix(in srgb, var(--ui-canvas) 12%, transparent) 75%, transparent 100%);
 }
 
 .landing-page {
@@ -571,8 +586,42 @@
 }
 
 .landing-page {
-  background: var(--ui-canvas);
+  background-color: var(--ui-canvas);
   color: var(--ui-text);
+}
+
+.landing-page {
+  --landing-photo-left: 42%;
+  --landing-photo-right: 42%;
+  --landing-photo-bottom: 36%;
+  --landing-photo-wash: linear-gradient(90deg, color-mix(in srgb, var(--ui-canvas) var(--landing-photo-left), transparent), color-mix(in srgb, var(--ui-canvas) var(--landing-photo-right), transparent));
+  background-image:
+    var(--landing-photo-wash),
+    linear-gradient(0deg, color-mix(in srgb, var(--ui-canvas) var(--landing-photo-bottom), transparent), transparent 55%),
+    url('/images/transport-sunset.jpg');
+  background-position: center 64%;
+  background-size: cover;
+  background-repeat: no-repeat;
+}
+
+:root[data-theme=dark] .landing-page {
+  --landing-photo-left: 80%;
+  --landing-photo-right: 44%;
+  --landing-photo-bottom: 78%;
+  --landing-photo-wash: linear-gradient(90deg, color-mix(in srgb, var(--ui-canvas) var(--landing-photo-left), transparent), color-mix(in srgb, var(--ui-canvas) var(--landing-photo-right), transparent));
+}
+
+@media (max-width: 700px) {
+  .landing-page {
+    background-position: 56% center;
+    --landing-photo-left: 42%;
+    --landing-photo-right: 42%;
+  }
+
+  :root[data-theme=dark] .landing-page {
+    --landing-photo-left: 80%;
+    --landing-photo-right: 64%;
+  }
 }
 
 .landing-brand {
@@ -617,6 +666,20 @@
   font-size: .875rem;
   letter-spacing: 0;
   text-transform: none;
+}
+
+:root:not([data-theme=dark]) .landing-intro {
+  color: #171411;
+}
+
+:root:not([data-theme=dark]) .landing-intro h1 span {
+  color: #501C32;
+}
+
+:root:not([data-theme=dark]) .landing-description,
+:root:not([data-theme=dark]) .journey-detail,
+:root:not([data-theme=dark]) .landing-footer {
+  color: #211B17;
 }
 
 .entry-card {
@@ -744,3 +807,8 @@
     padding: 24px 20px;
   }
 }
+.landing-content:has(.signup-profile) { padding-block: 20px; }
+.signup-form.signup-profile { gap: 16px; }
+.signup-profile .patient-form-fields :is(input, select) { min-height: 44px; padding: 8px 12px; }
+.signup-profile .patient-form-fields textarea { min-height: 72px; height: 72px; padding: 8px 12px; resize: vertical; }
+.signup-profile .signup-actions button { min-height: 44px; padding: 8px 12px; }

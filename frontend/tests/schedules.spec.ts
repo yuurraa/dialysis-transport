@@ -4,7 +4,8 @@ test.beforeEach(mockServices);
 
 test('patient confirms schedule creation, can go back, and retains details on failure', async ({ page }) => {
   await seedSession(page);
-  await page.route('**/api/auth/me', route => route.fulfill({ json: { account: { ...activeAccount, role: 'patient', profile_complete: true } } }));
+  let role='patient';
+  await page.route('**/api/auth/me', route => route.fulfill({ json: { account: { ...activeAccount, role, profile_complete: true } } }));
   const centre = { id: '77777777-7777-4777-8777-777777777777', name: 'Test Centre', address: 'Test street', postal_code: '560123' };
   let saved: Record<string, unknown>[] = []; let fail = true; let submissions = 0;
   await page.route('**/api/schedules**', route => {
@@ -39,6 +40,25 @@ test('patient confirms schedule creation, can go back, and retains details on fa
   await expect(confirmation).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'View schedule details', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Edit Schedule', exact: true })).toHaveCount(0);
+  role='caregiver';
+  let linked=true;
+  await page.route('**/api/profiles/caregiver-links',route=>route.fulfill({json:{links:linked?[{patient_id:session.user.id,patient_name:'Test Patient',active:true}]:[]}}));
+  await page.reload();
+  await expect(page).toHaveURL(/\/dashboard\/schedules$/);
+  await expect(page.getByRole('navigation',{name:'Dashboard'}).first().getByRole('link',{name:'Schedules',exact:true})).toBeVisible();
+  await expect(page.getByRole('button',{name:'Generate Trips',exact:true})).toHaveCount(0);
+  await page.getByRole('button',{name:'Add Schedule',exact:true}).click();
+  await expect(page.getByLabel('Patient',{exact:true})).toBeVisible();
+  await page.getByRole('button',{name:'Cancel',exact:true}).click();
+  linked=false;await page.reload();
+  await expect(page.getByRole('heading',{name:'No linked patients',exact:true})).toBeVisible();
+  await page.getByRole('button',{name:'Link a patient',exact:true}).click();
+  await expect(page).toHaveURL(/\/dashboard\/connections$/);
+  await expect(page.locator('.connections-add-action')).toContainText('0/5 patients linked');
+  await page.route('**/api/profiles/caregiver-links',route=>route.fulfill({json:{links:Array.from({length:5},(_,index)=>({id:`fixture-link-${index}`,patient_id:`fixture-patient-${index}`,patient_name:`Fixture Patient ${index}`,caregiver_id:activeAccount.id,active:true,authorised_at:'2026-10-27T00:00:00Z'}))}}));
+  await page.reload();
+  await expect(page.locator('.connections-add-action')).toContainText('5/5 patients linked');
+  await expect(page.getByRole('button',{name:'Link patient',exact:true})).toBeDisabled();
 });
 
 test('coordinator opts into automatic generation per schedule and reloads stale settings', async ({ page }) => {

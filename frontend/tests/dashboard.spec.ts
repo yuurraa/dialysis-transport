@@ -29,6 +29,8 @@ test('mobile navigation traps focus, supports dismissal and opens protected page
   await page.keyboard.press('Tab');
   await expect(drawer.getByRole('link', { name: 'Patients', exact: true })).toBeFocused();
   await page.keyboard.press('Tab');
+  await expect(drawer.getByRole('link', { name: 'Caregivers', exact: true })).toBeFocused();
+  await page.keyboard.press('Tab');
   await expect(drawer.getByRole('link', { name: 'Drivers', exact: true })).toBeFocused();
   await page.keyboard.press('Tab');
   await expect(drawer.getByRole('button', { name: 'Close navigation' })).toBeFocused();

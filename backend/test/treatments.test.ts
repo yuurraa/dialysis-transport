@@ -15,18 +15,26 @@ test('treatment input rejects malformed, conflicting and ownership fields', () =
   assert.deepEqual(treatmentInput(details).days,[1]);
   for (const body of [null, {}, { ...details, days: [] }, { ...details, days: [1,3] }, { ...details, days: [1,1] }, { ...details, days: [8] }, { ...details, end_time: '08:00' }, { ...details, start_time: '24:00' }, { ...details, effective_from: '2026-02-30' }, { ...details, effective_to: '2025-01-01' }, { ...details, patient_id: 'other' }, { ...details, effective_from:'2026-10-20',effective_to:'2026-10-20' }]) assert.throws(() => treatmentInput(body));
 });
-test('treatment service rejects missing authentication, caregivers, drivers and coordinator writes', async () => {
+test('treatment service rejects missing authentication, drivers and coordinator writes while accepting scoped caregiver requests', async () => {
   let role = 'driver'; let status = 'active';
   const auth = { verifyIdentity: async () => ({ account: { id: 'fixture', role, status } }) } as unknown as AuthService;
   const database = { forUser: () => { throw new Error('unauthorised database access'); } } as unknown as SupabaseService;
   const service = new SchedulingService(auth,database);
   await assert.rejects(service.treatments(),/Sign-in required/);
-  for (const denied of ['driver','caregiver']) { role=denied; await assert.rejects(service.treatments('Bearer fixture'),/access denied/); }
+  role='driver';await assert.rejects(service.treatments('Bearer fixture'),/access denied/);
   role='coordinator'; await assert.rejects(service.saveTreatment('Bearer fixture',details),/access denied/);
   role='patient'; status='inactive'; await assert.rejects(service.saveTreatment('Bearer fixture',details),/access denied/);
   status='active';
   await assert.rejects(service.saveTreatment('Bearer fixture', { ...details, version: 1 }, details.centre_id), /coordinator approval/);
   await assert.rejects(service.deleteTreatment('Bearer fixture', details.centre_id, { version: 1 }), /coordinator approval/);
+  role='caregiver';
+  const calls:unknown[]=[];
+  const scoped=new SchedulingService(auth,{forUser:()=>({rpc:async(name:string)=>({data:{schedules:[]},error:null}),from:()=>({insert:(value:unknown)=>{calls.push(value);return {select:()=>({maybeSingle:async()=>({data:{id:details.centre_id},error:null})})};}})})} as unknown as SupabaseService);
+  await scoped.treatments('Bearer fixture');
+  await assert.rejects(scoped.saveTreatment('Bearer fixture',details),/linked patient/);
+  await scoped.saveTreatment('Bearer fixture',{...details,patient_id:details.centre_id});
+  assert.equal((calls[0] as {patient_id:string}).patient_id,details.centre_id);
+  await assert.rejects(scoped.saveTreatment('Bearer fixture',{...details,patient_id:details.centre_id},details.centre_id),/coordinator approval/);
 });
 
 test('trip generation permits only bounded versioned coordinator commands and maps database failures', async context => {
@@ -124,15 +132,17 @@ test('trip commands enforce role boundaries and validate identifiers, pickup ins
   const id=details.centre_id;
   const pickup=new Date(Math.ceil((Date.now()+86400000)/60000)*60000).toISOString();
   const body={driver_id:id,pickup_at:pickup,version:1};
-  for(const other of ['patient','driver','caregiver']) {role=other;await assert.rejects(service.assignmentOptions('Bearer fixture',id,pickup),/access denied/);await assert.rejects(service.assignTrip('Bearer fixture',id,body),/access denied/);await assert.rejects(service.unassignTrip('Bearer fixture',id,{version:1}),/access denied/);}
+  for(const other of ['patient','driver','caregiver']) {role=other;await assert.rejects(service.assignmentOptions('Bearer fixture',id,pickup),/access denied/);await assert.rejects(service.assignTrip('Bearer fixture',id,body),/access denied/);await assert.rejects(service.unassignTrip('Bearer fixture',id,{version:1}),/access denied/);await assert.rejects(service.assessRecovery('Bearer fixture',id,{version:1}),/access denied/);await assert.rejects(service.approveRecovery('Bearer fixture',id,{version:1,option_id:id}),/access denied/);}
   role='coordinator';
+  for(const invalid of [null,{}, {version:0},{version:1,driver_id:id},{version:1,handover_origin:''},{version:1,handover_origin:null},{version:1,handover_origin:'a'.repeat(501)},{version:1,handover_origin:'bad\naddress'}])await assert.rejects(service.assessRecovery('Bearer fixture',id,invalid));
+  for(const invalid of [null,{}, {version:1,option_id:'bad'},{version:0,option_id:id},{version:1,option_id:id,driver_id:id},{version:1,option_id:id,safe_pickup_confirmed:'true'}])await assert.rejects(service.approveRecovery('Bearer fixture',id,invalid));
   for(const invalid of [null,{}, {...body,driver_id:'bad'}, {...body,pickup_at:'tomorrow'}, {...body,pickup_at:'2020-01-01T00:00:00.000Z'}, {...body,version:0}, {...body,version:1.5}, {...body,vehicle_id:id}]) await assert.rejects(service.assignTrip('Bearer fixture',id,invalid));
   assert.equal(calls.length,0);
   await service.assignmentOptions('Bearer fixture',id,pickup);await service.assignTrip('Bearer fixture',id,body);await service.unassignTrip('Bearer fixture',id,{version:2});
   assert.deepEqual(calls,[['trip_assignment_options',{target:id,starts:pickup}],['assign_trip',{target:id,driver:id,starts:pickup,expected_version:1}],['unassign_trip',{target:id,expected_version:2}]]);
   code='40001';await assert.rejects(service.assignTrip('Bearer fixture',id,body),/changed/);
   role='driver';code=undefined;await service.listTrips('Bearer fixture');assert.equal(calls.at(-1)?.[0],'list_trips');
-  for (const other of ['driver','coordinator','caregiver']) {
+  for (const other of ['driver','coordinator']) {
     role=other;
     await assert.rejects(service.confirmTrip('Bearer fixture',id,{version:1}),/access denied/);
     await assert.rejects(service.cancelTrip('Bearer fixture',id,{version:1}),/access denied/);
@@ -145,6 +155,7 @@ test('trip commands enforce role boundaries and validate identifiers, pickup ins
   }
   await service.confirmTrip('Bearer fixture',id,{version:3});await service.cancelTrip('Bearer fixture',id,{version:4});
   assert.deepEqual(calls.slice(-2),[['confirm_trip',{target:id,expected_version:3}],['cancel_trip',{target:id,expected_version:4}]]);
+  role='caregiver';await service.confirmTrip('Bearer fixture',id,{version:3});await service.cancelTrip('Bearer fixture',id,{version:4});role='patient';
   code='40001';await assert.rejects(service.cancelTrip('Bearer fixture',id,{version:4}),/changed/);
   code=undefined;
   for(const other of ['patient','coordinator','caregiver']) {role=other;await assert.rejects(service.reportUnavailability('Bearer fixture',id,{version:4}),/access denied/);}
@@ -156,6 +167,11 @@ test('trip commands enforce role boundaries and validate identifiers, pickup ins
   for(const body of [null,{}, {sharing_id:id,latitude:91,longitude:103.8,accuracy_metres:10,recorded_at:new Date().toISOString()},{sharing_id:id,latitude:1.3,longitude:103.8,accuracy_metres:-1,recorded_at:new Date().toISOString()}])await assert.rejects(service.updateLocation('Bearer fixture',id,body));
   await service.clearLocation('Bearer fixture',id,{sharing_id:id});
   assert.deepEqual(calls.at(-1),['clear_trip_location',{target:id,session_id:id}]);
+  role='caregiver';await service.deleteReadNotifications('Bearer fixture',{});assert.equal(calls.at(-1)?.[0],'delete_read_trip_notifications');
+  role='patient';await assert.rejects(service.deleteReadNotifications(undefined,{}),/Sign-in/);
+  for(const input of [null,[],{recipient_id:id}])await assert.rejects(service.deleteReadNotifications('Bearer fixture',input));
+  await service.deleteReadNotifications('Bearer fixture',{});
+  assert.equal(calls.at(-1)?.[0],'delete_read_trip_notifications');assert.equal(calls.at(-1)?.[1],undefined);
 
 
 

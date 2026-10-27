@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { ApiError, apiGet, apiRequest } from '../lib/api';
 import type { Trip } from '../pages/TripsPage';
 
-interface Notification { id:string; trip_id:string; message:string; event:string; created_at:string; read_at:string|null }
+interface Notification { id:string; trip_id:string|null; notice_kind?:'trip'|'link'|'schedule'; message:string; event:string; created_at:string; read_at:string|null }
 interface Inbox { notifications:Notification[]; total:number; unread:number; page:number; pageSize:number }
 const timestamp=(value:string)=>new Intl.DateTimeFormat('en-SG',{dateStyle:'medium',timeStyle:'short',timeZone:'Asia/Singapore'}).format(new Date(value));
 const unique=(items:Notification[])=>[...new Map(items.map(item=>[item.id,item])).values()];
@@ -10,7 +10,7 @@ const unique=(items:Notification[])=>[...new Map(items.map(item=>[item.id,item])
 /** A scrollable inbox; opening a trip always rechecks current access. */
 const notificationMessage=(item:Notification)=>item.event==='confirmed'?item.message.replace(/^Pickup confirmed(?= ·|$)/,'Trip acknowledged'):item.message;
 
-export default function TripNotifications({open,onUnread,onError,onSessionExpired,onOpenTrip}:{open:boolean;onUnread:(count:number)=>void;onError:(message:string)=>void;onSessionExpired:()=>void;onOpenTrip:(trip:Trip)=>void}) {
+export default function TripNotifications({open,onUnread,onError,onSessionExpired,onOpenTrip,onOpenPage}:{open:boolean;onUnread:(count:number)=>void;onError:(message:string)=>void;onSessionExpired:()=>void;onOpenTrip:(trip:Trip)=>void;onOpenPage:(page:'connections'|'schedules')=>void}) {
   const [data,setData]=useState<Inbox|null>(null);
   const [loading,setLoading]=useState(true),[loadingMore,setLoadingMore]=useState(false);
   const [error,setError]=useState(false),[moreError,setMoreError]=useState(false),[hasMore,setHasMore]=useState(false);
@@ -19,7 +19,7 @@ export default function TripNotifications({open,onUnread,onError,onSessionExpire
   const scroll=useRef<HTMLDivElement>(null),sentinel=useRef<HTMLDivElement>(null);
   const refreshNow=useRef(()=>{});
   const openRef=useRef(open);openRef.current=open;
-  const callbacks=useRef({onUnread,onError,onSessionExpired,onOpenTrip});callbacks.current={onUnread,onError,onSessionExpired,onOpenTrip};
+  const callbacks=useRef({onUnread,onError,onSessionExpired,onOpenTrip,onOpenPage});callbacks.current={onUnread,onError,onSessionExpired,onOpenTrip,onOpenPage};
   useEffect(()=>{alive.current=true;return()=>{alive.current=false;request.current++;};},[]);
   useEffect(()=>{if(data)callbacks.current.onUnread(data.unread);},[data?.unread]);
   useEffect(()=>{
@@ -82,8 +82,12 @@ export default function TripNotifications({open,onUnread,onError,onSessionExpire
     if(busyRef.current||loading||loadingMore)return;
     busyRef.current=item.id;setBusy(item.id);request.current++;fetching.current=false;
     try {
-      const trip=await apiGet<Trip>(`/trips/${item.trip_id}`);
-      if(alive.current)callbacks.current.onOpenTrip(trip);
+      if(item.notice_kind==='link'||item.notice_kind==='schedule'){
+        if(alive.current)callbacks.current.onOpenPage(item.notice_kind==='link'?'connections':'schedules');
+      }else{
+        const trip=await apiGet<Trip>(`/trips/${item.trip_id}`);
+        if(alive.current)callbacks.current.onOpenTrip(trip);
+      }
     } catch(reason){
       if(alive.current){
         if(reason instanceof ApiError&&reason.status===401)callbacks.current.onSessionExpired();
@@ -110,6 +114,20 @@ export default function TripNotifications({open,onUnread,onError,onSessionExpire
       if(alive.current){if(reason instanceof ApiError&&reason.status===401)callbacks.current.onSessionExpired();callbacks.current.onError('Notifications could not be marked as read. Please try again.');}
     } finally {busyRef.current='';if(alive.current)setBusy('');}
   }
+  async function deleteRead(){
+    if(busyRef.current||loading||loadingMore||!data||data.total<=data.unread)return;
+    busyRef.current='delete-read';setBusy('delete-read');request.current++;fetching.current=false;
+    try{
+      const saved=await apiRequest<Inbox&{deleted:number}>('/trips/notifications/read','DELETE',{});
+      if(alive.current){
+        pages.current=1;setHasMore(saved.total>saved.pageSize);setMoreError(false);setError(false);
+        setData(saved);
+        if(scroll.current)scroll.current.scrollTop=0;
+      }
+    }catch(reason){
+      if(alive.current){if(reason instanceof ApiError&&reason.status===401)callbacks.current.onSessionExpired();callbacks.current.onError('Read notifications could not be deleted. Please try again.');}
+    }finally{busyRef.current='';if(alive.current)setBusy('');}
+  }
   if(!open)return null;
   return <>
     <h2>Notifications{data&&!error?` · ${data.unread} unread`:''}</h2>
@@ -122,6 +140,6 @@ export default function TripNotifications({open,onUnread,onError,onSessionExpire
       {moreError&&<div className="dashboard-notification-status"><button type="button" onClick={()=>void loadMore()}>Retry loading older notifications</button></div>}
       {hasMore&&<div ref={sentinel} className="trip-notification-sentinel" aria-hidden="true"/>}
     </div>
-    <footer className="trip-notification-footer"><button type="button" disabled={!!busy||loading||loadingMore||!data?.unread} onClick={()=>void markAllRead()}>{busy==='all'?'Marking all as read…':'Mark all as read'}</button></footer>
+    <footer className="trip-notification-footer"><button type="button" disabled={!!busy||loading||loadingMore||!data?.unread} onClick={()=>void markAllRead()}>Mark all as read</button><button type="button" aria-label="Delete all read notifications" title="Delete all read notifications" disabled={!!busy||loading||loadingMore||!data||data.total<=data.unread} onClick={()=>void deleteRead()}>Delete read</button></footer>
   </>;
 }

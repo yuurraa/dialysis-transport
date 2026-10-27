@@ -26,7 +26,7 @@ export function routeTraffic(route:DrivingRoute,snapshot:TrafficSnapshot) {
       const id=key(i,j),entries=roads.get(id)??[];entries.push(road);roads.set(id,entries);
     }
   }
-  let total=0,covered=0,fastest=0,slowest=0,unbounded=false;
+  let total=0,covered=0,slowSections=0,fastest=0,slowest=0,unbounded=false;
   const matches=new Map<string,RoadSpeedBand&{route_geometry:[number,number][][]}>();
   const baseline=route.distanceMetres>0?route.durationSeconds/route.distanceMetres:0;
   const routeCells=new Map<string,{a:[number,number];b:[number,number]}[]>();
@@ -58,6 +58,7 @@ export function routeTraffic(route:DrivingRoute,snapshot:TrafficSnapshot) {
       if(piece&&last&&Math.abs(last[0]-from[0])<1e-10&&Math.abs(last[1]-from[1])<1e-10)piece.push(to);
       else match.route_geometry.push([from,to]);
       covered+=metres;
+      if(best.speedBand<=3)slowSections+=metres;
       fastest+=Math.max(base,metres/Math.max(best.maximumSpeedKmh,1)*3.6);
       if(best.minimumSpeedKmh<=0)unbounded=true;
       else slowest+=Math.max(base,metres/best.minimumSpeedKmh*3.6);
@@ -73,6 +74,8 @@ export function routeTraffic(route:DrivingRoute,snapshot:TrafficSnapshot) {
   // Align geometric sampling distance to the provider's reported road distance.
   const scale=total?route.distanceMetres/total:1;
   return {incidents,speed_bands:[...matches.values()],coverage_percent:total?Math.round(covered/total*100):0,
+    coverage_fraction:total?covered/total:0,
+    slow_route_percent:total?Math.round(slowSections/total*100):0,
     minimum_seconds:Math.ceil(Math.max(route.durationSeconds,fastest*scale)),
     maximum_seconds:unbounded?null:Math.ceil(Math.max(route.durationSeconds,slowest*scale)),
     incidents_retrieved_at:snapshot.incidentsRetrievedAt,speeds_retrieved_at:snapshot.speedBandsRetrievedAt};

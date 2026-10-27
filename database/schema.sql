@@ -72,14 +72,14 @@ declare account public.accounts; verified text;
 begin
   verified := private.verified_email();
   select * into account from public.accounts where auth_user_id = (select auth.uid());
-  if found then return to_jsonb(account) || jsonb_build_object('profile_complete', case account.role when 'patient' then exists(select 1 from public.patients where account_id = account.id) when 'driver' then exists(select 1 from public.drivers where account_id = account.id) else true end, 'full_name', case when account.role = 'patient' then (select full_name from public.patients where account_id = account.id) when account.role = 'driver' then (select full_name from public.drivers where account_id = account.id) else null end); end if;
+  if found then return private.account_details(account); end if;
   -- An administrator can preconfigure coordinator emails before their first Google login.
   update public.accounts set auth_user_id = (select auth.uid())
     where email = verified and auth_user_id is null returning * into account;
-  if found then return to_jsonb(account) || jsonb_build_object('profile_complete', case account.role when 'patient' then exists(select 1 from public.patients where account_id = account.id) when 'driver' then exists(select 1 from public.drivers where account_id = account.id) else true end, 'full_name', case when account.role = 'patient' then (select full_name from public.patients where account_id = account.id) when account.role = 'driver' then (select full_name from public.drivers where account_id = account.id) else null end); end if;
+  if found then return private.account_details(account); end if;
   -- Another first-login request may have linked the same user while UPDATE waited.
   select * into account from public.accounts where auth_user_id = (select auth.uid());
-  if found then return to_jsonb(account) || jsonb_build_object('profile_complete', case account.role when 'patient' then exists(select 1 from public.patients where account_id = account.id) when 'driver' then exists(select 1 from public.drivers where account_id = account.id) else true end, 'full_name', case when account.role = 'patient' then (select full_name from public.patients where account_id = account.id) when account.role = 'driver' then (select full_name from public.drivers where account_id = account.id) else null end); end if;
+  if found then return private.account_details(account); end if;
   return null;
 end;
 $$;
@@ -96,7 +96,7 @@ begin
   if private.current_account() is not null then
     raise exception 'Account already registered.' using errcode = '23505';
   end if;
-  if requested_role in ('patient','driver') then raise exception 'Personal details are required.' using errcode = '22023'; end if;
+  if requested_role in ('patient','driver','caregiver') then raise exception 'Personal details are required.' using errcode = '22023'; end if;
   insert into public.accounts(auth_user_id, email, display_name, role, status)
     values ((select auth.uid()), verified, btrim(requested_name), requested_role, 'active')
     returning * into account;
@@ -797,15 +797,31 @@ language sql stable security definer set search_path = '' as $$
 $$;
 revoke all on function private.owns_active_patient(uuid) from public, anon;
 grant execute on function private.owns_active_patient(uuid) to authenticated;
+-- Transport authority is separate from ownership of personal profile details.
+create or replace function private.can_manage_patient_transport(target uuid) returns boolean
+language plpgsql stable security definer set search_path='' as $$
+begin
+  if private.owns_active_patient(target) then return true; end if;
+  -- The link foundation is defined later on a fresh installation.
+  if to_regprocedure('private.caregiver_can_access_patient(uuid)') is null then return false; end if;
+  return private.caregiver_can_access_patient(target);
+end;
+$$;
+create or replace function private.transport_patient_name(target uuid) returns text
+language sql stable security definer set search_path='' as $$
+  select full_name from public.patients where id=target and (private.is_coordinator() or private.can_manage_patient_transport(target));
+$$;
+revoke all on function private.can_manage_patient_transport(uuid),private.transport_patient_name(uuid) from public,anon;
+grant execute on function private.can_manage_patient_transport(uuid),private.transport_patient_name(uuid) to authenticated;
 drop policy if exists centres_read on public.dialysis_centres;
 create policy centres_read on public.dialysis_centres for select to authenticated using (
-  exists(select 1 from public.accounts where auth_user_id=(select auth.uid()) and status='active' and role in ('patient','coordinator')));
+  exists(select 1 from public.accounts where auth_user_id=(select auth.uid()) and status='active' and role in ('patient','caregiver','coordinator')));
 drop policy if exists treatment_read on public.treatment_schedules;
 create policy treatment_read on public.treatment_schedules for select to authenticated
-  using ((select private.is_coordinator()) or private.owns_active_patient(patient_id));
+  using ((select private.is_coordinator()) or private.can_manage_patient_transport(patient_id));
 drop policy if exists treatment_insert on public.treatment_schedules;
 create policy treatment_insert on public.treatment_schedules for insert to authenticated
-  with check (private.owns_active_patient(patient_id) and replaces_schedule_id is null and replaces_date is null);
+  with check (private.can_manage_patient_transport(patient_id) and replaces_schedule_id is null and replaces_date is null);
 drop policy if exists treatment_update on public.treatment_schedules;
 -- Saved schedules are read-only to clients; future approved changes use a coordinator workflow.
 
@@ -866,7 +882,7 @@ revoke all on public.treatment_change_requests from public,anon,authenticated;
 grant select on public.treatment_change_requests to authenticated;
 drop policy if exists treatment_change_read on public.treatment_change_requests;
 create policy treatment_change_read on public.treatment_change_requests for select to authenticated
-  using (private.is_coordinator() or private.owns_active_patient(patient_id));
+  using (private.is_coordinator() or private.can_manage_patient_transport(patient_id));
 
 create or replace function private.treatment_change_summary(target uuid) returns jsonb
 language sql stable security invoker set search_path='' as $$
@@ -896,10 +912,13 @@ create or replace function private.check_treatment_overlap() returns trigger
 language plpgsql security definer set search_path = '' as $$
 declare parent public.treatment_schedules;
 begin
-  if not private.owns_active_patient(new.patient_id) and not private.is_coordinator() then
+  if not private.can_manage_patient_transport(new.patient_id) and not private.is_coordinator() then
     raise exception 'Treatment access denied.' using errcode='42501';
   end if;
   perform 1 from public.patients where id=new.patient_id for update;
+  if not private.can_manage_patient_transport(new.patient_id) and not private.is_coordinator() then
+    raise exception 'Treatment access denied.' using errcode='42501';
+  end if;
   if tg_op='UPDATE' then
     new.version := old.version + 1;
     if new.kind<>old.kind then raise exception 'Schedule type cannot be changed.' using errcode='22023'; end if;
@@ -959,7 +978,7 @@ begin
     end if;
     return null;
   end if;
-  if not private.owns_active_patient(selected.patient_id) and not private.is_coordinator() then
+  if not private.can_manage_patient_transport(selected.patient_id) and not private.is_coordinator() then
     raise exception 'Treatment access denied.' using errcode='42501';
   end if;
   perform 1 from public.patients where id=selected.patient_id for update;
@@ -967,7 +986,7 @@ begin
   select * into selected from public.treatment_schedules where id=target for update;
   if not found then return null; end if;
   if selected.version <> expected_version then raise exception 'Schedule changed. Reload before deleting.' using errcode='40001'; end if;
-  if not private.owns_active_patient(selected.patient_id) and not private.is_coordinator() then
+  if not private.can_manage_patient_transport(selected.patient_id) and not private.is_coordinator() then
     raise exception 'Treatment access denied.' using errcode='42501';
   end if;
   delete from public.treatment_schedules where replaces_schedule_id=target;
@@ -997,11 +1016,11 @@ begin
   end if;
   select * into selected from public.treatment_schedules where id=target;
   if not found then return null; end if;
-  if not private.owns_active_patient(selected.patient_id) and not private.is_coordinator() then raise exception 'Treatment access denied.' using errcode='42501'; end if;
+  if not private.can_manage_patient_transport(selected.patient_id) and not private.is_coordinator() then raise exception 'Treatment access denied.' using errcode='42501'; end if;
   perform 1 from public.patients where id=selected.patient_id for update;
   select * into selected from public.treatment_schedules where id=target for update;
   if not found then return null; end if;
-  if not private.owns_active_patient(selected.patient_id) and not private.is_coordinator() then raise exception 'Treatment access denied.' using errcode='42501'; end if;
+  if not private.can_manage_patient_transport(selected.patient_id) and not private.is_coordinator() then raise exception 'Treatment access denied.' using errcode='42501'; end if;
   if selected.version<>expected_version then raise exception 'Schedule changed. Reload before saving.' using errcode='40001'; end if;
   candidate := jsonb_populate_record(selected,details);
   update public.treatment_schedules set kind=candidate.kind,centre_id=candidate.centre_id,days=candidate.days,
@@ -1044,8 +1063,8 @@ begin
     or sort_by is null or sort_by not in ('effective_from','start_time','patient_name','centre_name','kind')
     or sort_order is null or sort_order not in ('asc','desc') then raise exception 'Invalid schedule search.' using errcode='22023'; end if;
   with visible as materialized (
-    select s.*,jsonb_build_object('full_name',p.full_name) as patients,c.name as centre_name
-    from public.treatment_schedules s join public.patients p on p.id=s.patient_id join public.dialysis_centres c on c.id=s.centre_id
+    select s.*,jsonb_build_object('full_name',private.transport_patient_name(s.patient_id)) as patients,c.name as centre_name
+    from public.treatment_schedules s join public.dialysis_centres c on c.id=s.centre_id
   ), matched as materialized (
     select * from visible s where (kind_filter='all' or ('recurring'=any(string_to_array(kind_filter,',')) and s.kind='recurring')
       or ('single'=any(string_to_array(kind_filter,',')) and s.kind='single' and s.replaces_schedule_id is null)
@@ -1053,8 +1072,7 @@ begin
       and (centre_filter='all' or s.centre_id::text=centre_filter)
       and (btrim(search_text)='' or exists (
       select 1 from unnest(array[
-        case when private.is_coordinator() then s.patients->>'full_name' else '' end,
-        case when private.is_coordinator() then s.patient_id::text else '' end,
+        s.patients->>'full_name',s.patient_id::text,
         s.centre_name, (array['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'])[s.days[1]],
         s.effective_from::text,s.effective_to::text,to_char(s.effective_from,'FMDD Mon YYYY'),to_char(s.effective_to,'FMDD Mon YYYY'),
         case when s.kind='single' then 'Single Session' else 'Recurring' end,
@@ -1144,6 +1162,9 @@ alter table public.trips drop constraint if exists trips_cancelled_assignment_ch
 alter table public.trips add constraint trips_cancelled_assignment_check check (cancelled_assignment is null or (lifecycle='cancelled' and cancelled_driver_id is not null and jsonb_typeof(cancelled_assignment)='object'));
 alter table public.trips add column if not exists started_at timestamptz;
 alter table public.trips add column if not exists completed_at timestamptz;
+alter table public.trips add column if not exists first_started_at timestamptz;
+alter table public.trips add column if not exists handover_at timestamptz;
+update public.trips set first_started_at=started_at where started_at is not null and first_started_at is null;
 alter table public.trips drop constraint if exists trips_lifecycle_check;
 alter table public.trips add constraint trips_lifecycle_check check (
   (lifecycle='scheduled' and started_at is null and completed_at is null and cancelled_at is null and cancelled_by is null)
@@ -1157,12 +1178,27 @@ create or replace function private.increment_trip_version() returns trigger
 language plpgsql security definer set search_path = '' as $$
 begin
   new.version:=old.version+1;
+  new.first_started_at:=coalesce(old.first_started_at,new.started_at);
+  -- Once transport has begun, source reconciliation cannot rewrite the journey.
+  -- Only the explicit handover transition may replace its pickup and reservation.
+  if old.first_started_at is not null and not (old.lifecycle='in-progress' and new.lifecycle='scheduled' and new.handover_at is distinct from old.handover_at) and (
+    new.origin is distinct from old.origin or new.destination is distinct from old.destination
+    or new.treatment_start is distinct from old.treatment_start or new.treatment_end is distinct from old.treatment_end
+    or new.source_schedule_id is distinct from old.source_schedule_id or new.session_date is distinct from old.session_date
+    or new.deleted_at is not null or new.lifecycle='cancelled' or (old.assigned_driver_id is not null and new.assigned_driver_id is null)) then
+    raise exception 'A journey that has started requires coordinator handover recovery.' using errcode='22023';
+  end if;
   if new.lifecycle<>'cancelled' then new.cancelled_driver_id:=null; new.cancelled_assignment:=null;
   elsif old.lifecycle<>'cancelled' then
     new.cancelled_driver_id:=old.assigned_driver_id;
     new.cancelled_assignment:=old.assignment-'patient_phone'-'mobility'-'assistance_required';
   end if;
-  if new.origin is distinct from old.origin or new.destination is distinct from old.destination then new.route_snapshot:=null; new.duration_minutes:=30; end if;
+  if new.origin is distinct from old.origin or new.destination is distinct from old.destination then
+    if (old.lifecycle='in-progress' and new.lifecycle='scheduled' and new.handover_at is distinct from old.handover_at
+      and new.route_snapshot->>'origin'=new.origin and new.route_snapshot->>'destination'=new.destination) is not true then
+      new.route_snapshot:=null; new.duration_minutes:=30;
+    end if;
+  end if;
   if new.assigned_driver_id is distinct from old.assigned_driver_id then new.driver_unavailable_at:=null; end if;
   if new.assigned_driver_id is distinct from old.assigned_driver_id or new.assigned_vehicle_id is distinct from old.assigned_vehicle_id
     or new.pickup_at is distinct from old.pickup_at or new.origin is distinct from old.origin or new.destination is distinct from old.destination
@@ -1194,14 +1230,14 @@ create table if not exists public.trip_history (
 );
 create index if not exists trip_history_trip on public.trip_history(trip_id,created_at,id);
 alter table public.trip_history drop constraint if exists trip_history_event_check;
-alter table public.trip_history add constraint trip_history_event_check check (event in ('generated','refreshed','requirements_changed','deleted','restored','schedule_change_approved','assigned','unassigned','confirmed','cancelled','driver_unavailable','started','completed','traffic_risk_detected','recovery_critical','recovery_approved'));
+alter table public.trip_history add constraint trip_history_event_check check (event in ('generated','refreshed','requirements_changed','deleted','restored','schedule_change_approved','assigned','unassigned','confirmed','cancelled','driver_unavailable','started','completed','traffic_risk_detected','traffic_risk_cleared','recovery_critical','recovery_approved','handover_approved'));
 alter table public.trips enable row level security;
 alter table public.trip_history enable row level security;
 revoke all on public.trips,public.trip_history from public,anon,authenticated;
 grant select on public.trips,public.trip_history to authenticated;
 drop policy if exists trips_read on public.trips;
 create policy trips_read on public.trips for select to authenticated
-  using ((select private.is_coordinator()) or private.owns_active_patient(patient_id));
+  using ((select private.is_coordinator()) or private.can_manage_patient_transport(patient_id));
 drop policy if exists trip_history_read on public.trip_history;
 create policy trip_history_read on public.trip_history for select to authenticated
   using (exists(select 1 from public.trips t where t.id=trip_id));
@@ -1234,7 +1270,7 @@ alter table public.trips add constraint trips_driver_unavailability_check check 
 create index if not exists trips_driver_window on public.trips(assigned_driver_id,pickup_at,dropoff_at) where deleted_at is null;
 drop policy if exists trips_read on public.trips;
 create policy trips_read on public.trips for select to authenticated using (
-  (select private.is_coordinator()) or private.owns_active_patient(patient_id)
+  (select private.is_coordinator()) or private.can_manage_patient_transport(patient_id)
   or (deleted_at is null and (assigned_driver_id=(select private.driver_account_id())
     or (lifecycle='cancelled' and cancelled_driver_id=(select private.driver_account_id())))));
 
@@ -1268,20 +1304,22 @@ create index if not exists trips_cancelled_driver on public.trips(cancelled_driv
 -- Patient actions lock the same resources as assignment. RLS alone cannot authorise writes.
 create or replace function private.patient_trip_action(target uuid,expected_version integer,action text) returns jsonb
 language plpgsql security definer set search_path='' as $$
-declare chosen public.trips; actor uuid:=private.patient_account_id(); saved public.trips; cutoff timestamptz;
+declare chosen public.trips; actor uuid; saved public.trips; cutoff timestamptz;
 begin
+  select id into actor from public.accounts where auth_user_id=(select auth.uid()) and status='active' and role in ('patient','caregiver');
   if actor is null then raise exception 'Patient access required.' using errcode='42501'; end if;
   if action is null or action not in ('confirm','cancel') or expected_version is null or expected_version<1 then
     raise exception 'A valid trip action and version are required.' using errcode='22023';
   end if;
   select t.* into chosen from public.trips t where t.id=target and t.deleted_at is null
-    and exists(select 1 from public.patients p where p.id=t.patient_id and p.account_id=actor and p.status='active');
+    and private.can_manage_patient_transport(t.patient_id);
   if not found then raise exception 'Trip access denied.' using errcode='42501'; end if;
-  perform 1 from public.patients where id=chosen.patient_id and account_id=actor and status='active' for update;
+  perform 1 from public.patients where id=chosen.patient_id and status='active' for update;
   if not found then raise exception 'Trip access denied.' using errcode='42501'; end if;
   if chosen.assigned_driver_id is not null then perform 1 from public.accounts where id=chosen.assigned_driver_id for update; end if;
   select * into chosen from public.trips where id=target and deleted_at is null for update;
   if not found then raise exception 'Trip not found.' using errcode='P0002'; end if;
+  if not private.can_manage_patient_transport(chosen.patient_id) then raise exception 'Trip access denied.' using errcode='42501'; end if;
   if chosen.version<>expected_version then raise exception 'Trip changed. Reload before trying again.' using errcode='40001'; end if;
   cutoff:=coalesce(chosen.pickup_at,chosen.pickup_not_before,chosen.arrival_by-make_interval(mins=>chosen.duration_minutes));
   if action='confirm' then
@@ -1290,9 +1328,9 @@ begin
     end if;
     if chosen.confirmed_at is not null then return to_jsonb(chosen); end if;
     update public.trips set confirmed_at=now(),confirmed_by=actor,updated_at=now() where id=target returning * into saved;
-    insert into public.trip_history(trip_id,actor_id,event,details) values(target,actor,'confirmed',jsonb_build_object('pickup_at',chosen.pickup_at,'driver_id',chosen.assigned_driver_id));
+    insert into public.trip_history(trip_id,actor_id,event,details) values(target,actor,'confirmed',jsonb_build_object('pickup_at',chosen.pickup_at,'driver_id',chosen.assigned_driver_id,'actor_role',(select role from public.accounts where id=actor)));
   else
-    if chosen.lifecycle<>'scheduled' or cutoff<=now() then raise exception 'Only upcoming trips can be cancelled before pickup.' using errcode='22023'; end if;
+    if chosen.lifecycle<>'scheduled' or chosen.first_started_at is not null or cutoff<=now() then raise exception 'Only upcoming trips can be cancelled before pickup.' using errcode='22023'; end if;
     update public.trips set lifecycle='cancelled',cancelled_at=now(),cancelled_by=actor,status='resolved',
       assigned_driver_id=null,assigned_vehicle_id=null,pickup_at=null,dropoff_at=null,assignment=null,
       confirmed_at=null,confirmed_by=null,review_required=false,updated_at=now() where id=target returning * into saved;
@@ -1348,19 +1386,73 @@ create table if not exists public.trip_notifications (
   unique(recipient_id,event_id)
 );
 create index if not exists trip_notifications_recipient_date on public.trip_notifications(recipient_id,created_at desc,id);
+-- Keep one inbox for trip, relationship and shared schedule events.
+alter table public.trip_notifications alter column trip_id drop not null;
+alter table public.trip_notifications alter column event_id drop not null;
+alter table public.trip_notifications add column if not exists notice_kind text not null default 'trip';
+alter table public.trip_notifications add column if not exists patient_id uuid references public.patients(id) on delete restrict;
+alter table public.trip_notifications drop constraint if exists notification_destination;
+alter table public.trip_notifications add constraint notification_destination check (
+  (notice_kind='trip' and trip_id is not null and event_id is not null and patient_id is null)
+  or (notice_kind='link' and trip_id is null and event_id is null and patient_id is null)
+  or (notice_kind='schedule' and trip_id is null and event_id is null and patient_id is not null));
 alter table public.trip_notifications enable row level security;
 revoke all on public.trip_notifications from public,anon,authenticated;
 grant select on public.trip_notifications to authenticated;
 drop policy if exists trip_notifications_read on public.trip_notifications;
+create or replace function private.can_read_notice(recipient uuid,target uuid,patient_context uuid) returns boolean
+language sql stable security definer set search_path='' as $$
+  select exists(select 1 from public.accounts a where a.id=recipient and a.auth_user_id=(select auth.uid()) and a.status='active'
+    and (a.role<>'caregiver' or (target is null and patient_context is null)
+      or (patient_context is not null and private.can_manage_patient_transport(patient_context))
+      or exists(select 1 from public.trips t where t.id=target and t.deleted_at is null and private.can_manage_patient_transport(t.patient_id))));
+$$;
+revoke all on function private.can_read_notice(uuid,uuid,uuid) from public,anon;
+grant execute on function private.can_read_notice(uuid,uuid,uuid) to authenticated;
 create policy trip_notifications_read on public.trip_notifications for select to authenticated using (
-  recipient_id=(select id from public.accounts where auth_user_id=(select auth.uid()) and status='active')
+  private.can_read_notice(recipient_id,trip_id,patient_id)
 );
+-- Patient notices describe outcomes; operational review wording stays with staff.
+create or replace function private.patient_trip_event_label(event_name text,details jsonb) returns text
+language sql immutable set search_path='' as $$
+  select case
+    when event_name='traffic_risk_detected' then 'Your trip may be delayed'
+    when event_name='confirmed' and details->>'actor_role'='caregiver' then 'Caregiver acknowledged trip'
+    when event_name='confirmed' and details->>'actor_role'='patient' then 'Patient acknowledged trip'
+    when event_name='cancelled' and details->>'actor_role'='caregiver' then 'Caregiver cancelled trip'
+    when event_name='cancelled' and details->>'actor_role'='patient' then 'Patient cancelled trip'
+    when event_name='recovery_critical' then 'Your trip needs attention. Your coordinator is arranging transport.'
+    when event_name in ('recovery_approved','handover_approved') then case
+      when (details->>'previous_driver_id') is distinct from (details->>'driver_id') and (details->>'previous_pickup_at') is distinct from (details->>'pickup_at') then 'Your driver and pickup time have changed'
+      when (details->>'previous_driver_id') is distinct from (details->>'driver_id') then 'Your driver has changed'
+      when (details->>'previous_pickup_at') is distinct from (details->>'pickup_at') then 'Your pickup time has changed'
+      else 'Your trip details have changed' end
+  end;
+$$;
+revoke all on function private.patient_trip_event_label(text,jsonb) from public,anon,authenticated;
+create or replace function private.driver_trip_event_label(recipient uuid,event_name text,details jsonb) returns text
+language sql immutable set search_path='' as $$
+  select case
+    when event_name='assigned' then 'Trip assigned to you'
+    when event_name='unassigned' then 'Trip assignment removed'
+    when event_name='confirmed' then case when details->>'actor_role'='caregiver' then 'Caregiver acknowledged trip' else 'Patient acknowledged trip' end
+    when event_name='traffic_risk_detected' then 'Traffic may delay your trip'
+    when event_name='recovery_critical' then 'Your trip needs attention. Await coordinator instructions.'
+    when event_name in ('recovery_approved','handover_approved') then case
+      when (details->>'previous_driver_id') is distinct from (details->>'driver_id') and recipient::text=details->>'previous_driver_id' then 'Trip reassigned to another driver'
+      when (details->>'previous_driver_id') is distinct from (details->>'driver_id') and recipient::text=details->>'driver_id' then 'Trip assigned to you'
+      when (details->>'previous_pickup_at') is distinct from (details->>'pickup_at') then 'Your pickup time has changed'
+      else 'Your trip details have changed' end
+  end;
+$$;
+revoke all on function private.driver_trip_event_label(uuid,text,jsonb) from public,anon,authenticated;
 create or replace function private.deliver_trip_event() returns trigger
 language plpgsql security definer set search_path='' as $$
-declare journey public.trips; patient_account uuid; affected_driver uuid; label text;
+declare journey public.trips; patient_account uuid; affected_driver uuid; label text; action_details jsonb;
 begin
+  action_details:=new.details||jsonb_build_object('actor_role',(select role from public.accounts where id=new.actor_id));
   label:=case new.event when 'assigned' then 'Driver assigned' when 'unassigned' then 'Driver assignment removed'
-    when 'recovery_critical' then 'Trip needs urgent manual intervention' when 'recovery_approved' then 'Recovery approved' when 'traffic_risk_detected' then 'Traffic disruption requires review' when 'started' then 'Trip started' when 'completed' then 'Trip completed' when 'driver_unavailable' then 'Driver unavailable' when 'confirmed' then 'Trip acknowledged' when 'cancelled' then 'Trip cancelled'
+    when 'handover_approved' then 'Safe handover approved' when 'recovery_critical' then 'Trip needs urgent manual intervention' when 'recovery_approved' then 'Recovery approved' when 'traffic_risk_cleared' then 'Traffic concern cleared' when 'traffic_risk_detected' then 'Traffic disruption requires review' when 'started' then 'Trip started' when 'completed' then 'Trip completed' when 'driver_unavailable' then 'Driver unavailable' when 'confirmed' then 'Trip acknowledged' when 'cancelled' then 'Trip cancelled'
     when 'requirements_changed' then 'Trip requires coordinator review' when 'refreshed' then 'Trip details updated'
     when 'schedule_change_approved' then 'Schedule change approved' end;
   if label is null then return null; end if;
@@ -1369,16 +1461,45 @@ begin
   affected_driver:=coalesce((new.details->>'driver_id')::uuid,journey.assigned_driver_id);
   -- Message snapshots omit patient identity, medical details and addresses, even after access is revoked.
   insert into public.trip_notifications(recipient_id,trip_id,event_id,event,message,created_at)
-    select a.id,journey.id,new.id,new.event,label||' · '||to_char(journey.session_date,'FMDD Mon YYYY')||' · '||initcap(journey.direction),new.created_at
+    select a.id,journey.id,new.id,new.event,
+      coalesce(case when a.role='patient' then private.patient_trip_event_label(new.event,action_details)
+        when a.role='driver' then private.driver_trip_event_label(a.id,new.event,new.details) end,label)||' · '||to_char(journey.session_date,'FMDD Mon YYYY')||' · '||initcap(journey.direction),new.created_at
     from public.accounts a where a.status='active' and (a.id in (patient_account,affected_driver,(new.details->>'previous_driver_id')::uuid)
-      or (a.role='coordinator' and new.event in ('confirmed','cancelled','driver_unavailable','started','completed','traffic_risk_detected','recovery_critical','recovery_approved')))
+      or (a.role='coordinator' and new.event in ('confirmed','cancelled','driver_unavailable','started','completed','traffic_risk_detected','traffic_risk_cleared','recovery_critical','recovery_approved','handover_approved')))
+      and not (new.event in ('confirmed','cancelled') and a.id=patient_account and new.actor_id is not distinct from a.id)
+      and not (a.role='driver' and new.event in ('started','completed','driver_unavailable') and new.actor_id is not distinct from a.id)
     on conflict(recipient_id,event_id) do nothing;
+  if to_regclass('public.caregiver_links') is not null then
+    insert into public.trip_notifications(recipient_id,trip_id,event_id,event,message,created_at)
+      select a.id,journey.id,new.id,new.event,coalesce(private.patient_trip_event_label(new.event,action_details),label)||' · '||to_char(journey.session_date,'FMDD Mon YYYY')||' · '||initcap(journey.direction),new.created_at
+      from public.caregiver_links l join public.caregivers c on c.account_id=l.caregiver_id join public.accounts a on a.id=c.account_id
+      join public.patients p on p.id=l.patient_id join public.accounts pa on pa.id=p.account_id
+      where l.patient_id=journey.patient_id and l.active and a.role='caregiver' and a.status='active' and p.status='active' and pa.status='active' and pa.role='patient'
+        and not (new.event in ('confirmed','cancelled') and new.actor_id is not distinct from a.id)
+      on conflict(recipient_id,event_id) do nothing;
+  end if;
   return null;
 end;
 $$;
 revoke all on function private.deliver_trip_event() from public,anon,authenticated;
 drop trigger if exists trip_event_notification on public.trip_history;
 create trigger trip_event_notification after insert on public.trip_history for each row execute function private.deliver_trip_event();
+
+-- Apply the same patient presentation to existing inboxes without changing history/read state.
+update public.trip_notifications n set message=private.patient_trip_event_label(n.event,h.details)||coalesce(substring(n.message from ' · .*'),'')
+  from public.accounts a,public.trip_history h
+  where a.id=n.recipient_id and a.role='patient' and h.id=n.event_id
+    and n.event in ('traffic_risk_detected','recovery_critical','recovery_approved','handover_approved')
+    and n.message is distinct from private.patient_trip_event_label(n.event,h.details)||coalesce(substring(n.message from ' · .*'),'');
+delete from public.trip_notifications n using public.accounts a,public.trip_history h
+  where a.id=n.recipient_id and a.role='patient' and h.id=n.event_id and n.event='confirmed' and h.actor_id=a.id;
+update public.trip_notifications n set message=private.driver_trip_event_label(a.id,n.event,h.details)||coalesce(substring(n.message from ' · .*'),'')
+  from public.accounts a,public.trip_history h
+  where a.id=n.recipient_id and a.role='driver' and h.id=n.event_id
+    and n.event in ('assigned','unassigned','confirmed','traffic_risk_detected','recovery_critical','recovery_approved','handover_approved')
+    and n.message is distinct from private.driver_trip_event_label(a.id,n.event,h.details)||coalesce(substring(n.message from ' · .*'),'');
+delete from public.trip_notifications n using public.accounts a,public.trip_history h
+  where a.id=n.recipient_id and a.role='driver' and h.id=n.event_id and n.event in ('started','completed','driver_unavailable') and h.actor_id=a.id;
 
 create or replace function public.list_trip_notifications(page_no integer default 1) returns jsonb
 language plpgsql stable security invoker set search_path='' as $$
@@ -1398,7 +1519,7 @@ language plpgsql security definer set search_path='' as $$
 declare saved public.trip_notifications;
 begin
   update public.trip_notifications n set read_at=coalesce(n.read_at,now()) where n.id=target
-    and n.recipient_id=(select id from public.accounts where auth_user_id=(select auth.uid()) and status='active') returning * into saved;
+    and private.can_read_notice(n.recipient_id,n.trip_id,n.patient_id) returning * into saved;
   if not found then raise exception 'Notification access denied.' using errcode='42501'; end if;
   return to_jsonb(saved);
 end;
@@ -1414,11 +1535,11 @@ language plpgsql security definer set search_path='' as $$
 declare recipient uuid; marked_at timestamptz;
 begin
   select id into recipient from public.accounts where auth_user_id=(select auth.uid()) and status='active'
-    and role in ('patient','driver','coordinator') for key share;
+    and role in ('patient','caregiver','driver','coordinator') for key share;
   if not found then raise exception 'Notification access denied.' using errcode='42501'; end if;
   marked_at:=clock_timestamp();
-  update public.trip_notifications set read_at=marked_at where recipient_id=recipient and read_at is null and created_at<=marked_at;
-  return jsonb_build_object('read_at',marked_at,'unread',(select count(*) from public.trip_notifications where recipient_id=recipient and read_at is null));
+  update public.trip_notifications set read_at=marked_at where recipient_id=recipient and read_at is null and created_at<=marked_at and private.can_read_notice(recipient_id,trip_id,patient_id);
+  return jsonb_build_object('read_at',marked_at,'unread',(select count(*) from public.trip_notifications where recipient_id=recipient and read_at is null and private.can_read_notice(recipient_id,trip_id,patient_id)));
 end;
 $$;
 create or replace function public.read_all_trip_notifications() returns jsonb
@@ -1426,11 +1547,31 @@ language sql security invoker set search_path='' as $$ select private.read_all_t
 revoke all on function private.read_all_trip_notifications(),public.read_all_trip_notifications() from public,anon;
 grant execute on function private.read_all_trip_notifications(),public.read_all_trip_notifications() to authenticated;
 
+create or replace function private.delete_read_trip_notifications() returns jsonb
+language plpgsql security definer set search_path='' as $$
+declare recipient uuid; removed integer;
+begin
+  select id into recipient from public.accounts where auth_user_id=(select auth.uid()) and status='active'
+    and role in ('patient','caregiver','driver','coordinator') for key share;
+  if not found then raise exception 'Notification access denied.' using errcode='42501'; end if;
+  delete from public.trip_notifications where recipient_id=recipient and read_at is not null and private.can_read_notice(recipient_id,trip_id,patient_id);
+  get diagnostics removed=row_count;
+  return jsonb_build_object('deleted',removed,'notifications',(select coalesce(jsonb_agg(to_jsonb(n) order by n.created_at desc,n.id desc),'[]'::jsonb)
+      from (select * from public.trip_notifications where recipient_id=recipient and private.can_read_notice(recipient_id,trip_id,patient_id) order by created_at desc,id desc limit 10) n),
+    'page',1,'pageSize',10,'total',(select count(*) from public.trip_notifications where recipient_id=recipient and private.can_read_notice(recipient_id,trip_id,patient_id)),
+    'unread',(select count(*) from public.trip_notifications where recipient_id=recipient and read_at is null and private.can_read_notice(recipient_id,trip_id,patient_id)));
+end;
+$$;
+create or replace function public.delete_read_trip_notifications() returns jsonb
+language sql security invoker set search_path='' as $$ select private.delete_read_trip_notifications(); $$;
+revoke all on function private.delete_read_trip_notifications(),public.delete_read_trip_notifications() from public,anon;
+grant execute on function private.delete_read_trip_notifications(),public.delete_read_trip_notifications() to authenticated;
+
 create or replace function private.trip_history_page(target uuid,page_no integer) returns jsonb
 language plpgsql stable security definer set search_path='' as $$
 declare result jsonb;
 begin
-  if not exists(select 1 from public.trips t where t.id=target and (private.is_coordinator() or private.owns_active_patient(t.patient_id)
+  if not exists(select 1 from public.trips t where t.id=target and (private.is_coordinator() or private.can_manage_patient_transport(t.patient_id)
     or (t.deleted_at is null and (t.assigned_driver_id=private.driver_account_id()
       or (t.lifecycle='cancelled' and t.cancelled_driver_id=private.driver_account_id()))))) then raise exception 'Trip access denied.' using errcode='42501'; end if;
   if page_no is null or page_no<1 or page_no>1000000 then raise exception 'Invalid history page.' using errcode='22023'; end if;
@@ -1921,7 +2062,7 @@ begin
       ready := case when leg='return' then session_end+interval '15 minutes' end;
       select * into old_trip from public.trips where root_schedule_id=source_root and occurrence_key=key and direction=leg for update;
       if approved_change and session.actual_date>private.planning_window_end() and old_trip.id is null then skipped:=skipped+1; continue; end if;
-      if found and (old_trip.lifecycle<>'scheduled' or old_trip.treatment_start<=now()) then skipped:=skipped+1; continue; end if;
+      if found and (old_trip.lifecycle<>'scheduled' or old_trip.first_started_at is not null or old_trip.treatment_start<=now()) then skipped:=skipped+1; continue; end if;
       if found and old_trip.deleted_at is not null and not restore_deleted and not old_trip.schedule_change_cancelled then skipped:=skipped+1; continue; end if;
       if found and old_trip.deleted_at is null and not old_trip.review_required and old_trip.source_version=session.version and old_trip.patient_version=person.version
         and old_trip.source_schedule_id=session.id and old_trip.session_date=session.actual_date and old_trip.origin=origin_text and old_trip.destination=destination_text
@@ -2072,7 +2213,8 @@ create or replace function private.list_trips(page_no integer,from_date date,unt
 language plpgsql stable security invoker set search_path = '' as $$
 declare result jsonb;
 begin
-  if not private.is_coordinator() and private.patient_account_id() is null and private.driver_account_id() is null then raise exception 'Trip access denied.' using errcode='42501'; end if;
+  if not private.is_coordinator() and private.patient_account_id() is null and private.driver_account_id() is null
+    and not exists(select 1 from public.accounts where auth_user_id=(select auth.uid()) and role='caregiver' and status='active') then raise exception 'Trip access denied.' using errcode='42501'; end if;
   if page_no is null or page_no<1 or page_no>1000000 or from_date is null or not isfinite(from_date)
     or from_date<date '0001-01-01' or from_date>date '9999-12-31'
     or (until_date is not null and (not isfinite(until_date) or until_date>date '9999-12-31' or until_date<from_date))
@@ -2084,8 +2226,7 @@ begin
   with windowed as materialized (select t.*,case when t.lifecycle='cancelled' then 'cancelled' else t.status end as list_status from public.trips t where deleted_at is null and session_date>=from_date and (until_date is null or session_date<=until_date)
     and (direction_filter='all' or direction=any(string_to_array(direction_filter,',')))
     and (btrim(search_text)='' or exists(select 1 from unnest(array[
-      case when private.is_coordinator() or private.driver_account_id() is not null then patient_name else '' end,
-      case when private.is_coordinator() then patient_id::text else '' end,
+      patient_name,patient_id::text,
       origin,destination,direction,case when lifecycle='cancelled' then 'cancelled' else status end,lifecycle,case when review_required then 'Needs review' else '' end,
       case when pickup_at is null then 'Pickup pending' else '' end,
       session_date::text,to_char(session_date,'FMDD Mon YYYY'),to_char(session_date,'FMDay'),
@@ -2265,12 +2406,12 @@ language plpgsql security definer set search_path='' as $$
 declare chosen public.treatment_schedules; root public.treatment_schedules; actor uuid; saved public.treatment_change_requests;
 begin
   select * into chosen from public.treatment_schedules where id=target;
-  if not found or not private.owns_active_patient(chosen.patient_id) then raise exception 'Treatment access denied.' using errcode='42501'; end if;
+  if not found or not private.can_manage_patient_transport(chosen.patient_id) then raise exception 'Treatment access denied.' using errcode='42501'; end if;
   perform 1 from public.patients where id=chosen.patient_id for update;
   select * into root from public.treatment_schedules where id=coalesce(chosen.replaces_schedule_id,chosen.id) for update;
   select * into chosen from public.treatment_schedules where id=target for update;
   if not found then raise exception 'Treatment schedule not found.' using errcode='P0002'; end if;
-  if not private.owns_active_patient(chosen.patient_id) then raise exception 'Treatment access denied.' using errcode='42501'; end if;
+  if not private.can_manage_patient_transport(chosen.patient_id) then raise exception 'Treatment access denied.' using errcode='42501'; end if;
   if expected_version is null or expected_version<>chosen.version then raise exception 'Treatment schedule changed.' using errcode='40001'; end if;
   if reason is null or length(btrim(reason)) not between 1 and 1000 then raise exception 'A reason is required.' using errcode='22023'; end if;
   if exists(select 1 from public.treatment_change_requests where root_schedule_id=root.id and status='pending') then
@@ -2305,11 +2446,11 @@ language plpgsql security definer set search_path='' as $$
 declare saved public.treatment_change_requests;
 begin
   select * into saved from public.treatment_change_requests where id=target;
-  if not found or not private.owns_active_patient(saved.patient_id) then raise exception 'Treatment access denied.' using errcode='42501'; end if;
+  if not found or not private.can_manage_patient_transport(saved.patient_id) then raise exception 'Treatment access denied.' using errcode='42501'; end if;
   perform 1 from public.patients where id=saved.patient_id for update;
   perform 1 from public.treatment_schedules where id=saved.root_schedule_id for update;
   select * into saved from public.treatment_change_requests where id=target for update;
-  if not private.owns_active_patient(saved.patient_id) then raise exception 'Treatment access denied.' using errcode='42501'; end if;
+  if not private.can_manage_patient_transport(saved.patient_id) then raise exception 'Treatment access denied.' using errcode='42501'; end if;
   if expected_version is null or saved.version<>expected_version or saved.status<>'pending' then raise exception 'Request changed.' using errcode='40001'; end if;
   update public.treatment_change_requests set status='withdrawn',version=version+1 where id=target returning * into saved;
   return to_jsonb(saved);
@@ -2457,6 +2598,7 @@ grant execute on function private.review_treatment_change(uuid,text,text,integer
 -- Progress is explicit. One driver and one patient cannot be on two active journeys.
 create unique index if not exists trips_one_active_driver on public.trips(assigned_driver_id) where lifecycle='in-progress' and deleted_at is null;
 create unique index if not exists trips_one_active_patient on public.trips(patient_id) where lifecycle='in-progress' and deleted_at is null;
+create unique index if not exists trips_one_underway_patient on public.trips(patient_id) where first_started_at is not null and lifecycle in ('scheduled','in-progress') and deleted_at is null;
 
 create table if not exists public.trip_locations (
   trip_id uuid primary key references public.trips(id) on delete restrict,
@@ -2473,7 +2615,7 @@ grant select(trip_id,latitude,longitude,accuracy_metres,recorded_at,received_at)
 create or replace function private.can_view_trip(target uuid) returns boolean
 language sql stable security definer set search_path='' as $$
   select exists(select 1 from public.trips t where t.id=target and t.deleted_at is null and
-    (private.is_coordinator() or private.owns_active_patient(t.patient_id) or t.assigned_driver_id=private.driver_account_id()
+    (private.is_coordinator() or private.can_manage_patient_transport(t.patient_id) or t.assigned_driver_id=private.driver_account_id()
       or (t.lifecycle='cancelled' and t.cancelled_driver_id=private.driver_account_id())));
 $$;
 create or replace function private.can_track_trip(target uuid) returns boolean
@@ -2527,7 +2669,8 @@ begin
         and (p.mobility<>'wheelchair' or v.wheelchair_accessible) and v.passenger_capacity>=1) then
       raise exception 'Current driver, vehicle and patient eligibility is required.' using errcode='22023';
     end if;
-    if exists(select 1 from public.trips where lifecycle='in-progress' and deleted_at is null and (assigned_driver_id=actor or patient_id=chosen.patient_id)) then
+    if exists(select 1 from public.trips where id<>target and deleted_at is null and
+      ((lifecycle='in-progress' and assigned_driver_id=actor) or (patient_id=chosen.patient_id and (lifecycle='in-progress' or (lifecycle='scheduled' and first_started_at is not null))))) then
       raise exception 'A driver or patient already has an active trip.' using errcode='40001';
     end if;
     update public.trips set lifecycle='in-progress',started_at=now(),status=case when (direction='outbound' and now()+make_interval(mins=>duration_minutes)>arrival_by) or not private.driver_covers_window(actor,now(),now()+make_interval(mins=>duration_minutes)) then 'at-risk' else status end,updated_at=now()
@@ -2683,10 +2826,10 @@ language sql stable security definer set search_path='' as $$
 $$;
 create or replace function private.record_trip_traffic_check(target uuid,expected_version integer,assessment jsonb) returns jsonb
 language plpgsql security definer set search_path='' as $$
-declare journey public.trips; checked_at timestamptz; expires_at timestamptz; attention boolean;
+declare journey public.trips; projected public.trips; checked_at timestamptz; expires_at timestamptz; attention boolean; clear_verified boolean; recheck_at timestamptz;
 begin
   if assessment is null or jsonb_typeof(assessment)<>'object' or not assessment ?& array['assessed_at','expires_at','risk','requires_attention']
-    or exists(select 1 from jsonb_object_keys(assessment) as fields(key) where key not in ('assessed_at','expires_at','risk','requires_attention','coverage_percent','incidents_retrieved_at','speeds_retrieved_at','arrival_from','arrival_until'))
+    or exists(select 1 from jsonb_object_keys(assessment) as fields(key) where key not in ('assessed_at','expires_at','risk','requires_attention','clear_verified','coverage_percent','incidents_retrieved_at','speeds_retrieved_at','arrival_from','arrival_until'))
     or expected_version is null or expected_version<1 or jsonb_typeof(assessment->'risk')<>'string'
     or jsonb_typeof(assessment->'requires_attention')<>'boolean' or (assessment->>'risk') not in ('at-risk','possible-delay','no-delay-detected') then
     raise exception 'Invalid traffic assessment.' using errcode='22023';
@@ -2709,12 +2852,30 @@ begin
   end if;
   attention:=(assessment->>'requires_attention')::boolean;
   if attention and (assessment->>'risk')='no-delay-detected' then raise exception 'Invalid traffic risk.' using errcode='22023'; end if;
+  if assessment ? 'clear_verified' and jsonb_typeof(assessment->'clear_verified')<>'boolean' then raise exception 'Invalid traffic clearance.' using errcode='22023'; end if;
+  clear_verified:=coalesce((assessment->>'clear_verified')::boolean,false);
+  if clear_verified and (attention or assessment->>'risk'<>'no-delay-detected' or jsonb_typeof(assessment->'coverage_percent') is distinct from 'number'
+    or (assessment->>'coverage_percent')::numeric not between 90 and 100 or assessment->>'arrival_until' is null) then
+    raise exception 'Traffic clearance requires fresh covered observations.' using errcode='22023';
+  end if;
   insert into private.trip_traffic_checks(trip_id,next_check_at,assessed_at,assessment)
     values(target,now()+interval '1 minute',checked_at,assessment)
     on conflict(trip_id) do update set assessed_at=excluded.assessed_at,assessment=excluded.assessment;
   if attention and not journey.traffic_review_required then
     update public.trips set traffic_review_required=true,status='at-risk',updated_at=now() where id=target returning * into journey;
     insert into public.trip_history(trip_id,event,details) values(target,'traffic_risk_detected',jsonb_build_object('risk',assessment->>'risk','assessed_at',checked_at));
+  elsif clear_verified and journey.traffic_review_required then
+    projected:=journey; projected.traffic_review_required:=false;
+    if journey.lifecycle='in-progress' then
+      recheck_at:=clock_timestamp()+interval '1 second';
+      projected.lifecycle:='scheduled';
+      projected.duration_minutes:=greatest(5,ceil(extract(epoch from ((assessment->>'arrival_until')::timestamptz-recheck_at))/300)::integer*5);
+      projected.pickup_at:=recheck_at;
+    end if;
+    update public.trips set traffic_review_required=false,
+      status=case when private.driver_fits_trip(journey.assigned_driver_id,projected,projected.pickup_at) then 'on-track' else 'at-risk' end,
+      updated_at=now() where id=target returning * into journey;
+    insert into public.trip_history(trip_id,event,details) values(target,'traffic_risk_cleared',jsonb_build_object('assessed_at',checked_at,'coverage_percent',assessment->'coverage_percent'));
   end if;
   return jsonb_build_object('version',journey.version,'traffic_review_required',journey.traffic_review_required);
 end;
@@ -2748,10 +2909,64 @@ create table if not exists private.trip_recovery_options (
   approved_at timestamptz, approved_by uuid references public.accounts(id) on delete restrict
 );
 alter table private.trip_recovery_options enable row level security;
+alter table private.trip_recovery_options add column if not exists handover_origin text;
+alter table private.trip_recovery_options add column if not exists estimated_duration boolean not null default false;
+alter table private.trip_recovery_options add column if not exists buffer_minutes integer not null default 0;
+alter table private.trip_recovery_options drop constraint if exists recovery_duration_estimate_check;
+alter table private.trip_recovery_options add constraint recovery_duration_estimate_check check (
+  buffer_minutes between 0 and 60 and ((estimated_duration and buffer_minutes>0) or (not estimated_duration and buffer_minutes=0))
+);
 revoke all on private.trip_recovery_options from public,anon,authenticated;
 create index if not exists trip_recovery_pending on private.trip_recovery_options(trip_id,expires_at) where approved_at is null;
 
-create or replace function private.trip_recovery_candidates(target uuid,expected_version integer,reserved_minutes integer,route_blocked boolean) returns jsonb
+-- The worker only prepares proposals. These leases never authorize a booking change.
+create table if not exists private.trip_recovery_checks (
+  trip_id uuid primary key references public.trips(id) on delete cascade,
+  next_check_at timestamptz not null
+);
+alter table private.trip_recovery_checks enable row level security;
+revoke all on private.trip_recovery_checks from public,anon,authenticated;
+
+create or replace function private.claim_trip_recovery_checks() returns jsonb
+language plpgsql security definer set search_path='' as $$
+declare journey public.trips; work jsonb:='[]'::jsonb;
+begin
+  for journey in select t.* from public.trips t left join private.trip_recovery_checks c on c.trip_id=t.id
+    where t.deleted_at is null and t.lifecycle='scheduled' and t.status='at-risk'
+      and t.assigned_driver_id is not null and not t.review_required and t.pickup_at>=now()-interval '1 day'
+      and (t.pickup_at at time zone 'Asia/Singapore')::date<=private.planning_window_end()
+      and coalesce(c.next_check_at,'-infinity'::timestamptz)<=now()
+      and not exists(select 1 from private.trip_recovery_options o where o.trip_id=t.id and o.trip_version=t.version and o.approved_at is null and o.expires_at>now())
+    order by c.next_check_at nulls first,t.pickup_at,t.id limit 8 for update of t skip locked
+  loop
+    insert into private.trip_recovery_checks(trip_id,next_check_at) values(journey.id,now()+interval '2 minutes')
+      on conflict(trip_id) do update set next_check_at=excluded.next_check_at;
+    work:=work||jsonb_build_array(jsonb_build_object('id',journey.id,'version',journey.version));
+  end loop;
+  return work;
+end;
+$$;
+
+create or replace function private.pending_trip_recovery_options(target uuid,expected_version integer) returns jsonb
+language plpgsql stable security definer set search_path='' as $$
+declare journey public.trips; options jsonb;
+begin
+  select * into journey from public.trips where id=target and deleted_at is null;
+  if not found or expected_version is null or journey.version<>expected_version then raise exception 'Trip changed.' using errcode='40001'; end if;
+  if journey.lifecycle<>'scheduled' or journey.status<>'at-risk' or journey.assigned_driver_id is null or journey.review_required then return null; end if;
+  select jsonb_agg(jsonb_build_object('id',o.id,'driver_id',o.driver_id,'driver_name',d.full_name,'vehicle_id',o.vehicle_id,
+    'plate',v.plate_number,'make',v.make,'model',v.model,'pickup_at',o.pickup_at,'dropoff_at',o.pickup_at+make_interval(mins=>o.duration_minutes),
+    'duration_minutes',o.duration_minutes,'same_driver',o.driver_id=journey.assigned_driver_id,'expires_at',o.expires_at,
+    'estimated_duration',o.estimated_duration,'buffer_minutes',o.buffer_minutes)
+    order by abs(extract(epoch from (o.pickup_at-journey.pickup_at))), (o.driver_id=journey.assigned_driver_id) desc,o.pickup_at,d.full_name,o.driver_id)
+  into options from private.trip_recovery_options o join public.drivers d on d.account_id=o.driver_id join public.driver_vehicles v on v.id=o.vehicle_id
+    where o.trip_id=target and o.trip_version=expected_version and o.handover_origin is null and o.approved_at is null and o.expires_at>now();
+  if options is null then return null; end if;
+  return jsonb_build_object('trip',to_jsonb(journey),'options',options,'critical',journey.recovery_critical);
+end;
+$$;
+
+create or replace function private.recovery_candidates(target uuid,expected_version integer,reserved_minutes integer,route_blocked boolean,handover_origin text) returns jsonb
 language plpgsql stable security definer set search_path='' as $$
 declare original public.trips; projected public.trips; route jsonb; starts timestamptz; base timestamptz;
   candidate record; preceding public.trips; following public.trips; options jsonb:='[]'::jsonb; legs jsonb:='[]'::jsonb;
@@ -2759,19 +2974,23 @@ begin
   select * into original from public.trips where id=target and deleted_at is null;
   if not found then raise exception 'Trip not found.' using errcode='P0002'; end if;
   if expected_version is null or original.version<>expected_version then raise exception 'Trip changed.' using errcode='40001'; end if;
-  if original.lifecycle<>'scheduled' or original.status<>'at-risk' or original.assigned_driver_id is null or original.review_required then
-    raise exception 'Recovery requires an assigned scheduled At-Risk trip with approved source details.' using errcode='22023';
+  if original.status<>'at-risk' or original.assigned_driver_id is null or original.review_required
+    or (handover_origin is null and original.lifecycle<>'scheduled')
+    or (handover_origin is not null and (original.lifecycle<>'in-progress' or length(btrim(handover_origin)) not between 1 and 500)) then
+    raise exception 'Recovery requires an eligible At-Risk trip with approved source details.' using errcode='22023';
   end if;
-  route:=private.cached_driving_route(original.origin,original.destination);
+  route:=private.cached_driving_route(coalesce(handover_origin,original.origin),original.destination);
   if route is null then raise exception 'A verified recovery route is required.' using errcode='P0001'; end if;
   if reserved_minutes is null or reserved_minutes<greatest(5,(route->>'duration_minutes')::integer) or reserved_minutes>360 or reserved_minutes%5<>0 or route_blocked is null then
     raise exception 'Invalid recovery duration.' using errcode='22023';
   end if;
   projected:=original; projected.assigned_driver_id:=null; projected.assigned_vehicle_id:=null;
+  projected.lifecycle:='scheduled'; projected.started_at:=null; projected.origin:=coalesce(handover_origin,original.origin);
   projected.pickup_at:=null; projected.dropoff_at:=null; projected.assignment:=null;
   projected.driver_unavailable_at:=null; projected.traffic_review_required:=false; projected.recovery_critical:=false;
   projected.status:='unfilled'; projected.route_snapshot:=route; projected.duration_minutes:=reserved_minutes;
-  base:=case when original.direction='outbound' then original.pickup_at
+  base:=case when handover_origin is not null then greatest(original.pickup_not_before,date_trunc('minute',now())+interval '5 minutes')
+    when original.direction='outbound' then original.pickup_at
     else greatest(original.pickup_at,original.pickup_not_before,date_trunc('minute',now())+interval '5 minutes') end;
   if not route_blocked then
     for starts in select distinct proposed from unnest(case when original.direction='outbound'
@@ -2780,7 +2999,8 @@ begin
     loop
       for candidate in select a.id,d.full_name,d.phone,v.id as vehicle_id,v.plate_number,v.make,v.model
         from public.accounts a join public.drivers d on d.account_id=a.id join public.driver_vehicles v on v.driver_id=a.id
-        where (original.driver_unavailable_at is null or a.id<>original.assigned_driver_id)
+        where (handover_origin is null or a.id<>original.assigned_driver_id)
+          and (original.driver_unavailable_at is null or a.id<>original.assigned_driver_id)
           and private.driver_fits_trip_base(a.id,projected,starts)
       loop
         select * into preceding from public.trips where assigned_driver_id=candidate.id and id<>target and deleted_at is null and lifecycle<>'cancelled'
@@ -2806,16 +3026,26 @@ begin
 end;
 $$;
 
-create or replace function private.store_trip_recovery_options(target uuid,expected_version integer,reserved_minutes integer,route_blocked boolean) returns jsonb
+create or replace function private.trip_recovery_candidates(target uuid,expected_version integer,reserved_minutes integer,route_blocked boolean) returns jsonb
+language sql stable security definer set search_path='' as $$ select private.recovery_candidates(target,expected_version,reserved_minutes,route_blocked,null); $$;
+create or replace function private.trip_handover_candidates(target uuid,expected_version integer,reserved_minutes integer,handover_origin text) returns jsonb
+language sql stable security definer set search_path='' as $$ select private.recovery_candidates(target,expected_version,reserved_minutes,false,handover_origin); $$;
+
+create or replace function private.store_assessed_recovery_options(target uuid,expected_version integer,reserved_minutes integer,route_blocked boolean,handover_origin text,estimated_duration boolean,buffer_minutes integer) returns jsonb
 language plpgsql security definer set search_path='' as $$
-declare journey public.trips; preview jsonb; option jsonb; saved_id uuid; saved_options jsonb:='[]'::jsonb; critical boolean; leg jsonb;
+declare journey public.trips; preview jsonb; option jsonb; saved_id uuid; saved_options jsonb:='[]'::jsonb; critical boolean; leg jsonb; pending jsonb;
 begin
+  if estimated_duration is null or buffer_minutes is null or buffer_minutes not between 0 and 60
+    or (estimated_duration and buffer_minutes=0) or (not estimated_duration and buffer_minutes<>0) then raise exception 'Invalid recovery estimate.' using errcode='22023'; end if;
   select * into journey from public.trips where id=target and deleted_at is null;
   if not found then raise exception 'Trip not found.' using errcode='P0002'; end if;
   perform 1 from public.patients where id=journey.patient_id for update;
   perform 1 from public.accounts where id=journey.assigned_driver_id for key share;
   select * into journey from public.trips where id=target and deleted_at is null for update;
-  preview:=private.trip_recovery_candidates(target,expected_version,reserved_minutes,route_blocked);
+  if handover_origin is null then pending:=private.pending_trip_recovery_options(target,expected_version); end if;
+  if pending is not null then return pending; end if;
+  preview:=private.recovery_candidates(target,expected_version,reserved_minutes,route_blocked,handover_origin);
+  if reserved_minutes<(preview->'route'->>'duration_minutes')::integer+buffer_minutes then raise exception 'Recovery duration must include its planning buffer.' using errcode='22023'; end if;
   for leg in select value from jsonb_array_elements(preview->'requirements') loop
     if private.cached_driving_route(leg->>'origin',leg->>'destination') is null then raise exception 'Recovery connecting routes are unavailable.' using errcode='P0001'; end if;
   end loop;
@@ -2826,18 +3056,55 @@ begin
   end if;
   delete from private.trip_recovery_options where trip_id=target and approved_at is null;
   for option in select value from jsonb_array_elements(preview->'options') loop
-    insert into private.trip_recovery_options(trip_id,trip_version,driver_id,vehicle_id,pickup_at,duration_minutes,route,expires_at)
-      values(target,journey.version,(option->>'driver_id')::uuid,(option->>'vehicle_id')::uuid,(option->>'pickup_at')::timestamptz,reserved_minutes,preview->'route',now()+interval '1 minute') returning id into saved_id;
-    saved_options:=saved_options||jsonb_build_array(option||jsonb_build_object('id',saved_id,'expires_at',now()+interval '1 minute'));
+    insert into private.trip_recovery_options(trip_id,trip_version,driver_id,vehicle_id,pickup_at,duration_minutes,route,expires_at,handover_origin,estimated_duration,buffer_minutes)
+      values(target,journey.version,(option->>'driver_id')::uuid,(option->>'vehicle_id')::uuid,(option->>'pickup_at')::timestamptz,reserved_minutes,preview->'route',now()+interval '1 minute',handover_origin,estimated_duration,buffer_minutes) returning id into saved_id;
+    saved_options:=saved_options||jsonb_build_array(option||jsonb_build_object('id',saved_id,'expires_at',now()+interval '1 minute','estimated_duration',estimated_duration,'buffer_minutes',buffer_minutes));
   end loop;
-  return jsonb_build_object('trip',to_jsonb(journey),'options',saved_options,'critical',critical);
+  return jsonb_build_object('trip',to_jsonb(journey),'options',saved_options,'critical',critical,'handover_origin',handover_origin);
 end;
 $$;
+create or replace function private.store_recovery_options(target uuid,expected_version integer,reserved_minutes integer,route_blocked boolean,handover_origin text) returns jsonb
+language sql security definer set search_path='' as $$ select private.store_assessed_recovery_options(target,expected_version,reserved_minutes,route_blocked,handover_origin,false,0); $$;
+create or replace function public.store_assessed_trip_recovery_options(target uuid,expected_version integer,reserved_minutes integer,route_blocked boolean,handover_origin text,estimated_duration boolean,buffer_minutes integer) returns jsonb
+language sql security invoker set search_path='' as $$ select private.store_assessed_recovery_options(target,expected_version,reserved_minutes,route_blocked,handover_origin,estimated_duration,buffer_minutes); $$;
+revoke all on function private.store_assessed_recovery_options(uuid,integer,integer,boolean,text,boolean,integer),public.store_assessed_trip_recovery_options(uuid,integer,integer,boolean,text,boolean,integer) from public,anon,authenticated;
+create or replace function private.store_trip_recovery_options(target uuid,expected_version integer,reserved_minutes integer,route_blocked boolean) returns jsonb
+language sql security definer set search_path='' as $$ select private.store_recovery_options(target,expected_version,reserved_minutes,route_blocked,null); $$;
+create or replace function private.store_trip_handover_options(target uuid,expected_version integer,reserved_minutes integer,handover_origin text) returns jsonb
+language sql security definer set search_path='' as $$ select private.store_recovery_options(target,expected_version,reserved_minutes,false,handover_origin); $$;
 
 create or replace function private.trip_recovery_option(proposal uuid) returns jsonb
 language sql stable security definer set search_path='' as $$
   select jsonb_build_object('option',to_jsonb(o),'trip',to_jsonb(t)) from private.trip_recovery_options o join public.trips t on t.id=o.trip_id
     where o.id=proposal and o.approved_at is null and o.expires_at>now() and t.deleted_at is null and t.version=o.trip_version;
+$$;
+-- Validate the saved time, not a newly generated grid that moves every minute.
+create or replace function private.trip_recovery_validation(proposal uuid) returns jsonb
+language plpgsql stable security definer set search_path='' as $$
+declare option private.trip_recovery_options; journey public.trips; projected public.trips; preceding public.trips; following public.trips; legs jsonb:='[]'::jsonb;
+begin
+  select * into option from private.trip_recovery_options where id=proposal and approved_at is null and expires_at>now();
+  if not found then raise exception 'Recovery option changed.' using errcode='40001'; end if;
+  select * into journey from public.trips where id=option.trip_id and deleted_at is null;
+  if not found or journey.version<>option.trip_version or journey.status<>'at-risk' or journey.review_required or journey.assigned_driver_id is null
+    or (option.handover_origin is null and journey.lifecycle<>'scheduled')
+    or (option.handover_origin is not null and (journey.lifecycle<>'in-progress' or option.driver_id=journey.assigned_driver_id))
+    or (journey.driver_unavailable_at is not null and option.driver_id=journey.assigned_driver_id) then
+    raise exception 'Recovery option changed.' using errcode='40001';
+  end if;
+  projected:=journey; projected.lifecycle:='scheduled'; projected.started_at:=null;
+  projected.origin:=coalesce(option.handover_origin,journey.origin); projected.route_snapshot:=private.cached_driving_route(projected.origin,journey.destination);
+  projected.duration_minutes:=option.duration_minutes; projected.assigned_driver_id:=null; projected.assigned_vehicle_id:=null;
+  projected.assignment:=null; projected.pickup_at:=null; projected.dropoff_at:=null; projected.driver_unavailable_at:=null;
+  projected.traffic_review_required:=false; projected.recovery_critical:=false; projected.status:='unfilled';
+  select * into preceding from public.trips where assigned_driver_id=option.driver_id and id<>journey.id and deleted_at is null and lifecycle<>'cancelled'
+    and private.effective_trip_end(trips)<=option.pickup_at order by private.effective_trip_end(trips) desc,id limit 1;
+  if preceding.id is not null and preceding.destination<>projected.origin then legs:=legs||jsonb_build_array(jsonb_build_object('origin',preceding.destination,'destination',projected.origin)); end if;
+  select * into following from public.trips where assigned_driver_id=option.driver_id and id<>journey.id and deleted_at is null and lifecycle<>'cancelled'
+    and pickup_at>=option.pickup_at+make_interval(mins=>option.duration_minutes) order by pickup_at,id limit 1;
+  if following.id is not null and following.origin<>projected.destination then legs:=legs||jsonb_build_array(jsonb_build_object('origin',projected.destination,'destination',following.origin)); end if;
+  return jsonb_build_object('requirements',legs,'feasible',private.driver_fits_trip(option.driver_id,projected,option.pickup_at));
+end;
 $$;
 create or replace function private.attest_trip_recovery_option(proposal uuid,valid_until timestamptz) returns void
 language plpgsql security definer set search_path='' as $$
@@ -2851,7 +3118,7 @@ begin
 end;
 $$;
 
-create or replace function private.approve_trip_recovery(proposal uuid,expected_version integer) returns jsonb
+create or replace function private.approve_recovery_action(proposal uuid,expected_version integer,safe_pickup_confirmed boolean) returns jsonb
 language plpgsql security definer set search_path='' as $$
 declare option private.trip_recovery_options; chosen public.trips; projected public.trips; saved public.trips; route jsonb; snapshot jsonb; actor uuid; fresh timestamptz;
 begin
@@ -2875,13 +3142,16 @@ begin
     or option.validation_expires_at<=fresh or option.pickup_at<=fresh then
     raise exception 'Recovery option changed or expired. Reassess before approval.' using errcode='40001';
   end if;
-  if chosen.lifecycle<>'scheduled' or chosen.status<>'at-risk' or chosen.assigned_driver_id is null or chosen.review_required
+  if (option.handover_origin is null and chosen.lifecycle<>'scheduled')
+    or (option.handover_origin is not null and (chosen.lifecycle<>'in-progress' or safe_pickup_confirmed is distinct from true or chosen.assigned_driver_id=option.driver_id))
+    or chosen.status<>'at-risk' or chosen.assigned_driver_id is null or chosen.review_required
     or (chosen.driver_unavailable_at is not null and chosen.assigned_driver_id=option.driver_id) then raise exception 'Recovery is no longer eligible.' using errcode='40001'; end if;
-  route:=private.cached_driving_route(chosen.origin,chosen.destination);
+  route:=private.cached_driving_route(coalesce(option.handover_origin,chosen.origin),chosen.destination);
   if route is null or route->'geometry' is distinct from option.route->'geometry' or (route->>'duration_minutes')::integer>option.duration_minutes then
     raise exception 'Recovery route changed. Reassess before approval.' using errcode='40001';
   end if;
   projected:=chosen; projected.assigned_driver_id:=null; projected.assigned_vehicle_id:=null; projected.assignment:=null;
+  projected.lifecycle:='scheduled'; projected.started_at:=null; projected.origin:=coalesce(option.handover_origin,chosen.origin);
   projected.pickup_at:=null; projected.dropoff_at:=null; projected.driver_unavailable_at:=null;
   projected.traffic_review_required:=false; projected.recovery_critical:=false; projected.status:='unfilled';
   projected.duration_minutes:=option.duration_minutes; projected.route_snapshot:=route;
@@ -2893,34 +3163,442 @@ begin
     'passenger_capacity',v.passenger_capacity,'wheelchair_accessible',v.wheelchair_accessible,'patient_phone',p.phone,'mobility',p.mobility,'assistance_required',p.assistance_required) into snapshot
     from public.drivers d join public.driver_vehicles v on v.driver_id=d.account_id cross join public.patients p where d.account_id=option.driver_id and p.id=chosen.patient_id;
   update public.trips set assigned_driver_id=option.driver_id,assigned_vehicle_id=option.vehicle_id,assignment=snapshot,
+    origin=projected.origin,lifecycle='scheduled',started_at=null,
+    handover_at=case when option.handover_origin is not null then clock_timestamp() else handover_at end,
     pickup_at=option.pickup_at,dropoff_at=option.pickup_at+make_interval(mins=>option.duration_minutes),duration_minutes=option.duration_minutes,
     route_snapshot=route,driver_unavailable_at=null,traffic_review_required=false,recovery_critical=false,confirmed_at=null,confirmed_by=null,status='on-track',updated_at=now()
     where id=chosen.id returning * into saved;
   update private.trip_recovery_options set approved_at=now(),approved_by=actor where id=proposal;
-  insert into public.trip_history(trip_id,actor_id,event,details) values(chosen.id,actor,'recovery_approved',jsonb_build_object('proposal_id',proposal,
-    'previous_driver_id',chosen.assigned_driver_id,'driver_id',saved.assigned_driver_id,'previous_pickup_at',chosen.pickup_at,'pickup_at',saved.pickup_at));
+  insert into public.trip_history(trip_id,actor_id,event,details) values(chosen.id,actor,case when option.handover_origin is not null then 'handover_approved' else 'recovery_approved' end,jsonb_build_object('proposal_id',proposal,
+    'previous_driver_id',chosen.assigned_driver_id,'driver_id',saved.assigned_driver_id,'previous_pickup_at',chosen.pickup_at,'pickup_at',saved.pickup_at,
+    'handover_origin',option.handover_origin,'estimated_duration',option.estimated_duration,'buffer_minutes',option.buffer_minutes,
+    'previous_origin',chosen.origin,'previous_started_at',chosen.started_at,'previous_route',chosen.route_snapshot,'previous_assignment',chosen.assignment));
   return to_jsonb(saved);
 end;
 $$;
+create or replace function private.approve_trip_recovery(proposal uuid,expected_version integer) returns jsonb
+language sql security definer set search_path='' as $$ select private.approve_recovery_action(proposal,expected_version,false); $$;
+create or replace function private.approve_trip_handover(proposal uuid,expected_version integer,safe_pickup_confirmed boolean) returns jsonb
+language sql security definer set search_path='' as $$ select private.approve_recovery_action(proposal,expected_version,safe_pickup_confirmed); $$;
 
 create or replace function public.trip_recovery_candidates(target uuid,expected_version integer,reserved_minutes integer,route_blocked boolean) returns jsonb
 language sql stable security invoker set search_path='' as $$ select private.trip_recovery_candidates(target,expected_version,reserved_minutes,route_blocked); $$;
+create or replace function public.claim_trip_recovery_checks() returns jsonb
+language sql security invoker set search_path='' as $$ select private.claim_trip_recovery_checks(); $$;
+create or replace function public.pending_trip_recovery_options(target uuid,expected_version integer) returns jsonb
+language sql stable security invoker set search_path='' as $$ select private.pending_trip_recovery_options(target,expected_version); $$;
+revoke all on function private.claim_trip_recovery_checks(),public.claim_trip_recovery_checks(),private.pending_trip_recovery_options(uuid,integer),public.pending_trip_recovery_options(uuid,integer) from public,anon,authenticated;
 create or replace function public.store_trip_recovery_options(target uuid,expected_version integer,reserved_minutes integer,route_blocked boolean) returns jsonb
 language sql security invoker set search_path='' as $$ select private.store_trip_recovery_options(target,expected_version,reserved_minutes,route_blocked); $$;
 create or replace function public.trip_recovery_option(proposal uuid) returns jsonb
 language sql stable security invoker set search_path='' as $$ select private.trip_recovery_option(proposal); $$;
+create or replace function public.trip_recovery_validation(proposal uuid) returns jsonb
+language sql stable security invoker set search_path='' as $$ select private.trip_recovery_validation(proposal); $$;
+revoke all on function private.trip_recovery_validation(uuid),public.trip_recovery_validation(uuid) from public,anon,authenticated;
 create or replace function public.attest_trip_recovery_option(proposal uuid,valid_until timestamptz) returns void
 language sql security invoker set search_path='' as $$ select private.attest_trip_recovery_option(proposal,valid_until); $$;
 create or replace function public.approve_trip_recovery(proposal uuid,expected_version integer) returns jsonb
 language sql security invoker set search_path='' as $$ select private.approve_trip_recovery(proposal,expected_version); $$;
+create or replace function public.trip_handover_candidates(target uuid,expected_version integer,reserved_minutes integer,handover_origin text) returns jsonb
+language sql stable security invoker set search_path='' as $$ select private.trip_handover_candidates(target,expected_version,reserved_minutes,handover_origin); $$;
+create or replace function public.store_trip_handover_options(target uuid,expected_version integer,reserved_minutes integer,handover_origin text) returns jsonb
+language sql security invoker set search_path='' as $$ select private.store_trip_handover_options(target,expected_version,reserved_minutes,handover_origin); $$;
+create or replace function public.approve_trip_handover(proposal uuid,expected_version integer,safe_pickup_confirmed boolean) returns jsonb
+language sql security invoker set search_path='' as $$ select private.approve_trip_handover(proposal,expected_version,safe_pickup_confirmed); $$;
+revoke all on function private.recovery_candidates(uuid,integer,integer,boolean,text),private.store_recovery_options(uuid,integer,integer,boolean,text),private.approve_recovery_action(uuid,integer,boolean),private.trip_handover_candidates(uuid,integer,integer,text),public.trip_handover_candidates(uuid,integer,integer,text),private.store_trip_handover_options(uuid,integer,integer,text),public.store_trip_handover_options(uuid,integer,integer,text),private.approve_trip_handover(uuid,integer,boolean),public.approve_trip_handover(uuid,integer,boolean) from public,anon,authenticated;
+grant execute on function private.approve_trip_handover(uuid,integer,boolean),public.approve_trip_handover(uuid,integer,boolean) to authenticated;
 revoke all on function private.trip_recovery_candidates(uuid,integer,integer,boolean),public.trip_recovery_candidates(uuid,integer,integer,boolean),private.store_trip_recovery_options(uuid,integer,integer,boolean),public.store_trip_recovery_options(uuid,integer,integer,boolean),private.trip_recovery_option(uuid),public.trip_recovery_option(uuid),private.attest_trip_recovery_option(uuid,timestamptz),public.attest_trip_recovery_option(uuid,timestamptz),private.approve_trip_recovery(uuid,integer),public.approve_trip_recovery(uuid,integer) from public,anon,authenticated;
 grant execute on function private.approve_trip_recovery(uuid,integer),public.approve_trip_recovery(uuid,integer) to authenticated;
 do $$ begin
   if exists(select 1 from pg_roles where rolname='service_role') then
     grant usage on schema private to service_role;
+    grant execute on function private.claim_trip_recovery_checks(),public.claim_trip_recovery_checks(),private.pending_trip_recovery_options(uuid,integer),public.pending_trip_recovery_options(uuid,integer) to service_role;
+    grant execute on function private.trip_recovery_validation(uuid),public.trip_recovery_validation(uuid) to service_role;
+    grant execute on function private.store_assessed_recovery_options(uuid,integer,integer,boolean,text,boolean,integer),public.store_assessed_trip_recovery_options(uuid,integer,integer,boolean,text,boolean,integer) to service_role;
+    grant execute on function private.trip_handover_candidates(uuid,integer,integer,text),public.trip_handover_candidates(uuid,integer,integer,text),private.store_trip_handover_options(uuid,integer,integer,text),public.store_trip_handover_options(uuid,integer,integer,text) to service_role;
     grant execute on function private.trip_recovery_candidates(uuid,integer,integer,boolean),public.trip_recovery_candidates(uuid,integer,integer,boolean),private.store_trip_recovery_options(uuid,integer,integer,boolean),public.store_trip_recovery_options(uuid,integer,integer,boolean),private.trip_recovery_option(uuid),public.trip_recovery_option(uuid),private.attest_trip_recovery_option(uuid,timestamptz),public.attest_trip_recovery_option(uuid,timestamptz) to service_role;
   end if;
 end $$;
+
+-- Caregiver identity and consent are separate from patient transport access.
+create table if not exists public.caregivers (
+  account_id uuid primary key references public.accounts(id) on delete restrict,
+  full_name text not null check(length(btrim(full_name)) between 1 and 100),
+  phone text not null check(phone ~ '^\+?[0-9][0-9 ()-]{5,24}$'),
+  birth_date date not null check(birth_date between date '1900-01-01' and (now() at time zone 'Asia/Singapore')::date),
+  gender text not null check(gender in ('female','male','other','prefer-not-to-say')),
+  version integer not null default 1 check(version>0),
+  created_at timestamptz not null default now()
+);
+alter table public.caregivers enable row level security;
+revoke all on public.caregivers from public,anon,authenticated;
+grant select on public.caregivers to authenticated;
+create or replace function private.caregiver_account_id() returns uuid
+language sql stable security definer set search_path='' as $$
+  select id from public.accounts where auth_user_id=(select auth.uid()) and role='caregiver' and status='active';
+$$;
+revoke all on function private.caregiver_account_id() from public,anon;
+grant execute on function private.caregiver_account_id() to authenticated;
+drop policy if exists caregivers_read on public.caregivers;
+create policy caregivers_read on public.caregivers for select to authenticated using((select private.is_coordinator()) or account_id=(select private.caregiver_account_id()));
+
+create or replace function private.save_my_caregiver(details jsonb,expected_version integer) returns jsonb
+language plpgsql security definer set search_path='' as $$
+declare owner_id uuid:=private.caregiver_account_id(); saved public.caregivers;
+begin
+  if owner_id is null then raise exception 'Caregiver access required.' using errcode='42501'; end if;
+  perform private.verified_email();
+  perform private.validate_personal_details(details);
+  if details-array['full_name','phone','birth_date','gender']<>'{}'::jsonb or (expected_version is not null and expected_version<1) then raise exception 'Invalid caregiver details.' using errcode='22023'; end if;
+  perform 1 from public.accounts where id=owner_id and status='active' and role='caregiver' for no key update;
+  if not found then raise exception 'Caregiver access required.' using errcode='42501'; end if;
+  select * into saved from public.caregivers where account_id=owner_id for update;
+  if expected_version is null then
+    if found then raise exception 'Caregiver profile already exists.' using errcode='23505'; end if;
+    insert into public.caregivers(account_id,full_name,phone,birth_date,gender)
+      values(owner_id,btrim(details->>'full_name'),btrim(details->>'phone'),(details->>'birth_date')::date,details->>'gender') returning * into saved;
+  else
+    if saved.account_id is null or saved.version<>expected_version then raise exception 'Caregiver profile changed.' using errcode='40001'; end if;
+    update public.caregivers set full_name=btrim(details->>'full_name'),phone=btrim(details->>'phone'),birth_date=(details->>'birth_date')::date,
+      gender=details->>'gender',version=version+1 where account_id=owner_id returning * into saved;
+  end if;
+  return to_jsonb(saved);
+end;
+$$;
+create or replace function public.save_my_caregiver(details jsonb,expected_version integer) returns jsonb
+language sql security invoker set search_path='' as $$ select private.save_my_caregiver(details,expected_version); $$;
+revoke all on function private.save_my_caregiver(jsonb,integer),public.save_my_caregiver(jsonb,integer) from public,anon;
+grant execute on function private.save_my_caregiver(jsonb,integer),public.save_my_caregiver(jsonb,integer) to authenticated;
+
+create or replace function private.account_details(account public.accounts) returns jsonb
+language sql stable security definer set search_path='' as $$
+  select to_jsonb(account)||jsonb_build_object('profile_complete',case account.role
+    when 'patient' then exists(select 1 from public.patients where account_id=account.id)
+    when 'driver' then exists(select 1 from public.drivers where account_id=account.id)
+    when 'caregiver' then exists(select 1 from public.caregivers where account_id=account.id) else true end,
+    'full_name',case account.role when 'patient' then (select full_name from public.patients where account_id=account.id)
+    when 'driver' then (select full_name from public.drivers where account_id=account.id)
+    when 'caregiver' then (select full_name from public.caregivers where account_id=account.id) else null end);
+$$;
+revoke all on function private.account_details(public.accounts) from public,anon,authenticated;
+create or replace function private.register_caregiver_account(requested_name text,details jsonb) returns jsonb
+language plpgsql security definer set search_path='' as $$
+declare verified text:=private.verified_email();
+begin
+  if private.current_account() is not null then raise exception 'Account already registered.' using errcode='23505'; end if;
+  if requested_name is null or length(btrim(requested_name)) not between 1 and 100 then raise exception 'Invalid registration.' using errcode='22023'; end if;
+  insert into public.accounts(auth_user_id,email,display_name,role) values((select auth.uid()),verified,btrim(requested_name),'caregiver');
+  perform private.save_my_caregiver(details,null);
+  return private.current_account();
+exception when unique_violation then raise exception 'Account already registered.' using errcode='23505';
+end;
+$$;
+create or replace function public.register_caregiver_account(requested_name text,details jsonb) returns jsonb
+language sql security invoker set search_path='' as $$ select private.register_caregiver_account(requested_name,details); $$;
+revoke all on function private.register_caregiver_account(text,jsonb),public.register_caregiver_account(text,jsonb) from public,anon;
+grant execute on function private.register_caregiver_account(text,jsonb),public.register_caregiver_account(text,jsonb) to authenticated;
+
+create table if not exists public.caregiver_links (
+  id uuid primary key default gen_random_uuid(),
+  patient_id uuid not null references public.patients(id) on delete restrict,
+  caregiver_id uuid not null references public.caregivers(account_id) on delete restrict,
+  active boolean not null default true,
+  version integer not null default 1 check(version>0),
+  authorised_by uuid not null references public.accounts(id) on delete restrict,
+  authorised_at timestamptz not null default now(),
+  revoked_by uuid references public.accounts(id) on delete restrict,
+  revoked_at timestamptz,
+  unique(patient_id,caregiver_id),
+  check((active and revoked_at is null and revoked_by is null) or (not active and revoked_at is not null and revoked_by is not null))
+);
+alter table public.caregiver_links enable row level security;
+revoke all on public.caregiver_links from public,anon,authenticated;
+-- Link lists deliberately use the scoped function below; no direct writes or bulk reads.
+create index if not exists caregiver_links_active_caregiver on public.caregiver_links(caregiver_id,patient_id) where active;
+-- Serialize both sides before counting, including invitations and assisted reauthorisation.
+create or replace function private.check_caregiver_link_capacity() returns trigger
+language plpgsql security definer set search_path='' as $$
+begin
+  if not new.active then return new; end if;
+  perform 1 from public.patients where id=new.patient_id for update;
+  perform 1 from public.accounts where id=new.caregiver_id for no key update;
+  -- An already-active pair is idempotent even when either side is full.
+  if exists(select 1 from public.caregiver_links where patient_id=new.patient_id and caregiver_id=new.caregiver_id and active) then return new; end if;
+  if (select count(*) from public.caregiver_links where patient_id=new.patient_id and active and id<>new.id)>=5 then
+    raise exception 'A patient can have at most five linked caregivers.' using errcode='P5001';
+  end if;
+  if (select count(*) from public.caregiver_links where caregiver_id=new.caregiver_id and active and id<>new.id)>=5 then
+    raise exception 'A caregiver can have at most five linked patients.' using errcode='P5002';
+  end if;
+  return new;
+end;
+$$;
+revoke all on function private.check_caregiver_link_capacity() from public,anon,authenticated;
+drop trigger if exists caregiver_link_capacity on public.caregiver_links;
+create trigger caregiver_link_capacity before insert or update of active,patient_id,caregiver_id on public.caregiver_links
+  for each row execute function private.check_caregiver_link_capacity();
+create table if not exists private.caregiver_invitations (
+  id uuid primary key default gen_random_uuid(),
+  caregiver_id uuid not null references public.caregivers(account_id) on delete restrict,
+  code_hash text not null unique,
+  created_at timestamptz not null default now(),
+  expires_at timestamptz not null,
+  used_at timestamptz,
+  used_by uuid references public.accounts(id) on delete restrict,
+  revoked_at timestamptz
+);
+create index if not exists caregiver_invitation_owner on private.caregiver_invitations(caregiver_id,created_at desc);
+create table if not exists private.caregiver_code_attempts (
+  account_id uuid primary key references public.accounts(id) on delete cascade,
+  window_start timestamptz not null,
+  attempts integer not null check(attempts>0)
+);
+create table if not exists private.caregiver_link_events (
+  id uuid primary key default gen_random_uuid(),link_id uuid not null references public.caregiver_links(id) on delete restrict,
+  actor_id uuid not null references public.accounts(id) on delete restrict,
+  event text not null check(event in ('authorised','revoked')),
+  assisted boolean not null,created_at timestamptz not null default now()
+);
+alter table private.caregiver_invitations enable row level security;
+alter table private.caregiver_code_attempts enable row level security;
+alter table private.caregiver_link_events enable row level security;
+revoke all on private.caregiver_invitations,private.caregiver_code_attempts,private.caregiver_link_events from public,anon,authenticated;
+
+create or replace function private.create_caregiver_invitation() returns jsonb
+language plpgsql security definer set search_path='' as $$
+declare owner_id uuid:=private.caregiver_account_id(); code text:=gen_random_uuid()::text; saved private.caregiver_invitations;
+begin
+  if owner_id is null then raise exception 'Caregiver access required.' using errcode='42501'; end if;
+  perform 1 from public.accounts a join public.caregivers c on c.account_id=a.id where a.id=owner_id and a.status='active' and a.role='caregiver' for no key update of a;
+  if not found then raise exception 'An active caregiver profile is required.' using errcode='42501'; end if;
+  if exists(select 1 from private.caregiver_invitations where caregiver_id=owner_id and created_at>clock_timestamp()-interval '1 minute') then return jsonb_build_object('error','invitation_rate_limited'); end if;
+  update private.caregiver_invitations set revoked_at=clock_timestamp() where caregiver_id=owner_id and used_at is null and revoked_at is null;
+  insert into private.caregiver_invitations(caregiver_id,code_hash,expires_at) values(owner_id,md5(code),clock_timestamp()+interval '15 minutes') returning * into saved;
+  return jsonb_build_object('code',code,'expires_at',saved.expires_at);
+end;
+$$;
+
+create or replace function private.review_caregiver_invitation(code text,confirmed_caregiver uuid) returns jsonb
+language plpgsql security definer set search_path='' as $$
+declare actor uuid:=private.patient_account_id(); person public.patients; invitation private.caregiver_invitations; caregiver public.caregivers; saved public.caregiver_links; attempts integer;
+begin
+  if actor is null then raise exception 'Patient access required.' using errcode='42501'; end if;
+  select * into invitation from private.caregiver_invitations where code_hash=md5(lower(btrim(code)));
+  -- Patient account precedes its profile; caregiver accounts follow that profile.
+  -- This also precedes the counter INSERT's implicit foreign-key lock.
+  perform 1 from public.accounts where id=actor for no key update;
+  -- Invalid-code responses commit this counter; throwing would roll the limit back.
+  insert into private.caregiver_code_attempts(account_id,window_start,attempts) values(actor,clock_timestamp(),1)
+    on conflict(account_id) do update set attempts=case when caregiver_code_attempts.window_start<clock_timestamp()-interval '15 minutes' then 1 else caregiver_code_attempts.attempts+1 end,
+      window_start=case when caregiver_code_attempts.window_start<clock_timestamp()-interval '15 minutes' then clock_timestamp() else caregiver_code_attempts.window_start end
+    returning caregiver_code_attempts.attempts into attempts;
+  if attempts>10 then return jsonb_build_object('error','invitation_rate_limited'); end if;
+  select * into person from public.patients where account_id=actor and status='active' for update;
+  if not found then raise exception 'Active patient profile required.' using errcode='42501'; end if;
+  if invitation.id is null then return jsonb_build_object('error','invalid_invitation'); end if;
+  perform 1 from public.accounts where id=invitation.caregiver_id for no key update;
+  select c.* into caregiver from public.caregivers c join public.accounts a on a.id=c.account_id where a.id=invitation.caregiver_id and a.role='caregiver' and a.status='active';
+  select * into invitation from private.caregiver_invitations where id=invitation.id for update;
+  if caregiver.account_id is null or not exists(select 1 from public.accounts where id=actor and status='active' and role='patient')
+    or invitation.used_at is not null or invitation.revoked_at is not null or invitation.expires_at<=clock_timestamp() then return jsonb_build_object('error','invalid_invitation'); end if;
+  if confirmed_caregiver is null then return jsonb_build_object('caregiver_id',caregiver.account_id,'full_name',caregiver.full_name,'display_name',(select display_name from public.accounts where id=caregiver.account_id),'expires_at',invitation.expires_at); end if;
+  if confirmed_caregiver<>caregiver.account_id then return jsonb_build_object('error','invalid_invitation'); end if;
+  insert into public.caregiver_links(patient_id,caregiver_id,authorised_by) values(person.id,caregiver.account_id,actor)
+    on conflict(patient_id,caregiver_id) do update set active=true,version=caregiver_links.version+1,authorised_by=actor,authorised_at=clock_timestamp(),revoked_at=null,revoked_by=null
+    where not caregiver_links.active returning * into saved;
+  if saved.id is not null then insert into private.caregiver_link_events(link_id,actor_id,event,assisted) values(saved.id,actor,'authorised',false);
+  else select * into saved from public.caregiver_links where patient_id=person.id and caregiver_id=caregiver.account_id; end if;
+  update private.caregiver_invitations set used_at=clock_timestamp(),used_by=actor where id=invitation.id;
+  return jsonb_build_object('link',to_jsonb(saved));
+end;
+$$;
+
+create or replace function private.manage_caregiver_link(patient uuid,caregiver uuid,link_active boolean,expected_version integer,patient_authorised boolean) returns jsonb
+language plpgsql security definer set search_path='' as $$
+declare actor public.accounts; person public.patients; saved public.caregiver_links;
+begin
+  select * into actor from public.accounts where auth_user_id=(select auth.uid()) and status='active';
+  if actor.id is null or actor.role not in ('patient','caregiver','coordinator') or link_active is null then raise exception 'Link access denied.' using errcode='42501'; end if;
+  select * into person from public.patients where id=patient;
+  if not found then raise exception 'Patient not found.' using errcode='P0002'; end if;
+  perform 1 from public.accounts where id=person.account_id for no key update;
+  select * into person from public.patients where id=patient for update;
+  if not found then raise exception 'Patient not found.' using errcode='P0002'; end if;
+  perform 1 from public.accounts where id in (actor.id,caregiver) order by id for no key update;
+  if not exists(select 1 from public.accounts where id=actor.id and status='active' and role=actor.role)
+    or (actor.role='patient' and person.account_id is distinct from actor.id) or (actor.role='caregiver' and caregiver is distinct from actor.id)
+    or (link_active and (actor.role<>'coordinator' or patient_authorised is distinct from true)) then raise exception 'Link access denied.' using errcode='42501'; end if;
+  select * into saved from public.caregiver_links where patient_id=patient and caregiver_id=caregiver for update;
+  if (saved.id is null and expected_version is not null) or (saved.id is not null and (expected_version is null or saved.version<>expected_version)) then raise exception 'Link changed.' using errcode='40001'; end if;
+  if link_active then
+    if person.status<>'active' or not exists(select 1 from public.accounts where id=person.account_id and role='patient' and status='active')
+      or not exists(select 1 from public.accounts a join public.caregivers c on c.account_id=a.id where a.id=caregiver and a.role='caregiver' and a.status='active') then raise exception 'Active profiles required.' using errcode='22023'; end if;
+    if saved.id is null then insert into public.caregiver_links(patient_id,caregiver_id,authorised_by) values(patient,caregiver,actor.id) returning * into saved;
+    elsif not saved.active then update public.caregiver_links set active=true,version=version+1,authorised_by=actor.id,authorised_at=clock_timestamp(),revoked_by=null,revoked_at=null where id=saved.id returning * into saved;
+    else return to_jsonb(saved); end if;
+  else
+    if saved.id is null then raise exception 'Link not found.' using errcode='P0002'; end if;
+    if not saved.active then return to_jsonb(saved); end if;
+    update public.caregiver_links set active=false,version=version+1,revoked_by=actor.id,revoked_at=clock_timestamp() where id=saved.id returning * into saved;
+  end if;
+  insert into private.caregiver_link_events(link_id,actor_id,event,assisted) values(saved.id,actor.id,case when link_active then 'authorised' else 'revoked' end,actor.role='coordinator');
+  return to_jsonb(saved);
+end;
+$$;
+
+create or replace function private.list_caregiver_links(patient uuid) returns jsonb
+language plpgsql stable security definer set search_path='' as $$
+declare actor public.accounts; result jsonb;
+begin
+  select * into actor from public.accounts where auth_user_id=(select auth.uid()) and status='active';
+  if actor.id is null or actor.role not in ('patient','caregiver','coordinator') then raise exception 'Link access denied.' using errcode='42501'; end if;
+  if actor.role='coordinator' and patient is null then raise exception 'Choose a patient.' using errcode='22023'; end if;
+  if patient is not null and actor.role='patient' and not exists(select 1 from public.patients where id=patient and account_id=actor.id) then raise exception 'Link access denied.' using errcode='42501'; end if;
+  select coalesce(jsonb_agg(jsonb_build_object('id',l.id,'patient_id',l.patient_id,'patient_name',p.full_name,'caregiver_id',l.caregiver_id,'caregiver_name',c.full_name,'version',l.version,'active',l.active,'authorised_at',l.authorised_at) order by p.full_name,c.full_name,l.id),'[]'::jsonb)
+    into result from public.caregiver_links l join public.patients p on p.id=l.patient_id join public.caregivers c on c.account_id=l.caregiver_id
+    where (l.active or actor.role='coordinator') and (patient is null or l.patient_id=patient) and (actor.role='coordinator' or (actor.role='patient' and p.account_id=actor.id) or (actor.role='caregiver' and l.caregiver_id=actor.id));
+  return jsonb_build_object('links',result);
+end;
+$$;
+-- Coordinator directory keeps search, filtering and pagination inside the authorised query.
+create or replace function private.list_coordinator_caregivers(page_no integer,search_text text,status_filter text,sort_by text,sort_order text) returns jsonb
+language plpgsql stable security invoker set search_path='' as $$
+begin
+  if not private.is_coordinator() then raise exception 'Coordinator access required.' using errcode='42501'; end if;
+  if page_no is null or page_no<1 or page_no>1000000 or search_text is null or length(search_text)>100 or search_text ~ '[[:cntrl:]]'
+    or status_filter is null or status_filter not in ('all','active','inactive','active,inactive','inactive,active')
+    or sort_by is null or sort_by not in ('created_at','id','full_name','phone','status') or sort_order is null or sort_order not in ('asc','desc') then
+    raise exception 'Invalid caregiver search.' using errcode='22023';
+  end if;
+  return (with visible as materialized (
+    select c.account_id as id,c.full_name,c.phone,c.birth_date,c.gender,c.version,c.created_at,a.status,a.status_version
+    from public.caregivers c join public.accounts a on a.id=c.account_id where a.role='caregiver'
+      and (status_filter='all' or a.status=any(string_to_array(status_filter,',')))
+      and (btrim(search_text)='' or strpos(lower(c.full_name),lower(btrim(search_text)))>0 or strpos(c.phone,btrim(search_text))>0 or strpos(c.account_id::text,lower(btrim(search_text)))>0)
+  ), ordered as (
+    select visible.*,row_number() over(order by
+      case when sort_by='created_at' and sort_order='asc' then created_at end asc,
+      case when sort_by='created_at' and sort_order='desc' then created_at end desc,
+      case when sort_order='asc' then case sort_by when 'id' then id::text when 'full_name' then lower(full_name) when 'phone' then phone when 'status' then status end end asc,
+      case when sort_order='desc' then case sort_by when 'id' then id::text when 'full_name' then lower(full_name) when 'phone' then phone when 'status' then status end end desc,id) as list_order from visible
+  ) select jsonb_build_object('caregivers',(select coalesce(jsonb_agg(to_jsonb(p)-'list_order' order by list_order),'[]'::jsonb) from (select * from ordered order by list_order limit 10 offset (page_no::bigint-1)*10) p),
+    'total',(select count(*) from visible),'page',page_no,'pageSize',10));
+end;
+$$;
+create or replace function private.coordinator_caregiver_links(target uuid) returns jsonb
+language plpgsql stable security definer set search_path='' as $$
+begin
+  if not private.is_coordinator() then raise exception 'Coordinator access required.' using errcode='42501'; end if;
+  if not exists(select 1 from public.caregivers c join public.accounts a on a.id=c.account_id where c.account_id=target and a.role='caregiver') then raise exception 'Caregiver not found.' using errcode='P0002'; end if;
+  return jsonb_build_object('links',(select coalesce(jsonb_agg(jsonb_build_object('id',l.id,'patient_id',l.patient_id,'patient_name',p.full_name,'active',l.active) order by p.full_name,l.id),'[]'::jsonb)
+    from public.caregiver_links l join public.patients p on p.id=l.patient_id where l.caregiver_id=target));
+end;
+$$;
+create or replace function private.set_caregiver_status(target uuid,decision text,expected_version integer) returns jsonb
+language plpgsql security definer set search_path='' as $$
+declare actor uuid; saved public.accounts;
+begin
+  if not private.is_coordinator() then raise exception 'Coordinator access required.' using errcode='42501'; end if;
+  if decision is null or decision not in ('active','inactive') or expected_version is null or expected_version<1 then raise exception 'Invalid caregiver status.' using errcode='22023'; end if;
+  select id into actor from public.accounts where auth_user_id=(select auth.uid());
+  perform 1 from public.accounts where id in (actor,target) order by id for update;
+  if not private.is_coordinator() then raise exception 'Coordinator access required.' using errcode='42501'; end if;
+  select * into saved from public.accounts where id=target and role='caregiver';
+  if not found or not exists(select 1 from public.caregivers where account_id=target) then raise exception 'Caregiver not found.' using errcode='P0002'; end if;
+  if saved.status_version<>expected_version then raise exception 'Caregiver changed.' using errcode='40001'; end if;
+  update public.accounts set status=decision where id=target returning * into saved;
+  return jsonb_build_object('id',saved.id,'status',saved.status,'status_version',saved.status_version);
+end;
+$$;
+create or replace function public.list_coordinator_caregivers(page_no integer,search_text text,status_filter text,sort_by text,sort_order text) returns jsonb
+language sql stable security invoker set search_path='' as $$ select private.list_coordinator_caregivers(page_no,search_text,status_filter,sort_by,sort_order); $$;
+create or replace function public.coordinator_caregiver_links(target uuid) returns jsonb
+language sql stable security invoker set search_path='' as $$ select private.coordinator_caregiver_links(target); $$;
+create or replace function public.set_caregiver_status(target uuid,decision text,expected_version integer) returns jsonb
+language sql security invoker set search_path='' as $$ select private.set_caregiver_status(target,decision,expected_version); $$;
+revoke all on function private.list_coordinator_caregivers(integer,text,text,text,text),public.list_coordinator_caregivers(integer,text,text,text,text),private.coordinator_caregiver_links(uuid),public.coordinator_caregiver_links(uuid),private.set_caregiver_status(uuid,text,integer),public.set_caregiver_status(uuid,text,integer) from public,anon;
+grant execute on function private.list_coordinator_caregivers(integer,text,text,text,text),public.list_coordinator_caregivers(integer,text,text,text,text),private.coordinator_caregiver_links(uuid),public.coordinator_caregiver_links(uuid),private.set_caregiver_status(uuid,text,integer),public.set_caregiver_status(uuid,text,integer) to authenticated;
+
+create or replace function private.caregiver_can_access_patient(target uuid) returns boolean
+language sql stable security definer set search_path='' as $$
+  select exists(select 1 from public.caregiver_links l join public.patients p on p.id=l.patient_id
+    join public.accounts pa on pa.id=p.account_id join public.caregivers c on c.account_id=l.caregiver_id
+    where l.patient_id=target and l.caregiver_id=private.caregiver_account_id() and l.active
+      and p.status='active' and pa.status='active' and pa.role='patient');
+$$;
+revoke all on function private.caregiver_can_access_patient(uuid) from public,anon;
+grant execute on function private.caregiver_can_access_patient(uuid) to authenticated;
+create or replace function public.create_caregiver_invitation() returns jsonb
+language sql security invoker set search_path='' as $$ select private.create_caregiver_invitation(); $$;
+create or replace function public.review_caregiver_invitation(code text,confirmed_caregiver uuid) returns jsonb
+language sql security invoker set search_path='' as $$ select private.review_caregiver_invitation(code,confirmed_caregiver); $$;
+create or replace function public.manage_caregiver_link(patient uuid,caregiver uuid,link_active boolean,expected_version integer,patient_authorised boolean) returns jsonb
+language sql security invoker set search_path='' as $$ select private.manage_caregiver_link(patient,caregiver,link_active,expected_version,patient_authorised); $$;
+create or replace function public.list_caregiver_links(patient uuid) returns jsonb
+language sql stable security invoker set search_path='' as $$ select private.list_caregiver_links(patient); $$;
+revoke all on function private.create_caregiver_invitation(),public.create_caregiver_invitation(),private.review_caregiver_invitation(text,uuid),public.review_caregiver_invitation(text,uuid),private.manage_caregiver_link(uuid,uuid,boolean,integer,boolean),public.manage_caregiver_link(uuid,uuid,boolean,integer,boolean),private.list_caregiver_links(uuid),public.list_caregiver_links(uuid) from public,anon;
+grant execute on function private.create_caregiver_invitation(),public.create_caregiver_invitation(),private.review_caregiver_invitation(text,uuid),public.review_caregiver_invitation(text,uuid),private.manage_caregiver_link(uuid,uuid,boolean,integer,boolean),public.manage_caregiver_link(uuid,uuid,boolean,integer,boolean),private.list_caregiver_links(uuid),public.list_caregiver_links(uuid) to authenticated;
+
+-- Relationship notices contain no patient identifiers and remain readable after unlinking.
+-- Transport notices continue to require current consent on every inbox operation.
+create or replace function private.notify_caregiver_link() returns trigger
+language plpgsql security definer set search_path='' as $$
+declare relationship public.caregiver_links; patient_account uuid;
+begin
+  select * into relationship from public.caregiver_links where id=new.link_id;
+  select account_id into patient_account from public.patients where id=relationship.patient_id;
+  insert into public.trip_notifications(recipient_id,notice_kind,event,message)
+    select a.id,'link','caregiver_'||new.event,
+      case when a.id=patient_account then
+        case when new.event='authorised' then 'A caregiver is now linked to you' else 'A caregiver has been unlinked' end
+      else case when new.event='authorised' then 'A patient is now linked to you' else 'A patient has been unlinked' end end
+    from public.accounts a where a.status='active' and a.id in (patient_account,relationship.caregiver_id)
+      and (new.event='authorised' or a.id<>new.actor_id);
+  return null;
+end;
+$$;
+revoke all on function private.notify_caregiver_link() from public,anon,authenticated;
+drop trigger if exists caregiver_link_notification on private.caregiver_link_events;
+create trigger caregiver_link_notification after insert on private.caregiver_link_events
+  for each row execute function private.notify_caregiver_link();
+
+create or replace function private.notify_shared_schedule() returns trigger
+language plpgsql security definer set search_path='' as $$
+declare actor public.accounts; patient_account uuid; action_label text; event_name text;
+begin
+  select * into actor from public.accounts where auth_user_id=(select auth.uid()) and status='active';
+  if actor.id is null then return null; end if;
+  if tg_table_name='treatment_schedules' then
+    -- Coordinator-approved replacements have their own change-decision notice.
+    if actor.role not in ('patient','caregiver') then return null; end if;
+    action_label:='created a treatment schedule';event_name:='schedule_created';
+  else
+    if tg_op='UPDATE' and new.status is not distinct from old.status then return null; end if;
+    action_label:=case new.status when 'pending' then 'requested a schedule change'
+      when 'withdrawn' then 'withdrew a schedule change request'
+      when 'approved' then 'approved a schedule change' when 'rejected' then 'rejected a schedule change' end;
+    event_name:='schedule_change_'||new.status;
+  end if;
+  if action_label is null then return null; end if;
+  select account_id into patient_account from public.patients where id=new.patient_id and status='active';
+  if patient_account is null or not exists(select 1 from public.accounts where id=patient_account and status='active') then return null; end if;
+  insert into public.trip_notifications(recipient_id,notice_kind,patient_id,event,message)
+    select a.id,'schedule',new.patient_id,event_name,
+      case actor.role when 'caregiver' then 'Caregiver ' when 'patient' then 'Patient ' else 'Coordinator ' end||action_label
+    from public.accounts a where a.status='active' and a.id<>actor.id and (
+      a.id=patient_account or (a.role='caregiver' and exists(select 1 from public.caregiver_links l
+        join public.caregivers c on c.account_id=l.caregiver_id
+        where l.patient_id=new.patient_id and l.caregiver_id=a.id and l.active)));
+  return null;
+end;
+$$;
+revoke all on function private.notify_shared_schedule() from public,anon,authenticated;
+drop trigger if exists shared_schedule_notification on public.treatment_schedules;
+create trigger shared_schedule_notification after insert on public.treatment_schedules
+  for each row execute function private.notify_shared_schedule();
+drop trigger if exists shared_schedule_change_notification on public.treatment_change_requests;
+create trigger shared_schedule_change_notification after insert or update of status on public.treatment_change_requests
+  for each row execute function private.notify_shared_schedule();
 
 notify pgrst, 'reload schema';
 commit;

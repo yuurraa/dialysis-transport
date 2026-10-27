@@ -14,7 +14,7 @@ interface RouteView { route:RoadRoute; reserved_minutes:number|null; saved:boole
 const attribution='<img src="https://www.onemap.gov.sg/web-assets/images/logo/om_logo.png" style="height:20px;width:20px" alt="OneMap"/>&nbsp;<a href="https://www.onemap.gov.sg/" target="_blank" rel="noopener noreferrer">OneMap</a>&nbsp;&copy;&nbsp;contributors&nbsp;&#124;&nbsp;<a href="https://www.sla.gov.sg/" target="_blank" rel="noopener noreferrer">Singapore Land Authority</a>';
 
 /** Map data is read from an authorised trip endpoint; no credentials enter the browser. */
-export default function TripRouteMap({tripId,onSessionExpired,location=null,locationStale=false,version=0,activeTrip=false,showTraffic=true}:{tripId:string;version?:number;activeTrip?:boolean;showTraffic?:boolean;onSessionExpired:()=>void;location?:TrackingPoint|null;locationStale?:boolean}) {
+export default function TripRouteMap({tripId,onSessionExpired,location=null,locationStale=false,version=0,activeTrip=false,showTraffic=true,routeKey=''}:{tripId:string;version?:number;activeTrip?:boolean;showTraffic?:boolean;onSessionExpired:()=>void;location?:TrackingPoint|null;locationStale?:boolean;routeKey?:string}) {
   const [data,setData]=useState<RouteView|null>(null);
   const [traffic,setTraffic]=useState<TrafficView|null>(null);
   const [selectedIncident,setSelectedIncident]=useState<string|null>(null);
@@ -68,14 +68,15 @@ export default function TripRouteMap({tripId,onSessionExpired,location=null,loca
     const visible=()=>{if(document.visibilityState==='visible'&&(failed||!loaded))void load();};
     document.addEventListener('visibilitychange',visible);
     return()=>{active=false;window.clearTimeout(timer);document.removeEventListener('visibilitychange',visible);};
-  },[tripId,onSessionExpired]);
+  },[tripId,onSessionExpired,routeKey]);
   useEffect(()=>{
     if(!canShowMap||!canvas.current)return;
     let active=true;let cleanup=()=>{};
     void import('leaflet').then(L=>{
       if(!active||!canvas.current)return;
-      const map=L.map(canvas.current,{scrollWheelZoom:true,touchZoom:true,minZoom:11,maxZoom:19});
-      L.tileLayer('https://www.onemap.gov.sg/maps/tiles/Default/{z}/{x}/{y}.png',{attribution,minZoom:11,maxZoom:19,noWrap:true}).addTo(map);
+      const bounds=L.latLngBounds([1.144,103.535],[1.494,104.502]);
+      const map=L.map(canvas.current,{scrollWheelZoom:true,touchZoom:true,minZoom:11,maxZoom:19,maxBounds:bounds});
+      L.tileLayer('https://www.onemap.gov.sg/maps/tiles/Default/{z}/{x}/{y}.png',{attribution,minZoom:11,maxZoom:19,noWrap:true,bounds,crossOrigin:'anonymous'}).addTo(map);
       if(data){
         const line=L.polyline(data.route.geometry,{color:'#376ac3',weight:4,opacity:.9}).addTo(map);
         for(const [label,coordinate,title,address] of [['A',data.route.origin_coordinates,'Pickup',data.route.origin],['B',data.route.destination_coordinates,'Destination',data.route.destination]] as const){
@@ -136,7 +137,7 @@ export default function TripRouteMap({tripId,onSessionExpired,location=null,loca
     {!canShowMap?<div className="trip-map-status" role="status">{error?<><p className="trip-map-note trip-map-feedback"><span>{error}</span><RefreshButton label="Refresh route" busy={loading} onClick={()=>refresh.current()}/></p></>:'Loading route…'}</div>:<>
       <div className="trip-map-canvas" ref={canvas} role="region" aria-label="Driving route map" />
       {error&&<p className="trip-map-note trip-map-feedback" role="status"><span>{error}{!data&&location?' Showing driver location only.':''}</span><RefreshButton label="Refresh route" busy={loading} onClick={()=>refresh.current()}/></p>}
-      {data&&(stale||data.reserved_minutes!==null&&data.reserved_minutes!==data.route.duration_minutes)&&<p className="trip-map-note">{stale?'Saved route estimate.':''}{data.reserved_minutes!==null&&data.reserved_minutes!==data.route.duration_minutes?`${stale?' ':''}Current reservation: ${data.reserved_minutes} min.`:''}</p>}
+      {data&&stale&&<p className="trip-map-note">Saved route estimate.</p>}
       {location&&<button className="trip-map-locate" type="button" disabled={!mapReady} onClick={()=>controls.current?.map.panTo([location.latitude,location.longitude],{animate:false})}>Show driver</button>}
     </>}
     <div className="trip-map-legend" aria-label="Map legend"><button type="button" className="trip-legend-location" disabled={!data} onClick={()=>showEndpoint('A')}><i aria-hidden="true" className="trip-legend-endpoint">A</i>Pickup</button><button type="button" className="trip-legend-location" disabled={!data} onClick={()=>showEndpoint('B')}><i aria-hidden="true" className="trip-legend-endpoint">B</i>Destination</button><span><i aria-hidden="true" className="trip-legend-route"/>Route</span>{showTraffic&&<><span><i aria-hidden="true" className="trip-legend-slow"/>20–29 km/h</span><span><i aria-hidden="true" className="trip-legend-heavy"/>0–19 km/h</span><span><i aria-hidden="true" className="trip-legend-obstacle"/>Obstacle</span></>}</div>

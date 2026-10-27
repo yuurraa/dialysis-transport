@@ -3,6 +3,8 @@ import { InfoButton, Overlay, PageHeading, ListToolbar, ListPagination, ChoiceGr
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { PersonalFields } from '../components/PersonalFields';
 import { ApiError, apiGet, apiRequest } from '../lib/api';
+import CaregiverConnections from './CaregiverConnections';
+import CoordinatorLinks from '../components/CoordinatorLinks';
 
 export interface Patient {
   id: string;
@@ -48,6 +50,7 @@ export default function PatientsPage({ notify, onSessionExpired }: { notify: (me
   const [draft, setDraft] = useState<PatientInput | null>(null);
   const [editingId, setEditingId] = useState<string>();
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
+  const [connectionsPatient,setConnectionsPatient]=useState<Patient|null>(null);
   const [editing, setEditing] = useState(false);
   const detailsEditButton = useRef<HTMLButtonElement>(null);
   const wasEditing = useRef(false);
@@ -101,7 +104,7 @@ export default function PatientsPage({ notify, onSessionExpired }: { notify: (me
     setSaveError('');
     setDraft(patientDraft(patient));
   }
-  function close() { setConflict(false); setSelectedPatient(null); setDraft(null); setEditing(false); setSaveError(''); }
+  function close() { setConnectionsPatient(null);setConflict(false); setSelectedPatient(null); setDraft(null); setEditing(false); setSaveError(''); }
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!draft || !editingId || !editing || saving) return;
@@ -170,10 +173,12 @@ export default function PatientsPage({ notify, onSessionExpired }: { notify: (me
     </Overlay>}
     {draft && selectedPatient && <Overlay title="Patient Details" description={<span className="profile-id">Patient ID: {selectedPatient.id}</span>} className={`patient-dialog${editing ? ' patient-editing' : ''}`} busy={saving} onClose={close} onSubmit={editing ? save : undefined} error={saveError} onDismissError={() => setSaveError('')}
       footer={editing ? <><button className="patient-primary" type="submit" disabled={saving || conflict}>{saving ? 'Saving…' : 'Save Patient'}</button><button type="button" disabled={saving} onClick={() => { setDraft(patientDraft(selectedPatient)); setSaveError(''); setEditing(false); }}>Cancel</button></>
-        : <><button ref={detailsEditButton} className="patient-primary" type="button" onClick={() => { setDraft(patientDraft(selectedPatient)); setSaveError(''); setEditing(true); }}>Edit Patient</button><button type="button" aria-label="Close Patient Details" onClick={close}>Close</button></>}>
+        : <><button ref={detailsEditButton} className="patient-primary" type="button" onClick={() => { setDraft(patientDraft(selectedPatient)); setSaveError(''); setEditing(true); }}>Edit Patient</button><button type="button" onClick={()=>setConnectionsPatient(selectedPatient)}>Caregivers</button><button type="button" aria-label="Close Patient Details" onClick={close}>Close</button></>}>
       {conflict && <button type="button" disabled={saving} onClick={reloadSelected}>Reload latest details</button>}
       <PatientFields draft={draft} onChange={setDraft} disabled={saving || !editing} showStatus personalDetailsReadOnly={editing} />
+      <CoordinatorLinks kind="patient" id={selectedPatient.id} refreshKey={connectionsPatient?1:0} onSessionExpired={onSessionExpired}/>
     </Overlay>}
+    {connectionsPatient&&<Overlay title="Patient caregivers" description={connectionsPatient.full_name} onClose={()=>setConnectionsPatient(null)}><CaregiverConnections key={connectionsPatient.id} role="coordinator" patientId={connectionsPatient.id} embedded notify={notify} onSessionExpired={onSessionExpired}/></Overlay>}
   </section>;
 }
 

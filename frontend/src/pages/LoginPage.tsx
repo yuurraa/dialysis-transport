@@ -48,13 +48,13 @@ export default function LoginPage() {
   }, [navigate]);
   const account = resolvedAccount?.userId === user?.id ? resolvedAccount?.account : null;
   const restoringAccount = checking || Boolean(user && resolvedAccount?.userId !== user.id);
-  const dashboardAccess = Boolean(user && account && (!['patient', 'driver'].includes(account.role) || account.profile_complete === true) && account.status === 'active');
+  const dashboardAccess = Boolean(user && account && (!['patient', 'driver', 'caregiver'].includes(account.role) || account.profile_complete === true) && account.status === 'active');
   useEffect(() => {
     if (checking) return;
     if (dashboardAccess && account?.role === 'patient' && path === '/dashboard/profile') { navigate('/dashboard/account', true); return; }
     const home = '/dashboard/trips';
-    const allowed = [home, '/dashboard/account', ...(account?.role === 'driver' ? ['/dashboard/trips', '/dashboard/availability', '/dashboard/vehicle'] : []), ...(['patient', 'coordinator'].includes(account?.role ?? '') ? ['/dashboard/schedules'] : []), ...(account?.role === 'coordinator' ? ['/dashboard/patients', '/dashboard/drivers'] : [])];
-    const tripDetails=['patient','coordinator','driver'].includes(account?.role??'')&&/^\/dashboard\/trips\/[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(path);
+    const allowed = [home, '/dashboard/account', ...(['patient','caregiver'].includes(account?.role??'')?['/dashboard/connections']:[]), ...(account?.role === 'driver' ? ['/dashboard/trips', '/dashboard/availability', '/dashboard/vehicle'] : []), ...(['patient','caregiver','coordinator'].includes(account?.role ?? '') ? ['/dashboard/schedules'] : []), ...(account?.role === 'coordinator' ? ['/dashboard/patients','/dashboard/caregivers','/dashboard/drivers'] : [])];
+    const tripDetails=['patient','caregiver','coordinator','driver'].includes(account?.role??'')&&/^\/dashboard\/trips\/[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(path);
     if (dashboardAccess && !allowed.includes(path) && !tripDetails) navigate(home, true);
     else if (path.startsWith('/dashboard') && (!user || (resolvedAccount?.userId === user.id && !dashboardAccess))) navigate('/', true);
   }, [checking, dashboardAccess, account?.role, path, user?.id, resolvedAccount, navigate]);
@@ -232,7 +232,7 @@ export default function LoginPage() {
 
   return (
     <>
-      {dashboardAccess && account && !checking ? <Dashboard key={`${account.id}:${account.role}`} account={account} avatarUrl={typeof user?.user_metadata.avatar_url === 'string' ? user.user_metadata.avatar_url : typeof user?.user_metadata.picture === 'string' ? user.user_metadata.picture : undefined} path={path} onNavigate={navigate} onSignOut={() => void signOut()} signingOut={busy === 'signout'} notify={notify} onSessionExpired={expireSession} onPatientProfileMissing={onPatientProfileMissing} /> : <PageLayout restoring={restoringAccount} accountCreation={Boolean(user && !restoringAccount && (!account || (['patient', 'driver'].includes(account.role) && account.status === 'active' && account.profile_complete !== true)))}>
+      {dashboardAccess && account && !checking ? <Dashboard key={`${account.id}:${account.role}`} account={account} avatarUrl={typeof user?.user_metadata.avatar_url === 'string' ? user.user_metadata.avatar_url : typeof user?.user_metadata.picture === 'string' ? user.user_metadata.picture : undefined} path={path} onNavigate={navigate} onSignOut={() => void signOut()} signingOut={busy === 'signout'} notify={notify} onSessionExpired={expireSession} onPatientProfileMissing={onPatientProfileMissing} /> : <PageLayout restoring={restoringAccount} accountCreation={Boolean(user && !restoringAccount && (!account || (['patient', 'driver', 'caregiver'].includes(account.role) && account.status === 'active' && account.profile_complete !== true)))}>
       <section className={`entry-card ${user ? 'entry-card-account' : ''}`} aria-busy={checking || Boolean(busy)} aria-label={user ? 'Your account' : 'Sign in'}>
         {checking || (!user && supabase && !backendReady) ? <div className="account-loading" role="status" aria-label={checking ? 'Checking sign-in' : 'Connecting to service'}><span className="account-spinner" aria-hidden="true" /><span>Loading...</span></div> : user ? (
           <AccountPanel key={user.id} email={user.email} onSignOut={() => void signOut()} onCancel={() => void signOut(true)} onSessionExpired={expireSession} signingOut={busy === 'signout'} onAccountResolved={onAccountResolved} onLoadingChange={setAccountLoading} onChangeGoogleAccount={changeGoogleAccount} initialDraft={signupDraft} />

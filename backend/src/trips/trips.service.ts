@@ -13,7 +13,7 @@ export class TripsService {
     const token = header?.match(/^Bearer (\S+)$/i)?.[1];
     if (!token) throw new UnauthorizedException('Sign-in required.');
     const { account } = await this.auth.verifyIdentity(token);
-    if (!account || account.status !== 'active' || !(roles ?? (write ? ['coordinator'] : ['patient', 'coordinator', 'driver'])).includes(account.role)) {
+    if (!account || account.status !== 'active' || !(roles ?? (write ? ['coordinator'] : ['patient','caregiver','coordinator','driver'])).includes(account.role)) {
       throw new ForbiddenException('Trip access denied.');
     }
     return this.database.forUser(token);
@@ -154,7 +154,7 @@ export class TripsService {
 
   private async tripAction(header: string | undefined, id: string, body: unknown, action: 'confirm' | 'cancel' | 'unavailable' | 'start' | 'complete') {
     const execution = action === 'start' || action === 'complete';
-    const client = await this.access(header, false, [action === 'unavailable' || execution ? 'driver' : 'patient']);
+    const client = await this.access(header, false, action === 'unavailable' || execution ? ['driver'] : ['patient','caregiver']);
     this.assignmentId(id);
     if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some(key => key !== 'version')) throw new BadRequestException('Invalid trip action.');
     const version = (body as Record<string, unknown>).version;
@@ -229,10 +229,15 @@ export class TripsService {
     return { ok: true };
   }
 
-  /** Generate/rank feasible pickup, route or resource options within ten seconds; escalate no-option cases as Unfilled-Critical. */
-  async assessRecovery(scope: PatientScope, tripId: string): Promise<unknown> {
-    // TODO: Implement using Supabase and database constraints.
-    throw new NotImplementedException('assessRecovery is awaiting implementation.');
+  /** Provider failures never release a reservation or manufacture a no-resource outcome. */
+  async assessRecovery(header:string|undefined,tripId:string,body:unknown):Promise<unknown> {
+    const client=await this.access(header,true);
+    this.assignmentId(tripId);
+    if(!body||typeof body!=='object'||Array.isArray(body)||Object.keys(body).some(key=>!['version','handover_origin'].includes(key)))throw new BadRequestException('Invalid recovery request.');
+    const {version,handover_origin}=body as {version:unknown;handover_origin?:unknown};
+    if(!Number.isSafeInteger(version)||(version as number)<1||(version as number)>2147483647)throw new BadRequestException('A valid trip version is required.');
+    if(handover_origin!==undefined&&(typeof handover_origin!=='string'||handover_origin.trim().length<1||handover_origin.trim().length>500||/[\u0000-\u001f\u007f]/.test(handover_origin)))throw new BadRequestException('A valid safe pickup address is required.');
+    return this.routes.recoveryOptions(client,tripId,version as number,typeof handover_origin==='string'?handover_origin.trim():undefined);
   }
 
   /** Access is verified before route/traffic provider calls; database reads retain caller RLS. */
@@ -243,9 +248,15 @@ export class TripsService {
   }
 
   /** Require coordinator approval and fresh feasibility; atomically apply changes and history before notifications. */
-  async approveRecovery(scope: PatientScope, tripId: string, optionId: string): Promise<unknown> {
-    // TODO: Implement using Supabase and database constraints.
-    throw new NotImplementedException('approveRecovery is awaiting implementation.');
+  async approveRecovery(header:string|undefined,tripId:string,body:unknown):Promise<unknown> {
+    const client=await this.access(header,true);
+    this.assignmentId(tripId);
+    if(!body||typeof body!=='object'||Array.isArray(body)||Object.keys(body).some(key=>!['version','option_id','safe_pickup_confirmed'].includes(key)))throw new BadRequestException('Invalid recovery approval.');
+    const {version,option_id,safe_pickup_confirmed} = body as {version:unknown;option_id:unknown;safe_pickup_confirmed?:unknown};
+    this.assignmentId(option_id);
+    if(!Number.isSafeInteger(version)||(version as number)<1||(version as number)>2147483647)throw new BadRequestException('A valid trip version is required.');
+    if(safe_pickup_confirmed!==undefined&&typeof safe_pickup_confirmed!=='boolean')throw new BadRequestException('Safe pickup confirmation must be a boolean.');
+    return this.routes.approveRecovery(client,tripId,version as number,option_id as string,safe_pickup_confirmed===true);
   }
 
   private page(value: string) {
@@ -273,6 +284,14 @@ export class TripsService {
     const client=await this.access(header);
     if(body!==undefined&&(!body||typeof body!=='object'||Array.isArray(body)||Object.keys(body).length))throw new BadRequestException('Invalid notification action.');
     const result=await client.rpc('read_all_trip_notifications');
+    this.check(result.error,'Notification');
+    return result.data;
+  }
+
+  async deleteReadNotifications(header:string|undefined,body:unknown){
+    const client=await this.access(header);
+    if(body!==undefined&&(!body||typeof body!=='object'||Array.isArray(body)||Object.keys(body).length))throw new BadRequestException('Invalid notification action.');
+    const result=await client.rpc('delete_read_trip_notifications');
     this.check(result.error,'Notification');
     return result.data;
   }

@@ -13,7 +13,7 @@ export class SchedulingService {
     const token = header?.match(/^Bearer (\S+)$/i)?.[1];
     if (!token) throw new UnauthorizedException('Sign-in required.');
     const { account } = await this.auth.verifyIdentity(token);
-    if (!account || account.status !== 'active' || !(write ? ['patient'] : ['patient', 'coordinator']).includes(account.role)) throw new ForbiddenException('Treatment access denied.');
+    if (!account || account.status !== 'active' || !(write ? ['patient','caregiver'] : ['patient','caregiver','coordinator']).includes(account.role)) throw new ForbiddenException('Treatment access denied.');
     if (changingExisting) throw new ForbiddenException('Changes to existing treatment schedules require coordinator approval.');
     return { client: this.database.forUser(token), account };
   }
@@ -136,12 +136,21 @@ export class SchedulingService {
   async saveTreatment(header: string | undefined, body: unknown, id?: string) {
     const { client, account } = await this.access(header, true, Boolean(id));
     if (id) throw new ForbiddenException('Changes to existing treatment schedules require coordinator approval.');
-    const details = treatmentInput(body);
+    const caregiver=account.role==='caregiver';
+    if(caregiver&&(!body||typeof body!=='object'||Array.isArray(body)))throw new BadRequestException('Choose a linked patient.');
+    const {patient_id:requestedPatient,...fields}=caregiver?body as Record<string,unknown>:{};
+    if(caregiver&&(typeof requestedPatient!=='string'||!/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(requestedPatient)))throw new BadRequestException('Choose a linked patient.');
+    const details = treatmentInput(caregiver?fields:body);
     if (details.replaces_schedule_id) throw new ForbiddenException('Rescheduling requires coordinator approval.');
-    const patient = await client.from('patients').select('id').eq('account_id', account.id).eq('status', 'active').maybeSingle();
-    this.check(patient.error);
-    if (!patient.data) throw new ForbiddenException('An active Patient profile is required.');
-    const result = await client.from('treatment_schedules').insert({ ...details, patient_id: patient.data.id }).select('*').maybeSingle();
+    let patientId=requestedPatient;
+    if(!caregiver){
+      const patient = await client.from('patients').select('id').eq('account_id', account.id).eq('status', 'active').maybeSingle();
+      this.check(patient.error);
+      if (!patient.data) throw new ForbiddenException('An active Patient profile is required.');
+      patientId=patient.data.id;
+    }
+    // RLS and the locked overlap trigger recheck the live link; no patient profile read is granted.
+    const result = await client.from('treatment_schedules').insert({ ...details, patient_id: patientId }).select('*').maybeSingle();
     this.check(result.error);
     if (!result.data) throw new NotFoundException('Treatment schedule not found.');
     return result.data;
