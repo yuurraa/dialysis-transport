@@ -55,7 +55,7 @@ test('coordinator reviews require an explicit decision, version and rejection re
   assert.equal(calls.length,0);
   assert.equal((await request(`/${id}/review`,'PATCH',{version:2,decision:'rejected',reason:' Correct details '})).status,200);
   assert.deepEqual(calls[0],{name:'review_driver_vehicle',args:{target:id,expected_version:2,decision:'rejected',reason:'Correct details'}});
-  failure='40001';assert.equal((await request(`/${id}/review`,'PATCH',{version:1,decision:'approved',reason:''})).status,409);failure=null;
+  failure='PT409';assert.equal((await request(`/${id}/review`,'PATCH',{version:1,decision:'approved',reason:''})).status,409);failure=null;
   for(const query of ['page=0','status=unknown','search='+'x'.repeat(101),'status=pending&status=approved','sort=licence_number','direction=sideways','sort=id&sort=full_name']) assert.equal((await request('?'+query)).status,400);
   assert.equal((await request('?page=2&status=not-submitted&search=Fixture&sort=full_name&direction=asc')).status,200);
   assert.deepEqual(calls.at(-1),{name:'list_drivers',args:{page_no:2,search_text:'Fixture',status_filter:'not-submitted',sort_by:'full_name',sort_order:'asc'}});

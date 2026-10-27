@@ -28,7 +28,7 @@ export class DriversService {
   private check(error: { code?: string } | null) {
     if (!error) return;
     if (error.code === '42501') throw new ForbiddenException('Driver service access denied.');
-    if (error.code === '40001') throw new ConflictException({ code: 'registration_conflict', message: 'Registration changed. Reload before trying again.' });
+    if (['PT409', '40001'].includes(error.code ?? '')) throw new ConflictException({ code: 'registration_conflict', message: 'Registration changed. Reload before trying again.' });
     if (error.code === '23505') throw new ConflictException({ code: 'vehicle_plate_conflict', message: 'This vehicle plate is already registered.' });
     if (error.code === 'P0002') throw new NotFoundException('Driver registration not found.');
     if (['22023', '23514', '23502', '22P02'].includes(error.code ?? '')) throw new BadRequestException('Check the registration details and current status.');

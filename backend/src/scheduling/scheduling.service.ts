@@ -21,7 +21,7 @@ export class SchedulingService {
   private check(error: { code?: string } | null) {
     if (!error) return;
     if (error.code === 'P0002') throw new NotFoundException('Treatment schedule or request not found.');
-    if (error.code === '40001') throw new ConflictException('Schedule changed. Reload before trying again.');
+    if (['PT409', '40001'].includes(error.code ?? '')) throw new ConflictException('Schedule changed. Reload before trying again.');
     if (error.code === '42501') throw new ForbiddenException('Treatment access denied.');
     if (error.code === '23P01') throw new BadRequestException('Treatment sessions overlap.');
     if (['23503', '23514', '22P02', '22023', '23505', '22007', '22008'].includes(error.code ?? '')) throw new BadRequestException('Invalid treatment schedule.');

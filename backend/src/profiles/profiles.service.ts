@@ -103,7 +103,7 @@ export class ProfilesService {
     if(error.code==='P5001')throw new HttpException({code:'patient_link_limit',message:'A patient can have at most 5 linked caregivers.'},409);
     if(error.code==='P5002')throw new HttpException({code:'caregiver_link_limit',message:'A caregiver can have at most 5 linked patients.'},409);
     if (error.code === '23505') throw new ConflictException('This profile or relationship already exists.');
-    if (error.code === '40001') throw new ConflictException('This profile was changed by someone else. Reload before saving.');
+    if (['PT409', '40001'].includes(error.code ?? '')) throw new ConflictException('This profile was changed by someone else. Reload before saving.');
     if (error.code === 'P0002') throw new NotFoundException('Profile not found.');
     if (error.code === '42501') throw new ForbiddenException('Profile access denied.');
     if (error.code === '23514' || error.code === '22P02' || error.code === '22023' || error.code === '23502') throw new BadRequestException('Invalid profile details.');

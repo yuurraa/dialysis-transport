@@ -20,7 +20,7 @@ export class TripRoutingService {
 
   private check(error:{code?:string}|null) {
     if(!error)return;
-    if(error.code==='40001')throw new ConflictException('Trip changed. Reload before trying again.');
+    if(['PT409','40001'].includes(error.code??''))throw new ConflictException('Trip changed. Reload before trying again.');
     throw failed();
   }
 

@@ -19,7 +19,7 @@ export class AvailabilityService {
     if (!error) return;
     if (error.code === 'P0001') throw new BadRequestException({code:'availability_booked',message:'Assigned times must stay available until a coordinator unassigns the trip.'});
     if (error.code === '42501') throw new ForbiddenException('An approved vehicle is required.');
-    if (error.code === '40001') throw new ConflictException({ code: 'availability_conflict', message: 'Availability changed. Reload before saving.' });
+    if (['PT409', '40001'].includes(error.code ?? '')) throw new ConflictException({ code: 'availability_conflict', message: 'Availability changed. Reload before saving.' });
     if (['22023', '22007', '22008', '22P02', '23514'].includes(error.code ?? '')) throw new BadRequestException('Check the availability slots.');
     throw new ServiceUnavailableException('Availability is unavailable. Please try again.');
   }

@@ -22,7 +22,7 @@ export class TripsService {
   private check(error: { code?: string } | null, resource = 'Treatment schedule') {
     if (!error) return;
     if (error.code === '42501') throw new ForbiddenException('Trip access denied.');
-    if (error.code === '40001') throw new ConflictException(`${resource} changed. Reload before trying again.`);
+    if (['PT409', '40001'].includes(error.code ?? '')) throw new ConflictException(`${resource} changed. Reload before trying again.`);
     if (['22023', '23514', '22P02', '22007', '22008'].includes(error.code ?? '')) throw new BadRequestException('Invalid trip request.');
     if (error.code === 'P0002') throw new NotFoundException(`${resource} not found.`);
     throw new ServiceUnavailableException('Trips are unavailable. Please try again.');

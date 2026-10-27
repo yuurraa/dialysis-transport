@@ -204,7 +204,7 @@ begin
   end if;
   select * into saved from public.patients where id=target for update;
   if not found then raise exception 'Patient not found.' using errcode = 'P0002'; end if;
-  if saved.version <> (details->>'version')::numeric then raise exception 'Patient has changed. Reload before saving.' using errcode = '40001'; end if;
+  if saved.version <> (details->>'version')::numeric then raise exception 'Patient has changed. Reload before saving.' using errcode = 'PT409'; end if;
   update public.patients set status=coalesce(details->>'status',status), notes=case when details ? 'notes' then btrim(details->>'notes') else notes end
     where id=target returning * into saved;
   return to_jsonb(saved);
@@ -247,9 +247,9 @@ begin
     if coalesce(jsonb_typeof(details->'version'), '') <> 'number' or coalesce(details->>'version','') !~ '^[1-9][0-9]*$' then
       raise exception 'Patient version is required.' using errcode = '22023';
     end if;
-    if saved.version <> (details->>'version')::numeric then raise exception 'Patient has changed. Reload before saving.' using errcode = '40001'; end if;
+    if saved.version <> (details->>'version')::numeric then raise exception 'Patient has changed. Reload before saving.' using errcode = 'PT409'; end if;
   elsif details ? 'version' then
-    raise exception 'Patient profile has changed. Reload before saving.' using errcode = '40001';
+    raise exception 'Patient profile has changed. Reload before saving.' using errcode = 'PT409';
   end if;
   insert into public.patients(account_id, birth_date, gender, full_name, phone, pickup_address, mobility, assistance_required, unit_no, postal_code, notes)
     values (owner_id, candidate.birth_date, candidate.gender, btrim(candidate.full_name), btrim(candidate.phone), btrim(candidate.pickup_address), candidate.mobility, candidate.assistance_required, coalesce(btrim(candidate.unit_no), ''), coalesce(btrim(candidate.postal_code), ''), coalesce(btrim(candidate.notes), ''))
@@ -335,7 +335,7 @@ begin
   if not found then raise exception 'Driver access required.' using errcode='42501'; end if;
   select * into saved from public.drivers where account_id=owner_id for update;
   if not found then raise exception 'Driver profile not found.' using errcode='P0002'; end if;
-  if saved.version<>expected_version then raise exception 'Driver profile changed. Reload before saving.' using errcode='40001'; end if;
+  if saved.version<>expected_version then raise exception 'Driver profile changed. Reload before saving.' using errcode='PT409'; end if;
   update public.drivers set full_name=btrim(details->>'full_name'),phone=btrim(details->>'phone'),
     birth_date=(details->>'birth_date')::date,gender=details->>'gender',version=version+1
     where account_id=owner_id returning * into saved;
@@ -363,7 +363,7 @@ begin
   insert into public.drivers(account_id,full_name,phone,birth_date,gender)
     values (owner_id,btrim(details->>'full_name'),btrim(details->>'phone'),(details->>'birth_date')::date,details->>'gender')
     on conflict (account_id) do nothing returning * into saved;
-  if not found then raise exception 'Driver profile already exists. Reload before continuing.' using errcode='40001'; end if;
+  if not found then raise exception 'Driver profile already exists. Reload before continuing.' using errcode='PT409'; end if;
   return to_jsonb(saved);
 end;
 $$;
@@ -465,8 +465,8 @@ begin
   select * into saved from public.driver_vehicles where driver_id=owner_id for update;
   if found then
     if expected_version is null or expected_version<>saved.version then
-      raise exception 'Registration changed. Reload before saving.' using errcode='40001'; end if;
-  elsif expected_version is not null then raise exception 'Registration changed. Reload before saving.' using errcode='40001'; end if;
+      raise exception 'Registration changed. Reload before saving.' using errcode='PT409'; end if;
+  elsif expected_version is not null then raise exception 'Registration changed. Reload before saving.' using errcode='PT409'; end if;
   insert into public.driver_vehicles(driver_id,licence_number,plate_number,make,model,passenger_capacity,wheelchair_accessible)
     values (owner_id,btrim(candidate.licence_number),upper(btrim(candidate.plate_number)),btrim(candidate.make),btrim(candidate.model),candidate.passenger_capacity,candidate.wheelchair_accessible)
     on conflict (driver_id) do update set licence_number=excluded.licence_number,plate_number=excluded.plate_number,
@@ -493,7 +493,7 @@ begin
   if not found then raise exception 'Active driver not found.' using errcode='P0002'; end if;
   select * into saved from public.driver_vehicles where driver_id=target for update;
   if not found then raise exception 'Vehicle registration not found.' using errcode='P0002'; end if;
-  if expected_version is null or saved.version<>expected_version then raise exception 'Registration changed. Reload before reviewing.' using errcode='40001'; end if;
+  if expected_version is null or saved.version<>expected_version then raise exception 'Registration changed. Reload before reviewing.' using errcode='PT409'; end if;
   if saved.status<>'pending' then raise exception 'Only pending registrations can be reviewed.' using errcode='22023'; end if;
   select id into actor from public.accounts where auth_user_id=(select auth.uid()) and role='coordinator' and status='active' for share;
   if actor is null then raise exception 'Coordinator access required.' using errcode='42501'; end if;
@@ -517,7 +517,7 @@ begin
     raise exception 'Invalid driver status.' using errcode='22023'; end if;
   select * into selected from public.accounts where id=target and role='driver' for update;
   if not found then raise exception 'Driver not found.' using errcode='P0002'; end if;
-  if selected.status_version<>expected_version then raise exception 'Driver status changed. Reload before saving.' using errcode='40001'; end if;
+  if selected.status_version<>expected_version then raise exception 'Driver status changed. Reload before saving.' using errcode='PT409'; end if;
   select id into actor from public.accounts where auth_user_id=(select auth.uid()) and role='coordinator' and status='active' for share;
   if actor is null then raise exception 'Coordinator access required.' using errcode='42501'; end if;
   update public.accounts set status=new_status where id=target returning * into selected;
@@ -657,7 +657,7 @@ begin
   end if;
   select * into saved from public.driver_availability where driver_id=owner_id for update;
   if (found and saved.version<>expected_version) or (not found and expected_version<>0) then
-    raise exception 'Availability changed. Reload before saving.' using errcode='40001'; end if;
+    raise exception 'Availability changed. Reload before saving.' using errcode='PT409'; end if;
   insert into public.driver_availability(driver_id,weekly_slots)
     values(owner_id,array(select x from unnest(slots) x order by x))
     on conflict(driver_id) do update set weekly_slots=excluded.weekly_slots,
@@ -985,7 +985,7 @@ begin
   -- Recheck after the lock: another request may have deleted the schedule.
   select * into selected from public.treatment_schedules where id=target for update;
   if not found then return null; end if;
-  if selected.version <> expected_version then raise exception 'Schedule changed. Reload before deleting.' using errcode='40001'; end if;
+  if selected.version <> expected_version then raise exception 'Schedule changed. Reload before deleting.' using errcode='PT409'; end if;
   if not private.can_manage_patient_transport(selected.patient_id) and not private.is_coordinator() then
     raise exception 'Treatment access denied.' using errcode='42501';
   end if;
@@ -1021,7 +1021,7 @@ begin
   select * into selected from public.treatment_schedules where id=target for update;
   if not found then return null; end if;
   if not private.can_manage_patient_transport(selected.patient_id) and not private.is_coordinator() then raise exception 'Treatment access denied.' using errcode='42501'; end if;
-  if selected.version<>expected_version then raise exception 'Schedule changed. Reload before saving.' using errcode='40001'; end if;
+  if selected.version<>expected_version then raise exception 'Schedule changed. Reload before saving.' using errcode='PT409'; end if;
   candidate := jsonb_populate_record(selected,details);
   update public.treatment_schedules set kind=candidate.kind,centre_id=candidate.centre_id,days=candidate.days,
     start_time=candidate.start_time,end_time=candidate.end_time,effective_from=candidate.effective_from,effective_to=candidate.effective_to
@@ -1320,7 +1320,7 @@ begin
   select * into chosen from public.trips where id=target and deleted_at is null for update;
   if not found then raise exception 'Trip not found.' using errcode='P0002'; end if;
   if not private.can_manage_patient_transport(chosen.patient_id) then raise exception 'Trip access denied.' using errcode='42501'; end if;
-  if chosen.version<>expected_version then raise exception 'Trip changed. Reload before trying again.' using errcode='40001'; end if;
+  if chosen.version<>expected_version then raise exception 'Trip changed. Reload before trying again.' using errcode='PT409'; end if;
   cutoff:=coalesce(chosen.pickup_at,chosen.pickup_not_before,chosen.arrival_by-make_interval(mins=>chosen.duration_minutes));
   if action='confirm' then
     if chosen.lifecycle<>'scheduled' or chosen.assigned_driver_id is null or chosen.pickup_at<=now() or chosen.review_required or chosen.driver_unavailable_at is not null then
@@ -1360,7 +1360,7 @@ begin
   select * into chosen from public.trips where id=target and assigned_driver_id=actor and deleted_at is null for update;
   if not found then raise exception 'Trip access denied.' using errcode='42501'; end if;
   if expected_version is null or expected_version<1 then raise exception 'A trip version is required.' using errcode='22023'; end if;
-  if chosen.version<>expected_version then raise exception 'Trip changed. Reload before trying again.' using errcode='40001'; end if;
+  if chosen.version<>expected_version then raise exception 'Trip changed. Reload before trying again.' using errcode='PT409'; end if;
   if chosen.lifecycle not in ('scheduled','in-progress') or (chosen.lifecycle='scheduled' and chosen.dropoff_at<=now()) then
     raise exception 'Only an upcoming or active assigned trip can be reported.' using errcode='22023';
   end if;
@@ -1646,7 +1646,7 @@ begin
   perform 1 from public.patients where id=chosen.patient_id for update;
   select * into chosen from public.trips where id=target and deleted_at is null for update;
   if not found then raise exception 'Trip not found.' using errcode='P0002'; end if;
-  if expected_version is null or chosen.version<>expected_version then raise exception 'Trip changed.' using errcode='40001'; end if;
+  if expected_version is null or chosen.version<>expected_version then raise exception 'Trip changed.' using errcode='PT409'; end if;
   if chosen.lifecycle<>'scheduled' or chosen.assigned_driver_id is not null then return to_jsonb(chosen); end if;
   verified:=private.cached_driving_route(chosen.origin,chosen.destination);
   if verified is null then raise exception 'A verified driving route is required.' using errcode='P0001'; end if;
@@ -1830,14 +1830,14 @@ begin
   -- All competing assignments to this driver serialize, including assignments for other patients.
   perform 1 from public.patients where id=chosen.patient_id for update;
   perform 1 from public.accounts where id=driver and role='driver' and status='active' for update;
-  if not found then raise exception 'Driver is no longer eligible.' using errcode='40001'; end if;
+  if not found then raise exception 'Driver is no longer eligible.' using errcode='PT409'; end if;
   perform 1 from public.driver_vehicles where driver_id=driver for share;
   perform 1 from public.driver_availability where driver_id=driver for share;
   select * into chosen from public.trips where id=target and deleted_at is null for update;
   if not found then raise exception 'Trip not found.' using errcode='P0002'; end if;
-  if expected_version is null or chosen.version<>expected_version then raise exception 'Trip changed.' using errcode='40001'; end if;
+  if expected_version is null or chosen.version<>expected_version then raise exception 'Trip changed.' using errcode='PT409'; end if;
   if chosen.assigned_driver_id is not null then raise exception 'Unassign the current driver first.' using errcode='22023'; end if;
-  if private.driver_fits_trip(driver,chosen,starts) is distinct from true then raise exception 'Driver is no longer eligible for this pickup time.' using errcode='40001'; end if;
+  if private.driver_fits_trip(driver,chosen,starts) is distinct from true then raise exception 'Driver is no longer eligible for this pickup time.' using errcode='PT409'; end if;
   select jsonb_build_object('driver_name',d.full_name,'driver_phone',d.phone,'vehicle_id',v.id,'plate',v.plate_number,'make',v.make,'model',v.model,
     'passenger_capacity',v.passenger_capacity,'wheelchair_accessible',v.wheelchair_accessible,'patient_phone',p.phone,'mobility',p.mobility,'assistance_required',p.assistance_required) into snapshot
     from public.drivers d join public.driver_vehicles v on v.driver_id=d.account_id cross join public.patients p where d.account_id=driver and p.id=chosen.patient_id;
@@ -1863,7 +1863,7 @@ begin
   perform 1 from public.patients where id=chosen.patient_id for update;
   select * into chosen from public.trips where id=target and deleted_at is null for update;
   if not found then raise exception 'Trip not found.' using errcode='P0002'; end if;
-  if expected_version is null or chosen.version<>expected_version then raise exception 'Trip changed.' using errcode='40001'; end if;
+  if expected_version is null or chosen.version<>expected_version then raise exception 'Trip changed.' using errcode='PT409'; end if;
   if chosen.lifecycle<>'scheduled' or chosen.assigned_driver_id is null or chosen.pickup_at<=now() then raise exception 'Only upcoming assigned trips may be unassigned.' using errcode='22023'; end if;
   select id into actor from public.accounts where auth_user_id=(select auth.uid());
   insert into public.trip_history(trip_id,actor_id,event,details) values(target,actor,'unassigned',jsonb_build_object('driver_id',chosen.assigned_driver_id,'pickup_at',chosen.pickup_at,'reason','coordinator'));
@@ -1986,7 +1986,7 @@ begin
   select * into saved from public.driver_week_availability where driver_id=owner_id and week_start=target_week for update;
   has_override:=found;
   if (has_override and saved.version<>expected_version) or (not has_override and (expected_version<>0 or template_version<>expected_template_version)) then
-    raise exception 'Availability changed. Reload before saving.' using errcode='40001'; end if;
+    raise exception 'Availability changed. Reload before saving.' using errcode='PT409'; end if;
   -- Serialize with assignments on the same Driver account, including midnight crossings.
   if exists(select 1 from private.driver_booking_windows(owner_id) t cross join lateral generate_series(
       date_trunc('hour',t.window_start at time zone 'Asia/Singapore')+floor(extract(minute from t.window_start at time zone 'Asia/Singapore')/30)*interval '30 minutes',
@@ -2024,7 +2024,7 @@ begin
   if not found or person.status<>'active' then raise exception 'An active Patient profile is required.' using errcode='42501'; end if;
   select * into chosen from public.treatment_schedules where id=target for update;
   if not found then raise exception 'Treatment schedule not found.' using errcode='P0002'; end if;
-  if chosen.version<>expected_version then raise exception 'Treatment schedule changed. Reload before generating Trips.' using errcode='40001'; end if;
+  if chosen.version<>expected_version then raise exception 'Treatment schedule changed. Reload before generating Trips.' using errcode='PT409'; end if;
   if not restore_deleted and not approved_change then
     perform 1 from public.treatment_trip_generation where schedule_id=chosen.id and enabled for update;
     if not found then return jsonb_build_object('created',0,'updated',0,'unchanged',0,'skipped',0,'total',0); end if;
@@ -2132,7 +2132,7 @@ begin
   perform 1 from public.patients where id=selected.patient_id for update;
   select * into selected from public.trips where id=target and deleted_at is null for update;
   if not found then raise exception 'Trip not found or already deleted.' using errcode='P0002'; end if;
-  if selected.version<>expected_version then raise exception 'Trip changed. Reload before deleting.' using errcode='40001'; end if;
+  if selected.version<>expected_version then raise exception 'Trip changed. Reload before deleting.' using errcode='PT409'; end if;
   if selected.lifecycle<>'scheduled' or selected.status<>'unfilled' or selected.pickup_at is not null then raise exception 'Only unassigned trips may be deleted.' using errcode='22023'; end if;
   select id into actor from public.accounts where auth_user_id=(select auth.uid());
   update public.trips set deleted_at=now(),schedule_change_cancelled=false,updated_at=now() where id=target;
@@ -2276,10 +2276,10 @@ begin
   select * into person from public.patients where id=chosen.patient_id for update;
   select * into chosen from public.treatment_schedules where id=target for update;
   if not found then raise exception 'Treatment schedule not found.' using errcode='P0002'; end if;
-  if chosen.version<>expected_version then raise exception 'Schedule changed.' using errcode='40001'; end if;
+  if chosen.version<>expected_version then raise exception 'Schedule changed.' using errcode='PT409'; end if;
   if chosen.replaces_schedule_id is not null then raise exception 'Manage automatic generation on the original recurring schedule.' using errcode='22023'; end if;
   select * into setting from public.treatment_trip_generation where schedule_id=target for update;
-  if coalesce(setting.version,0)<>expected_setting_version then raise exception 'Generation setting changed.' using errcode='40001'; end if;
+  if coalesce(setting.version,0)<>expected_setting_version then raise exception 'Generation setting changed.' using errcode='PT409'; end if;
   select id into actor from public.accounts where auth_user_id=(select auth.uid());
   insert into public.treatment_trip_generation(schedule_id,enabled,enabled_by)
     values(target,enabled,actor)
@@ -2412,10 +2412,10 @@ begin
   select * into chosen from public.treatment_schedules where id=target for update;
   if not found then raise exception 'Treatment schedule not found.' using errcode='P0002'; end if;
   if not private.can_manage_patient_transport(chosen.patient_id) then raise exception 'Treatment access denied.' using errcode='42501'; end if;
-  if expected_version is null or expected_version<>chosen.version then raise exception 'Treatment schedule changed.' using errcode='40001'; end if;
+  if expected_version is null or expected_version<>chosen.version then raise exception 'Treatment schedule changed.' using errcode='PT409'; end if;
   if reason is null or length(btrim(reason)) not between 1 and 1000 then raise exception 'A reason is required.' using errcode='22023'; end if;
   if exists(select 1 from public.treatment_change_requests where root_schedule_id=root.id and status='pending') then
-    raise exception 'A change request for this series is already pending.' using errcode='40001';
+    raise exception 'A change request for this series is already pending.' using errcode='PT409';
   end if;
   proposal:=private.validate_treatment_proposal(chosen,operation,proposal,original_day);
   select id into actor from public.accounts where auth_user_id=(select auth.uid());
@@ -2451,7 +2451,7 @@ begin
   perform 1 from public.treatment_schedules where id=saved.root_schedule_id for update;
   select * into saved from public.treatment_change_requests where id=target for update;
   if not private.can_manage_patient_transport(saved.patient_id) then raise exception 'Treatment access denied.' using errcode='42501'; end if;
-  if expected_version is null or saved.version<>expected_version or saved.status<>'pending' then raise exception 'Request changed.' using errcode='40001'; end if;
+  if expected_version is null or saved.version<>expected_version or saved.status<>'pending' then raise exception 'Request changed.' using errcode='PT409'; end if;
   update public.treatment_change_requests set status='withdrawn',version=version+1 where id=target returning * into saved;
   return to_jsonb(saved);
 end;
@@ -2509,11 +2509,11 @@ begin
   select * into root from public.treatment_schedules where id=request.root_schedule_id for update;
   select * into chosen from public.treatment_schedules where id=request.schedule_id for update;
   select * into request from public.treatment_change_requests where id=target for update;
-  if expected_version is null or request.version<>expected_version or request.status<>'pending' then raise exception 'Request changed.' using errcode='40001'; end if;
+  if expected_version is null or request.version<>expected_version or request.status<>'pending' then raise exception 'Request changed.' using errcode='PT409'; end if;
   select id into actor from public.accounts where auth_user_id=(select auth.uid());
   if decision='approved' then
     if chosen.id is null or root.id is null or chosen.version<>request.schedule_version or root.version<>request.root_version then
-      raise exception 'The treatment changed since this request. Reject it and ask for a new request.' using errcode='40001';
+      raise exception 'The treatment changed since this request. Reject it and ask for a new request.' using errcode='PT409';
     end if;
     if not exists(select 1 from public.patients p join public.accounts a on a.id=p.account_id
       where p.id=request.patient_id and p.status='active' and a.role='patient' and a.status='active') then
@@ -2521,9 +2521,9 @@ begin
     end if;
     impact:=private.treatment_assignment_impact(request.id);
     if jsonb_array_length(impact->'trips')>0 then
-      if assignment_token is distinct from impact->>'token' then raise exception 'Affected assignments changed. Reload and confirm their release.' using errcode='40001'; end if;
+      if assignment_token is distinct from impact->>'token' then raise exception 'Affected assignments changed. Reload and confirm their release.' using errcode='PT409'; end if;
       for assigned in select * from public.trips where id in (select (item->>'id')::uuid from jsonb_array_elements(impact->'trips') item) for update loop
-        if assigned.version<>(select (item->>'version')::integer from jsonb_array_elements(impact->'trips') item where (item->>'id')::uuid=assigned.id) then raise exception 'Affected assignments changed. Reload before approving.' using errcode='40001'; end if;
+        if assigned.version<>(select (item->>'version')::integer from jsonb_array_elements(impact->'trips') item where (item->>'id')::uuid=assigned.id) then raise exception 'Affected assignments changed. Reload before approving.' using errcode='PT409'; end if;
         if assigned.pickup_at<=now() then raise exception 'A journey that has started cannot be changed.' using errcode='22023'; end if;
         insert into public.trip_history(trip_id,actor_id,event,details) values(assigned.id,actor,'unassigned',jsonb_build_object('driver_id',assigned.assigned_driver_id,'reason','schedule_change','request_id',request.id));
         update public.trips set assigned_driver_id=null,assigned_vehicle_id=null,assignment=null,pickup_at=null,dropoff_at=null,status='unfilled',updated_at=now() where id=assigned.id;
@@ -2658,7 +2658,7 @@ begin
   if not found then raise exception 'Driver access required.' using errcode='42501'; end if;
   select * into chosen from public.trips where id=target and assigned_driver_id=actor and deleted_at is null for update;
   if not found then raise exception 'Trip access denied.' using errcode='42501'; end if;
-  if chosen.version<>expected_version then raise exception 'Trip changed. Reload before trying again.' using errcode='40001'; end if;
+  if chosen.version<>expected_version then raise exception 'Trip changed. Reload before trying again.' using errcode='PT409'; end if;
   if action='start' then
     if chosen.lifecycle='in-progress' then return to_jsonb(chosen); end if;
     if chosen.lifecycle<>'scheduled' then raise exception 'Only a scheduled journey can start.' using errcode='22023'; end if;
@@ -2671,7 +2671,7 @@ begin
     end if;
     if exists(select 1 from public.trips where id<>target and deleted_at is null and
       ((lifecycle='in-progress' and assigned_driver_id=actor) or (patient_id=chosen.patient_id and (lifecycle='in-progress' or (lifecycle='scheduled' and first_started_at is not null))))) then
-      raise exception 'A driver or patient already has an active trip.' using errcode='40001';
+      raise exception 'A driver or patient already has an active trip.' using errcode='PT409';
     end if;
     update public.trips set lifecycle='in-progress',started_at=now(),status=case when (direction='outbound' and now()+make_interval(mins=>duration_minutes)>arrival_by) or not private.driver_covers_window(actor,now(),now()+make_interval(mins=>duration_minutes)) then 'at-risk' else status end,updated_at=now()
       where id=target returning * into chosen;
@@ -2727,7 +2727,7 @@ begin
   perform 1 from public.trips where id=target and assigned_driver_id=actor and lifecycle='in-progress' and deleted_at is null for share;
   if not found then raise exception 'Only an active assigned trip may report location.' using errcode='42501'; end if;
   perform 1 from public.trip_locations l where l.trip_id=target and l.driver_id=actor and l.sharing_id=session_id for update;
-  if not found then raise exception 'Location sharing session ended.' using errcode='40001'; end if;
+  if not found then raise exception 'Location sharing session ended.' using errcode='PT409'; end if;
   update public.trip_locations l set latitude=report_trip_location.latitude,longitude=report_trip_location.longitude,
     accuracy_metres=report_trip_location.accuracy_metres,recorded_at=report_trip_location.recorded_at,received_at=now()
     where l.trip_id=target and (l.recorded_at is null or l.recorded_at<report_trip_location.recorded_at);
@@ -2824,6 +2824,8 @@ language sql stable security definer set search_path='' as $$
       and t.lifecycle='in-progress' and l.latitude is not null))
   from public.trips t where t.id=target and t.deleted_at is null and t.assigned_driver_id is not null and t.lifecycle in ('scheduled','in-progress');
 $$;
+-- Application conflicts use PT409 throughout this schema. Never raise 40001 for
+-- validation: PostgREST 14 can retry it indefinitely, including expired payloads.
 create or replace function private.record_trip_traffic_check(target uuid,expected_version integer,assessment jsonb) returns jsonb
 language plpgsql security definer set search_path='' as $$
 declare journey public.trips; projected public.trips; checked_at timestamptz; expires_at timestamptz; attention boolean; clear_verified boolean; recheck_at timestamptz;
@@ -2836,7 +2838,7 @@ begin
   end if;
   checked_at:=(assessment->>'assessed_at')::timestamptz; expires_at:=(assessment->>'expires_at')::timestamptz;
   if checked_at is null or expires_at is null or checked_at<now()-interval '30 seconds' or checked_at>now()+interval '5 seconds'
-    or expires_at<=now() or expires_at<=checked_at or expires_at>checked_at+interval '2 minutes' then raise exception 'Traffic assessment expired.' using errcode='40001'; end if;
+    or expires_at<=now() or expires_at<=checked_at or expires_at>checked_at+interval '2 minutes' then raise exception 'Traffic assessment expired.' using errcode='PT409'; end if;
   select * into journey from public.trips where id=target and deleted_at is null;
   if not found then raise exception 'Trip not found.' using errcode='P0002'; end if;
   -- Match execution/assignment ordering before the notification FK takes account locks.
@@ -2845,10 +2847,10 @@ begin
   select * into journey from public.trips where id=target and deleted_at is null for update;
   if not found then raise exception 'Trip not found.' using errcode='P0002'; end if;
   if journey.version<>expected_version or journey.assigned_driver_id is null or journey.lifecycle not in ('scheduled','in-progress') then
-    raise exception 'Trip changed.' using errcode='40001';
+    raise exception 'Trip changed.' using errcode='PT409';
   end if;
   if checked_at<clock_timestamp()-interval '30 seconds' or expires_at<=clock_timestamp() then
-    raise exception 'Traffic assessment expired while waiting.' using errcode='40001';
+    raise exception 'Traffic assessment expired while waiting.' using errcode='PT409';
   end if;
   attention:=(assessment->>'requires_attention')::boolean;
   if attention and (assessment->>'risk')='no-delay-detected' then raise exception 'Invalid traffic risk.' using errcode='22023'; end if;
@@ -2952,7 +2954,7 @@ language plpgsql stable security definer set search_path='' as $$
 declare journey public.trips; options jsonb;
 begin
   select * into journey from public.trips where id=target and deleted_at is null;
-  if not found or expected_version is null or journey.version<>expected_version then raise exception 'Trip changed.' using errcode='40001'; end if;
+  if not found or expected_version is null or journey.version<>expected_version then raise exception 'Trip changed.' using errcode='PT409'; end if;
   if journey.lifecycle<>'scheduled' or journey.status<>'at-risk' or journey.assigned_driver_id is null or journey.review_required then return null; end if;
   select jsonb_agg(jsonb_build_object('id',o.id,'driver_id',o.driver_id,'driver_name',d.full_name,'vehicle_id',o.vehicle_id,
     'plate',v.plate_number,'make',v.make,'model',v.model,'pickup_at',o.pickup_at,'dropoff_at',o.pickup_at+make_interval(mins=>o.duration_minutes),
@@ -2973,7 +2975,7 @@ declare original public.trips; projected public.trips; route jsonb; starts times
 begin
   select * into original from public.trips where id=target and deleted_at is null;
   if not found then raise exception 'Trip not found.' using errcode='P0002'; end if;
-  if expected_version is null or original.version<>expected_version then raise exception 'Trip changed.' using errcode='40001'; end if;
+  if expected_version is null or original.version<>expected_version then raise exception 'Trip changed.' using errcode='PT409'; end if;
   if original.status<>'at-risk' or original.assigned_driver_id is null or original.review_required
     or (handover_origin is null and original.lifecycle<>'scheduled')
     or (handover_origin is not null and (original.lifecycle<>'in-progress' or length(btrim(handover_origin)) not between 1 and 500)) then
@@ -3084,13 +3086,13 @@ language plpgsql stable security definer set search_path='' as $$
 declare option private.trip_recovery_options; journey public.trips; projected public.trips; preceding public.trips; following public.trips; legs jsonb:='[]'::jsonb;
 begin
   select * into option from private.trip_recovery_options where id=proposal and approved_at is null and expires_at>now();
-  if not found then raise exception 'Recovery option changed.' using errcode='40001'; end if;
+  if not found then raise exception 'Recovery option changed.' using errcode='PT409'; end if;
   select * into journey from public.trips where id=option.trip_id and deleted_at is null;
   if not found or journey.version<>option.trip_version or journey.status<>'at-risk' or journey.review_required or journey.assigned_driver_id is null
     or (option.handover_origin is null and journey.lifecycle<>'scheduled')
     or (option.handover_origin is not null and (journey.lifecycle<>'in-progress' or option.driver_id=journey.assigned_driver_id))
     or (journey.driver_unavailable_at is not null and option.driver_id=journey.assigned_driver_id) then
-    raise exception 'Recovery option changed.' using errcode='40001';
+    raise exception 'Recovery option changed.' using errcode='PT409';
   end if;
   projected:=journey; projected.lifecycle:='scheduled'; projected.started_at:=null;
   projected.origin:=coalesce(option.handover_origin,journey.origin); projected.route_snapshot:=private.cached_driving_route(projected.origin,journey.destination);
@@ -3114,7 +3116,7 @@ begin
   update private.trip_recovery_options o set validated_at=now(),validation_expires_at=least(valid_until,o.expires_at)
     where o.id=proposal and o.approved_at is null and o.expires_at>now()
       and exists(select 1 from public.trips t where t.id=o.trip_id and t.deleted_at is null and t.version=o.trip_version) returning * into option;
-  if not found then raise exception 'Recovery option changed.' using errcode='40001'; end if;
+  if not found then raise exception 'Recovery option changed.' using errcode='PT409'; end if;
 end;
 $$;
 
@@ -3124,7 +3126,7 @@ declare option private.trip_recovery_options; chosen public.trips; projected pub
 begin
   if not private.is_coordinator() then raise exception 'Coordinator access required.' using errcode='42501'; end if;
   select * into option from private.trip_recovery_options where id=proposal;
-  if not found then raise exception 'Recovery option changed.' using errcode='40001'; end if;
+  if not found then raise exception 'Recovery option changed.' using errcode='PT409'; end if;
   select * into chosen from public.trips where id=option.trip_id and deleted_at is null;
   if not found then raise exception 'Trip not found.' using errcode='P0002'; end if;
   select id into actor from public.accounts where auth_user_id=(select auth.uid());
@@ -3140,15 +3142,15 @@ begin
   if not found or expected_version is null or chosen.version<>expected_version or chosen.version<>option.trip_version
     or option.approved_at is not null or option.expires_at<=fresh or option.validated_at is null or option.validated_at<fresh-interval '10 seconds'
     or option.validation_expires_at<=fresh or option.pickup_at<=fresh then
-    raise exception 'Recovery option changed or expired. Reassess before approval.' using errcode='40001';
+    raise exception 'Recovery option changed or expired. Reassess before approval.' using errcode='PT409';
   end if;
   if (option.handover_origin is null and chosen.lifecycle<>'scheduled')
     or (option.handover_origin is not null and (chosen.lifecycle<>'in-progress' or safe_pickup_confirmed is distinct from true or chosen.assigned_driver_id=option.driver_id))
     or chosen.status<>'at-risk' or chosen.assigned_driver_id is null or chosen.review_required
-    or (chosen.driver_unavailable_at is not null and chosen.assigned_driver_id=option.driver_id) then raise exception 'Recovery is no longer eligible.' using errcode='40001'; end if;
+    or (chosen.driver_unavailable_at is not null and chosen.assigned_driver_id=option.driver_id) then raise exception 'Recovery is no longer eligible.' using errcode='PT409'; end if;
   route:=private.cached_driving_route(coalesce(option.handover_origin,chosen.origin),chosen.destination);
   if route is null or route->'geometry' is distinct from option.route->'geometry' or (route->>'duration_minutes')::integer>option.duration_minutes then
-    raise exception 'Recovery route changed. Reassess before approval.' using errcode='40001';
+    raise exception 'Recovery route changed. Reassess before approval.' using errcode='PT409';
   end if;
   projected:=chosen; projected.assigned_driver_id:=null; projected.assigned_vehicle_id:=null; projected.assignment:=null;
   projected.lifecycle:='scheduled'; projected.started_at:=null; projected.origin:=coalesce(option.handover_origin,chosen.origin);
@@ -3157,7 +3159,7 @@ begin
   projected.duration_minutes:=option.duration_minutes; projected.route_snapshot:=route;
   if private.driver_fits_trip(option.driver_id,projected,option.pickup_at) is distinct from true
     or not exists(select 1 from public.driver_vehicles where id=option.vehicle_id and driver_id=option.driver_id and status='approved') then
-    raise exception 'Recovery option is no longer feasible.' using errcode='40001';
+    raise exception 'Recovery option is no longer feasible.' using errcode='PT409';
   end if;
   select jsonb_build_object('driver_name',d.full_name,'driver_phone',d.phone,'vehicle_id',v.id,'plate',v.plate_number,'make',v.make,'model',v.model,
     'passenger_capacity',v.passenger_capacity,'wheelchair_accessible',v.wheelchair_accessible,'patient_phone',p.phone,'mobility',p.mobility,'assistance_required',p.assistance_required) into snapshot
@@ -3258,7 +3260,7 @@ begin
     insert into public.caregivers(account_id,full_name,phone,birth_date,gender)
       values(owner_id,btrim(details->>'full_name'),btrim(details->>'phone'),(details->>'birth_date')::date,details->>'gender') returning * into saved;
   else
-    if saved.account_id is null or saved.version<>expected_version then raise exception 'Caregiver profile changed.' using errcode='40001'; end if;
+    if saved.account_id is null or saved.version<>expected_version then raise exception 'Caregiver profile changed.' using errcode='PT409'; end if;
     update public.caregivers set full_name=btrim(details->>'full_name'),phone=btrim(details->>'phone'),birth_date=(details->>'birth_date')::date,
       gender=details->>'gender',version=version+1 where account_id=owner_id returning * into saved;
   end if;
@@ -3429,7 +3431,7 @@ begin
     or (actor.role='patient' and person.account_id is distinct from actor.id) or (actor.role='caregiver' and caregiver is distinct from actor.id)
     or (link_active and (actor.role<>'coordinator' or patient_authorised is distinct from true)) then raise exception 'Link access denied.' using errcode='42501'; end if;
   select * into saved from public.caregiver_links where patient_id=patient and caregiver_id=caregiver for update;
-  if (saved.id is null and expected_version is not null) or (saved.id is not null and (expected_version is null or saved.version<>expected_version)) then raise exception 'Link changed.' using errcode='40001'; end if;
+  if (saved.id is null and expected_version is not null) or (saved.id is not null and (expected_version is null or saved.version<>expected_version)) then raise exception 'Link changed.' using errcode='PT409'; end if;
   if link_active then
     if person.status<>'active' or not exists(select 1 from public.accounts where id=person.account_id and role='patient' and status='active')
       or not exists(select 1 from public.accounts a join public.caregivers c on c.account_id=a.id where a.id=caregiver and a.role='caregiver' and a.status='active') then raise exception 'Active profiles required.' using errcode='22023'; end if;
@@ -3505,7 +3507,7 @@ begin
   if not private.is_coordinator() then raise exception 'Coordinator access required.' using errcode='42501'; end if;
   select * into saved from public.accounts where id=target and role='caregiver';
   if not found or not exists(select 1 from public.caregivers where account_id=target) then raise exception 'Caregiver not found.' using errcode='P0002'; end if;
-  if saved.status_version<>expected_version then raise exception 'Caregiver changed.' using errcode='40001'; end if;
+  if saved.status_version<>expected_version then raise exception 'Caregiver changed.' using errcode='PT409'; end if;
   update public.accounts set status=decision where id=target returning * into saved;
   return jsonb_build_object('id',saved.id,'status',saved.status,'status_version',saved.status_version);
 end;

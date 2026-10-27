@@ -28,7 +28,7 @@ const gateway = { forUser: () => ({
   rpc: async (name: string, args?: { details: unknown; expected_version?: number }) => {
     if(name==='manage_caregiver_link'&&linkFailure)return {data:null,error:{code:linkFailure}};
     if (name === 'update_my_driver') driverVersion = args?.expected_version;
-    if (name === 'update_my_driver' || name === 'save_my_patient' || name === 'save_patient' || name === 'save_my_driver') { writes++; saved = args?.details; return { data: { ...record, ...(saved as object), account_id: id }, error: conflict ? { code: '40001' } : missing ? { code: 'P0002' } : null }; }
+    if (name === 'update_my_driver' || name === 'save_my_patient' || name === 'save_patient' || name === 'save_my_driver') { writes++; saved = args?.details; return { data: { ...record, ...(saved as object), account_id: id }, error: conflict ? { code: 'PT409' } : missing ? { code: 'P0002' } : null }; }
     return { data: { id, role, status }, error: null };
   },
   from: () => {

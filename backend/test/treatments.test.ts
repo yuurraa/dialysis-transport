@@ -56,7 +56,7 @@ test('trip generation permits only bounded versioned coordinator commands and ma
   context.mock.timers.setTime(new Date('2026-10-25T16:00:00Z').getTime());
   await service.generateTrips('Bearer fixture',nextWeek);
   context.mock.timers.setTime(new Date('2026-10-20T17:00:00Z').getTime());
-  for(const [errorCode,status] of [['42501',403],['40001',409],['22023',400],['23514',400],['22P02',400],['P0002',404],['unknown',503]] as const) {
+  for(const [errorCode,status] of [['42501',403],['PT409',409],['40001',409],['22023',400],['23514',400],['22P02',400],['P0002',404],['unknown',503]] as const) {
     code=errorCode;
     await assert.rejects(service.generateTrips('Bearer fixture',body),error=>(error as {status:number}).status===status);
     await assert.rejects(service.listTrips('Bearer fixture'),error=>(error as {status:number}).status===status);
@@ -97,7 +97,7 @@ test('auto-generation settings require an active coordinator and versioned boole
   for (const body of [null, {}, { ...input, enabled: 'true' }, { ...input, setting_version: -1 }, { ...input, actor: id }]) await assert.rejects(service.setAutoGeneration('Bearer fixture', id, body));
   for (const other of ['patient', 'driver', 'caregiver']) { role = other; await assert.rejects(service.setAutoGeneration('Bearer fixture', id, input), /access denied/i); }
   role = 'coordinator'; status = 'inactive'; await assert.rejects(service.setAutoGeneration('Bearer fixture', id, input), /access denied/i);
-  status = 'active'; error = { code: '40001' }; await assert.rejects(service.setAutoGeneration('Bearer fixture', id, input), /changed/i);
+  status = 'active'; error = { code: 'PT409' }; await assert.rejects(service.setAutoGeneration('Bearer fixture', id, input), /changed/i);
 });
 
 test('schedule-change requests and decisions enforce roles, strict proposals and version conflicts', async () => {
@@ -120,7 +120,7 @@ test('schedule-change requests and decisions enforce roles, strict proposals and
   await service.reviewChange('Bearer fixture', id, { decision: 'approved', version: 1 });
   assert.equal(calls.at(-1)?.[0], 'review_treatment_change');
   assert.equal(calls.at(-1)?.[1].note, '');
-  code = '40001'; await assert.rejects(service.reviewChange('Bearer fixture', id, { decision: 'approved', version: 1 }), /changed/);
+  code = 'PT409'; await assert.rejects(service.reviewChange('Bearer fixture', id, { decision: 'approved', version: 1 }), /changed/);
 });
 
 test('trip commands enforce role boundaries and validate identifiers, pickup instants and versions', async () => {
@@ -140,7 +140,7 @@ test('trip commands enforce role boundaries and validate identifiers, pickup ins
   assert.equal(calls.length,0);
   await service.assignmentOptions('Bearer fixture',id,pickup);await service.assignTrip('Bearer fixture',id,body);await service.unassignTrip('Bearer fixture',id,{version:2});
   assert.deepEqual(calls,[['trip_assignment_options',{target:id,starts:pickup}],['assign_trip',{target:id,driver:id,starts:pickup,expected_version:1}],['unassign_trip',{target:id,expected_version:2}]]);
-  code='40001';await assert.rejects(service.assignTrip('Bearer fixture',id,body),/changed/);
+  code='PT409';await assert.rejects(service.assignTrip('Bearer fixture',id,body),/changed/);
   role='driver';code=undefined;await service.listTrips('Bearer fixture');assert.equal(calls.at(-1)?.[0],'list_trips');
   for (const other of ['driver','coordinator']) {
     role=other;
@@ -156,7 +156,7 @@ test('trip commands enforce role boundaries and validate identifiers, pickup ins
   await service.confirmTrip('Bearer fixture',id,{version:3});await service.cancelTrip('Bearer fixture',id,{version:4});
   assert.deepEqual(calls.slice(-2),[['confirm_trip',{target:id,expected_version:3}],['cancel_trip',{target:id,expected_version:4}]]);
   role='caregiver';await service.confirmTrip('Bearer fixture',id,{version:3});await service.cancelTrip('Bearer fixture',id,{version:4});role='patient';
-  code='40001';await assert.rejects(service.cancelTrip('Bearer fixture',id,{version:4}),/changed/);
+  code='PT409';await assert.rejects(service.cancelTrip('Bearer fixture',id,{version:4}),/changed/);
   code=undefined;
   for(const other of ['patient','coordinator','caregiver']) {role=other;await assert.rejects(service.reportUnavailability('Bearer fixture',id,{version:4}),/access denied/);}
   role='driver';await service.reportUnavailability('Bearer fixture',id,{version:5});

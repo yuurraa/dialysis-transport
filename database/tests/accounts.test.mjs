@@ -124,7 +124,7 @@ test('patient-owned profiles are unique, private, shared with coordinators and c
     await assert.rejects(save(patient), /version/);
     const [{ patient: updated }] = await save(patient, { ...details, version: record.version, phone: '87654321', unit_no: '#05-12', postal_code: '560123', notes: 'Call on arrival.' });
     assert.equal(updated.version, record.version + 1);
-    await assert.rejects(save(patient, { ...details, version: record.version }), error => error.code === '40001');
+    await assert.rejects(save(patient, { ...details, version: record.version }), error => error.code === 'PT409');
     assert.equal(updated.id, record.id);
     assert.equal(updated.phone, '87654321');
     assert.equal(updated.unit_no, '#05-12');
@@ -132,7 +132,7 @@ test('patient-owned profiles are unique, private, shared with coordinators and c
     assert.equal(updated.notes, 'Call on arrival.');
     const [{ patient: compatible }] = await save(patient, { ...details, version: updated.version });
     assert.equal(compatible.notes, 'Call on arrival.');
-    await assert.rejects(act(coordinator, 'select public.save_patient($1,$2::jsonb)', [record.id, JSON.stringify({ notes: 'Stale coordinator', version: record.version })]), error => error.code === '40001');
+    await assert.rejects(act(coordinator, 'select public.save_patient($1,$2::jsonb)', [record.id, JSON.stringify({ notes: 'Stale coordinator', version: record.version })]), error => error.code === 'PT409');
     await assert.rejects(save(patient, { ...details, version: compatible.version, postal_code: '123' }), /check constraint/);
     await assert.rejects(save(patient, { ...details, version: compatible.version, notes: 'x'.repeat(1001) }), /check constraint/);
     assert.equal((await act(coordinator, 'select * from public.patients')).length, 1);
@@ -371,10 +371,10 @@ test('real PostgreSQL serializes overlaps, trip generation and stale patient wri
     const [outboundId, outboundVersion] = (await checked("select id,version from public.trips where direction='outbound'")).split('|');
     const deleteTrip = (id, version) => `select public.delete_trip(${literal(id)},${version});`;
     const profileChange = `select public.save_patient(${literal(patientId)},jsonb_build_object('version',(select version from public.patients where id=${literal(patientId)}),'notes','Updated fixture'));`;
-    await race('profile changes block stale trip deletion', profileChange, deleteTrip(outboundId, outboundVersion), '40001', coordinator);
+    await race('profile changes block stale trip deletion', profileChange, deleteTrip(outboundId, outboundVersion), 'PT409', coordinator);
     const refreshedSourceVersion = tripVersion;
     const staleTripVersion = await checked(`select version from public.trips where id=${literal(outboundId)}`);
-    await race('generation refresh blocks stale trip deletion', generate(refreshedSourceVersion), deleteTrip(outboundId, staleTripVersion), '40001', coordinator);
+    await race('generation refresh blocks stale trip deletion', generate(refreshedSourceVersion), deleteTrip(outboundId, staleTripVersion), 'PT409', coordinator);
     assert.equal(await checked('select count(*) from public.trips where deleted_at is null'), '2');
     const currentTripVersion = await checked(`select version from public.trips where id=${literal(outboundId)}`);
     await race('manual regeneration restores a concurrently deleted trip', deleteTrip(outboundId, currentTripVersion), generate(refreshedSourceVersion), undefined, coordinator);
@@ -393,7 +393,7 @@ test('real PostgreSQL serializes overlaps, trip generation and stale patient wri
     assert.equal(await checked('select count(*) from public.trips where deleted_at is null'), '2');
     const version = Number(await checked(`select version from public.patients where id=${literal(patientId)}`));
     const update = (status, notes) => `select public.save_patient(${literal(patientId)},${literal(JSON.stringify({ version, status, notes }))}::jsonb);`;
-    await race('stale patient status', update('inactive', 'First coordinator'), update('active', 'Stale notes edit'), '40001', coordinator);
+    await race('stale patient status', update('inactive', 'First coordinator'), update('active', 'Stale notes edit'), 'PT409', coordinator);
     assert.equal(await checked(`select status from public.patients where id=${literal(patientId)}`), 'inactive');
   } finally {
     for (const child of processes) child.kill();
@@ -1520,6 +1520,9 @@ test('trusted traffic monitoring leases work and flags a trip once without clear
     assert.ok(!(await service('select public.claim_trip_traffic_checks() as ids'))[0].ids.includes(trip.id));
     assert.equal((await service('select public.trip_traffic_context($1) as data',[trip.id]))[0].data.location,null);
     await assert.rejects(service('select public.record_trip_traffic_check($1,$2,$3::jsonb)',[trip.id,trip.version+1,JSON.stringify(assessment)]),/changed/i);
+    const expired={...assessment,assessed_at:new Date(Date.now()-60000).toISOString(),expires_at:new Date(Date.now()-1000).toISOString()};
+    await assert.rejects(service('select public.record_trip_traffic_check($1,$2,$3::jsonb)',[trip.id,trip.version,JSON.stringify(expired)]),error=>error.code==='PT409'&&/expired/i.test(error.message));
+    assert.equal((await local.query('select traffic_review_required from public.trips where id=$1',[trip.id])).rows[0].traffic_review_required,false,'Rejected assessments must not change review flags.');
     await service('select public.record_trip_traffic_check($1,$2,$3::jsonb)',[trip.id,trip.version,JSON.stringify(assessment)]);
     trip=(await local.query('select * from public.trips where id=$1',[trip.id])).rows[0];
     assert.equal(trip.traffic_review_required,true);assert.equal(trip.status,'at-risk');
