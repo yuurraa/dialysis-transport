@@ -60,7 +60,9 @@ test('LTA publishes only complete validated feeds and shares refreshes without s
   const [first,second]=await Promise.all([service.getTraffic(),service.getTraffic()]);
   assert.equal(first.incidents.length,501);assert.equal(first.speedBands[0].minimumSpeedKmh,10);assert.equal(first.speedBands.length,2);
   assert.deepEqual(second,first);assert.equal(requests.length,3);
-  first.incidents.length=0;
+  assert.equal(Reflect.set(first.incidents,'length',0),false);
+  assert.equal(Reflect.set(first.speedBands[0].start,'latitude',0),false);
+  assert.equal(second.speedBands,first.speedBands,'Concurrent assessments share immutable feed rows instead of copying the island-wide feed.');
   assert.equal((await service.getTraffic()).incidents.length,501);
   assert.equal(requests.length,3);
   large=true;assert.equal((await new LtaService().getSpeedBands()).length,50500);large=false;
@@ -102,6 +104,10 @@ test('Route traffic preserves observed coverage and shows roads for future/unass
   assert.ok(result.coverage_percent>40&&result.coverage_percent<65);
   assert.equal(result.slow_route_percent,result.coverage_percent);
   assert.ok(result.minimum_seconds>120);assert.ok(result.maximum_seconds!>result.minimum_seconds);
+  const unrelated=Array.from({length:2000},(_,index)=>({...forward,linkId:`unrelated-${index}`,start:{latitude:1.4,longitude:103.9},end:{latitude:1.401,longitude:103.901}}));
+  assert.deepEqual(routeTraffic(route,{...snapshot,speedBands:[...unrelated,...snapshot.speedBands]}),result,'Island-wide observations outside the route must not affect its assessment.');
+  const crossing={...forward,linkId:'crossing',start:{latitude:1.3001,longitude:103.79},end:{latitude:1.3001,longitude:103.82}};
+  assert.equal(routeTraffic(route,{...snapshot,speedBands:[crossing]}).coverage_percent,100,'A matching link remains eligible when its endpoints lie beyond the route bounds.');
   const stopped=routeTraffic(route,{...snapshot,speedBands:[{...forward,minimumSpeedKmh:0,maximumSpeedKmh:9,speedBand:1}]});
   assert.equal(stopped.maximum_seconds,null);
   const missing=routeTraffic(route,{...snapshot,speedBands:[reverse]});

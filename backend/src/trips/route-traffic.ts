@@ -2,7 +2,8 @@ import type { DrivingRoute } from '../integrations/onemap.service';
 import type { TrafficSnapshot, RoadSpeedBand } from '../integrations/lta.service';
 
 // Local metric projection is sufficient for proximity, not route navigation.
-const x=(point:[number,number])=>point[1]*111200*Math.cos(1.32*Math.PI/180);
+const longitudeScale=Math.cos(1.32*Math.PI/180);
+const x=(point:[number,number])=>point[1]*111200*longitudeScale;
 const y=(point:[number,number])=>point[0]*111200;
 const point=(value:{latitude:number;longitude:number}):[number,number]=>[value.latitude,value.longitude];
 const distance=(a:[number,number],b:[number,number])=>Math.hypot(x(a)-x(b),y(a)-y(b));
@@ -17,32 +18,50 @@ const cell=(p:[number,number])=>[Math.floor(x(p)/200),Math.floor(y(p)/200)];
 /** Nearby observations are advisory: grade separation and lane identity are not supplied. */
 export function routeTraffic(route:DrivingRoute,snapshot:TrafficSnapshot) {
   const geometry=route.geometry;
-  const roads=new Map<string,RoadSpeedBand[]>();
-  for(const road of snapshot.speedBands){
+  const sections:{a:[number,number];b:[number,number];length:number;steps:number}[]=[];
+  const requiredCells=new Set<string>();
+  let minX=Infinity,maxX=-Infinity,minY=Infinity,maxY=-Infinity;
+  for(let index=1;index<geometry.length;index++){
+    const a=geometry[index-1],b=geometry[index],length=distance(a,b);
+    if(!length)continue;
+    const steps=Math.ceil(length/80);sections.push({a,b,length,steps});
+    for(let step=0;step<steps;step++){
+      const fraction=(step+.5)/steps,p:[number,number]=[a[0]+(b[0]-a[0])*fraction,a[1]+(b[1]-a[1])*fraction];
+      const [i,j]=cell(p);requiredCells.add(key(i,j));
+      minX=Math.min(minX,i);maxX=Math.max(maxX,i);minY=Math.min(minY,j);maxY=Math.max(maxY,j);
+    }
+  }
+  const roads=new Map<string,{road:RoadSpeedBand;start:[number,number];end:[number,number];length:number;dx:number;dy:number}[]>();
+  for(const road of requiredCells.size?snapshot.speedBands:[]){
     const start=point(road.start),end=point(road.end),a=cell(start),b=cell(end);
+    const fromX=Math.max(minX,Math.min(a[0],b[0])-1),toX=Math.min(maxX,Math.max(a[0],b[0])+1);
+    const fromY=Math.max(minY,Math.min(a[1],b[1])-1),toY=Math.min(maxY,Math.max(a[1],b[1])+1);
+    if(fromX>toX||fromY>toY)continue;
     // Unreasonably long feed links cannot establish local route correspondence.
-    if(distance(start,end)>5000)continue;
-    for(let i=Math.min(a[0],b[0])-1;i<=Math.max(a[0],b[0])+1;i++)for(let j=Math.min(a[1],b[1])-1;j<=Math.max(a[1],b[1])+1;j++){
-      const id=key(i,j),entries=roads.get(id)??[];entries.push(road);roads.set(id,entries);
+    const length=distance(start,end);
+    if(length>5000)continue;
+    const indexed={road,start,end,length,dx:x(end)-x(start),dy:y(end)-y(start)};
+    // Only cells actually sampled by this route can contribute a speed match.
+    for(let i=fromX;i<=toX;i++)for(let j=fromY;j<=toY;j++){
+      const id=key(i,j);if(!requiredCells.has(id))continue;
+      const entries=roads.get(id)??[];entries.push(indexed);roads.set(id,entries);
     }
   }
   let total=0,covered=0,slowSections=0,fastest=0,slowest=0,unbounded=false;
   const matches=new Map<string,RoadSpeedBand&{route_geometry:[number,number][][]}>();
   const baseline=route.distanceMetres>0?route.durationSeconds/route.distanceMetres:0;
   const routeCells=new Map<string,{a:[number,number];b:[number,number]}[]>();
-  for(let index=1;index<geometry.length;index++){
-    const a=geometry[index-1],b=geometry[index],length=distance(a,b);
-    if(!length)continue;
-    const steps=Math.ceil(length/80);
+  for(const {a,b,length,steps} of sections){
+    const dx=x(b)-x(a),dy=y(b)-y(a);
     for(let step=0;step<steps;step++){
       const fraction=(step+.5)/steps,p:[number,number]=[a[0]+(b[0]-a[0])*fraction,a[1]+(b[1]-a[1])*fraction];
       const [i,j]=cell(p),id=key(i,j),segments=routeCells.get(id)??[];
       segments.push({a,b});routeCells.set(id,segments);
       let best:RoadSpeedBand|undefined,nearest=40;
-      for(const road of roads.get(id)??[]){
-        const start=point(road.start),end=point(road.end),roadLength=distance(start,end);
+      for(const indexed of roads.get(id)??[]){
+        const {road,start,end}=indexed;
         // Directed links running against travel must not affect the estimate.
-        const alignment=((x(b)-x(a))*(x(end)-x(start))+(y(b)-y(a))*(y(end)-y(start)))/(length*roadLength);
+        const alignment=(dx*indexed.dx+dy*indexed.dy)/(length*indexed.length);
         if(!Number.isFinite(alignment)||alignment<.85)continue;
         const d=proximity(p,start,end);
         if(d<nearest){nearest=d;best=road;}

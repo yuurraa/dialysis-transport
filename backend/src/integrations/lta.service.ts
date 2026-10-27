@@ -19,14 +19,14 @@ export interface RoadSpeedBand {
   end: Coordinates;
 }
 export interface TrafficSnapshot {
-  incidents: TrafficIncident[];
-  speedBands: RoadSpeedBand[];
+  readonly incidents: readonly Readonly<TrafficIncident>[];
+  readonly speedBands: readonly Readonly<RoadSpeedBand>[];
   retrievedAt: string;
   incidentsRetrievedAt: string|null;
   speedBandsRetrievedAt: string|null;
   availability?: {incidents:'current'|'unavailable'|'rate-limited';speeds:'current'|'unavailable'|'rate-limited'};
 }
-interface Feed<T> { rows:T[]; retrievedAt:string; expires:number }
+interface Feed<T> { rows:readonly T[]; retrievedAt:string; expires:number }
 const unavailable=()=>new ServiceUnavailableException({code:'traffic_unavailable',message:'Current traffic information is unavailable.'});
 class FeedFailure extends ServiceUnavailableException {
   constructor(readonly retryAt:number,readonly rateLimited=false){super({code:'traffic_unavailable',message:'Current traffic information is unavailable.'});}
@@ -48,11 +48,11 @@ function text(value:unknown,limit:number):string {
 function coordinates(latitude:unknown,longitude:unknown):Coordinates {
   const point={latitude:number(latitude),longitude:number(longitude)};
   if(!validCoordinates(point))throw unavailable();
-  return point;
+  return Object.freeze(point);
 }
 function incident(value:unknown):TrafficIncident {
   const row=record(value);
-  return {...coordinates(row.Latitude,row.Longitude),type:text(row.Type,100),message:text(row.Message,4000)};
+  return Object.freeze({...coordinates(row.Latitude,row.Longitude),type:text(row.Type,100),message:text(row.Message,4000)});
 }
 function speedBand(value:unknown):RoadSpeedBand|null {
   const row=record(value);
@@ -64,9 +64,9 @@ function speedBand(value:unknown):RoadSpeedBand|null {
   const minimum=number(row.MinimumSpeed),maximum=number(row.MaximumSpeed);
   if(!Number.isInteger(band)||band<1||band>8||minimum<0||minimum>300||maximum<=0||maximum<minimum||(band<8&&maximum>300))throw unavailable();
   const linkId=typeof row.LinkID==='number'?String(row.LinkID):row.LinkID;
-  return {linkId:text(linkId,100),roadName:text(row.RoadName,300),speedBand:band,
+  return Object.freeze({linkId:text(linkId,100),roadName:text(row.RoadName,300),speedBand:band,
     minimumSpeedKmh:minimum,maximumSpeedKmh:maximum,
-    start:coordinates(row.StartLat,row.StartLon),end:coordinates(row.EndLat,row.EndLon)};
+    start:coordinates(row.StartLat,row.StartLon),end:coordinates(row.EndLat,row.EndLon)});
 }
 
 /** A viewer's deadline does not cancel another viewer's shared refresh. */
@@ -120,7 +120,7 @@ export class LtaService {
         const pages=await Promise.all(Array.from({length:count},(_,index)=>page(skip+index*pageSize)));
         for(const values of pages){
           for(const value of values){const parsed=parse(value);if(parsed!==null)rows.push(parsed);}
-          if(values.length<pageSize)return {rows,retrievedAt:new Date(started).toISOString(),expires:started+ttl};
+          if(values.length<pageSize)return {rows:Object.freeze(rows),retrievedAt:new Date(started).toISOString(),expires:started+ttl};
         }
         skip+=count*pageSize;
       }
@@ -150,11 +150,11 @@ export class LtaService {
   }
 
   async getIncidents(signal:AbortSignal=AbortSignal.timeout(5000)):Promise<TrafficIncident[]> {
-    return structuredClone((await this.incidentFeed(signal)).rows);
+    return structuredClone([...(await this.incidentFeed(signal)).rows]);
   }
 
   async getSpeedBands(signal:AbortSignal=AbortSignal.timeout(5000)):Promise<RoadSpeedBand[]> {
-    return structuredClone((await this.speedFeed(signal)).rows);
+    return structuredClone([...(await this.speedFeed(signal)).rows]);
   }
 
   async getTraffic(signal:AbortSignal=AbortSignal.timeout(5000),allowPartial=false):Promise<TrafficSnapshot> {
@@ -165,12 +165,13 @@ export class LtaService {
       if(!incidents&&!speeds)throw unavailable();
       const times=[incidents?.retrievedAt,speeds?.retrievedAt].filter((time):time is string=>!!time).sort();
       const state=(result:PromiseSettledResult<unknown>)=>result.status==='fulfilled'?'current':result.reason instanceof FeedFailure&&result.reason.rateLimited?'rate-limited':'unavailable';
-      return {incidents:structuredClone(incidents?.rows??[]),speedBands:structuredClone(speeds?.rows??[]),retrievedAt:times[0],
+      return {incidents:incidents?.rows??[],speedBands:speeds?.rows??[],retrievedAt:times[0],
         incidentsRetrievedAt:incidents?.retrievedAt??null,speedBandsRetrievedAt:speeds?.retrievedAt??null,
         availability:{incidents:state(results[0]),speeds:state(results[1])}};
     }
     const [incidents,speeds]=await Promise.all([this.incidentFeed(signal),this.speedFeed(signal)]);
-    return {incidents:structuredClone(incidents.rows),speedBands:structuredClone(speeds.rows),
+    // Frozen feed rows can be shared by concurrent readers without island-wide copies.
+    return {incidents:incidents.rows,speedBands:speeds.rows,
       retrievedAt:incidents.retrievedAt<speeds.retrievedAt?incidents.retrievedAt:speeds.retrievedAt,
       incidentsRetrievedAt:incidents.retrievedAt,speedBandsRetrievedAt:speeds.retrievedAt};
   }

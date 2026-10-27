@@ -8,7 +8,7 @@ async function bootstrap() {
   app.setGlobalPrefix('api');
   // Browser Origin headers have no trailing slash; normalize dashboard URL values.
   const frontendOrigin = new URL(process.env.FRONTEND_ORIGIN ?? 'http://localhost:5173').origin;
-  app.enableCors({ origin: frontendOrigin });
+  app.enableCors({ origin: frontendOrigin, maxAge: 600 });
   app.enableShutdownHooks();
   const port = Number(process.env.PORT ?? 3000);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('PORT must be a valid TCP port.');

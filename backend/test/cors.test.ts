@@ -43,6 +43,7 @@ test('a frontend URL with a trailing slash still allows the browser origin on ac
       'Access-Control-Request-Headers': 'authorization',
     } });
     assert.equal(response.status, 204);
+    assert.equal(response.headers.get('access-control-max-age'), '600');
     assert.equal(response.headers.get('access-control-allow-origin'), 'https://frontend.example.test');
     assert.match(response.headers.get('access-control-allow-headers') ?? '', /authorization/i);
     const identity = await fetch(`${base}/api/auth/me`, { headers: { Origin: 'https://frontend.example.test' } });

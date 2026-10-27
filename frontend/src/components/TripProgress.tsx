@@ -37,9 +37,10 @@ export default function TripProgress({trip,driver,onChanged,onUnavailable,onSess
     if(result.trip.lifecycle!=='in-progress')setSession(null);
   }
   useEffect(()=>{
-    let live=true;
+    let live=true,fetching=false;
     async function load(){
-      if(document.visibilityState!=='visible'||busyRef.current||closing.current.size)return;
+      if(!live||fetching||document.visibilityState!=='visible'||busyRef.current||closing.current.size)return;
+      fetching=true;
       const request=++sequence.current;
       try {
         const result=await apiGet<Progress>(`/trips/${trip.id}/progress`);
@@ -49,7 +50,7 @@ export default function TripProgress({trip,driver,onChanged,onUnavailable,onSess
         setReadError(true);setProgress(null);setSession(null);
         if(reason instanceof ApiError&&reason.status===401)callbacks.current.onSessionExpired();
         else if(reason instanceof ApiError&&[403,404].includes(reason.status))callbacks.current.onUnavailable();
-      }
+      } finally {fetching=false;}
     }
     void load();const timer=window.setInterval(()=>{setNow(Date.now());void load();},5000);
     const visible=()=>{if(document.visibilityState==='visible')void load();else setSession(null);};
