@@ -1360,7 +1360,7 @@ language plpgsql security definer set search_path='' as $$
 declare journey public.trips; patient_account uuid; affected_driver uuid; label text;
 begin
   label:=case new.event when 'assigned' then 'Driver assigned' when 'unassigned' then 'Driver assignment removed'
-    when 'recovery_critical' then 'Trip needs urgent manual intervention' when 'recovery_approved' then 'Recovery approved' when 'traffic_risk_detected' then 'Traffic disruption requires review' when 'started' then 'Trip started' when 'completed' then 'Trip completed' when 'driver_unavailable' then 'Driver unavailable' when 'confirmed' then 'Pickup confirmed' when 'cancelled' then 'Trip cancelled'
+    when 'recovery_critical' then 'Trip needs urgent manual intervention' when 'recovery_approved' then 'Recovery approved' when 'traffic_risk_detected' then 'Traffic disruption requires review' when 'started' then 'Trip started' when 'completed' then 'Trip completed' when 'driver_unavailable' then 'Driver unavailable' when 'confirmed' then 'Trip acknowledged' when 'cancelled' then 'Trip cancelled'
     when 'requirements_changed' then 'Trip requires coordinator review' when 'refreshed' then 'Trip details updated'
     when 'schedule_change_approved' then 'Schedule change approved' end;
   if label is null then return null; end if;

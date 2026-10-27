@@ -8,6 +8,8 @@ const timestamp=(value:string)=>new Intl.DateTimeFormat('en-SG',{dateStyle:'medi
 const unique=(items:Notification[])=>[...new Map(items.map(item=>[item.id,item])).values()];
 
 /** A scrollable inbox; opening a trip always rechecks current access. */
+const notificationMessage=(item:Notification)=>item.event==='confirmed'?item.message.replace(/^Pickup confirmed(?= ·|$)/,'Trip acknowledged'):item.message;
+
 export default function TripNotifications({open,onUnread,onError,onSessionExpired,onOpenTrip}:{open:boolean;onUnread:(count:number)=>void;onError:(message:string)=>void;onSessionExpired:()=>void;onOpenTrip:(trip:Trip)=>void}) {
   const [data,setData]=useState<Inbox|null>(null);
   const [loading,setLoading]=useState(true),[loadingMore,setLoadingMore]=useState(false);
@@ -115,7 +117,7 @@ export default function TripNotifications({open,onUnread,onError,onSessionExpire
       {loading&&!data?<p className="dashboard-notification-status" role="status">Loading notifications…</p>:null}
       {error&&<div className="dashboard-notification-status"><p>Notifications could not be refreshed.</p><button type="button" onClick={()=>setRetry(value=>value+1)}>Retry</button></div>}
       {!loading&&!error&&!data?.notifications.length&&<p className="dashboard-notification-status">No notifications yet.</p>}
-      {!!data?.notifications.length&&<ul className="trip-notification-list">{data.notifications.map(item=><li key={item.id} data-unread={!item.read_at}><button className="trip-notification-open" type="button" disabled={!!busy||loading||loadingMore} onClick={()=>void openNotification(item)} aria-label={`${item.message} · ${timestamp(item.created_at)} · ${item.read_at?'Read':'Unread'}`}><span className="trip-notification-dot" aria-hidden="true"/><span><span className="trip-notification-message">{item.message}</span><time dateTime={item.created_at}>{timestamp(item.created_at)}</time></span></button></li>)}</ul>}
+      {!!data?.notifications.length&&<ul className="trip-notification-list">{data.notifications.map(item=><li key={item.id} data-unread={!item.read_at}><button className="trip-notification-open" type="button" disabled={!!busy||loading||loadingMore} onClick={()=>void openNotification(item)} aria-label={`${notificationMessage(item)} · ${timestamp(item.created_at)} · ${item.read_at?'Read':'Unread'}`}><span className="trip-notification-dot" aria-hidden="true"/><span><span className="trip-notification-message">{notificationMessage(item)}</span><time dateTime={item.created_at}>{timestamp(item.created_at)}</time></span></button></li>)}</ul>}
       {loadingMore&&<p className="dashboard-notification-status" role="status">Loading older notifications…</p>}
       {moreError&&<div className="dashboard-notification-status"><button type="button" onClick={()=>void loadMore()}>Retry loading older notifications</button></div>}
       {hasMore&&<div ref={sentinel} className="trip-notification-sentinel" aria-hidden="true"/>}

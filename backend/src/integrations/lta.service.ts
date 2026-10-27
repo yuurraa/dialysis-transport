@@ -50,10 +50,14 @@ function incident(value:unknown):TrafficIncident {
   const row=record(value);
   return {...coordinates(row.Latitude,row.Longitude),type:text(row.Type,100),message:text(row.Message,4000)};
 }
-function speedBand(value:unknown):RoadSpeedBand {
+function speedBand(value:unknown):RoadSpeedBand|null {
   const row=record(value);
   // Band 8 is open-ended (70+); its upper field may be a provider sentinel.
-  const band=number(row.SpeedBand),minimum=number(row.MinimumSpeed),maximum=number(row.MaximumSpeed);
+  const band=number(row.SpeedBand);
+  // Live v4 feeds include band 0 with empty speeds: no observation, not stopped traffic.
+  const missing=(value:unknown)=>value===null||value===undefined||typeof value==='string'&&!value.trim();
+  if(band===0&&missing(row.MinimumSpeed)&&missing(row.MaximumSpeed))return null;
+  const minimum=number(row.MinimumSpeed),maximum=number(row.MaximumSpeed);
   if(!Number.isInteger(band)||band<1||band>8||minimum<0||minimum>300||maximum<=0||maximum<minimum||(band<8&&maximum>300))throw unavailable();
   const linkId=typeof row.LinkID==='number'?String(row.LinkID):row.LinkID;
   return {linkId:text(linkId,100),roadName:text(row.RoadName,300),speedBand:band,
@@ -79,21 +83,33 @@ export class LtaService {
   private incidentRefresh:Promise<Feed<TrafficIncident>>|null=null;
   private speedRefresh:Promise<Feed<RoadSpeedBand>>|null=null;
 
-  private async fetchFeed<T>(endpoint:string,parse:(value:unknown)=>T,ttl:number):Promise<Feed<T>> {
+  private async fetchFeed<T>(endpoint:string,parse:(value:unknown)=>T|null,ttl:number):Promise<Feed<T>> {
     const key=process.env.LTA_ACCOUNT_KEY;
     if(!key)throw new ServiceUnavailableException({code:'traffic_unconfigured',message:'Traffic information is not configured.'});
-    const signal=AbortSignal.timeout(5000),rows:T[]=[];
+    const signal=AbortSignal.timeout(20000),rows:T[]=[];
     // Freshness begins before paging, so a slow refresh cannot extend old data's life.
     const started=Date.now();
     try {
-      for(let skip=0;skip<50000;skip+=500) {
+      const pageSize=500,maxRecords=200000;
+      const concurrency=endpoint===LTA_API.speedBands?8:1;
+      const page=async(skip:number)=>{
         const url=new URL(endpoint);url.searchParams.set('$skip',String(skip));
         const response=await fetch(url,{headers:{AccountKey:key,Accept:'application/json'},redirect:'error',signal});
         if(!response.ok)throw unavailable();
         const body=record(await response.json());
-        if(!Array.isArray(body.value)||body.value.length>500)throw unavailable();
-        rows.push(...body.value.map(parse));
-        if(body.value.length<500)return {rows,retrievedAt:new Date(started).toISOString(),expires:started+ttl};
+        if(!Array.isArray(body.value)||body.value.length>pageSize)throw unavailable();
+        return body.value;
+      };
+      // Fetch the first page alone; only the large speed feed needs concurrent pagination.
+      let skip=0;
+      while(skip<maxRecords){
+        const count=skip===0?1:Math.min(concurrency,(maxRecords-skip)/pageSize);
+        const pages=await Promise.all(Array.from({length:count},(_,index)=>page(skip+index*pageSize)));
+        for(const values of pages){
+          for(const value of values){const parsed=parse(value);if(parsed!==null)rows.push(parsed);}
+          if(values.length<pageSize)return {rows,retrievedAt:new Date(started).toISOString(),expires:started+ttl};
+        }
+        skip+=count*pageSize;
       }
       // A capped or incomplete feed must not look like a successful empty/partial snapshot.
       throw unavailable();

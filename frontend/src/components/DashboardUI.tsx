@@ -9,6 +9,12 @@ export function InfoButton({ label, onClick, disabled, buttonRef }: {
   </button>;
 }
 
+export function RefreshButton({label,onClick,busy=false}:{label:string;onClick:()=>void;busy?:boolean}) {
+  return <button className="inline-refresh-control" type="button" aria-label={label} title={label} disabled={busy} onClick={onClick}>
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5M6 7a7 7 0 0 1 11-2l3 3M4 16l3 3a7 7 0 0 0 11-2"/></svg>
+  </button>;
+}
+
 /** Shared heading for dashboard pages and sections; actions wrap below on small screens. */
 export function PageHeading({ id, title, description, eyebrow, actions, level = 1 }: {
   id: string; title: string; description?: ReactNode; eyebrow?: ReactNode; actions?: ReactNode; level?: 1 | 2;

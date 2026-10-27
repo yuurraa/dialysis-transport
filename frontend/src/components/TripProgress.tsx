@@ -117,8 +117,7 @@ export default function TripProgress({trip,driver,onChanged,onUnavailable,onSess
   const location=running&&!readError?progress?.location??null:null;
   const stale=!!location&&(now-Date.parse(location.recorded_at)>30000||now-Date.parse(location.received_at)>30000);
   return <>
-    {display==='journey'&&(current.traffic_review_required||readError||current.started_at||current.completed_at||running||driver&&(canStart||pendingStop))&&<section className="trip-progress" aria-label="Journey progress">
-      {current.traffic_review_required&&<p className="trip-map-note" role="status">A traffic disruption was reported. Coordinator review is pending.</p>}
+    {display==='journey'&&(readError||current.started_at||current.completed_at||running||driver&&(canStart||pendingStop))&&<section className="trip-progress" aria-label="Journey progress">
       {readError?<p className="trip-map-note" role="status">Progress could not be loaded. <button type="button" onClick={()=>setRetry(value=>value+1)}>Retry progress</button></p>:<>
         {(current.started_at||current.completed_at)&&<dl className="schedule-detail-fields">{current.started_at&&<div><dt>Started</dt><dd>{timestamp(current.started_at)}</dd></div>}{current.completed_at&&<div><dt>Completed</dt><dd>{timestamp(current.completed_at)}</dd></div>}</dl>}
         {running&&<p className="trip-map-note" role="status">{location?`${stale?'Last known location':'Location updated'}: ${timestamp(location.received_at)} · Accuracy ±${Math.round(location.accuracy_metres)} m`:progress?.sharing?'Waiting for the driver’s location.':'Location is not being shared.'}</p>}
@@ -128,7 +127,7 @@ export default function TripProgress({trip,driver,onChanged,onUnavailable,onSess
         <button type="button" disabled={sharingBusy||readError} onClick={()=>{if(session){const old=session;setSession(null);void clearSession(old);}else void beginSharing();}}>{sharingBusy?'Starting sharing…':session?'Stop sharing':'Share location'}</button>
       </>}{pendingStop&&<button type="button" onClick={()=>void clearSession(pendingStop)}>Retry stop sharing</button>}</div>}
     </section>}
-    {display!=='overview'&&<TripRouteMap tripId={trip.id} version={current.version} activeTrip={running} location={location} locationStale={stale} onSessionExpired={onSessionExpired} showTraffic={current.lifecycle!=='completed'&&current.lifecycle!=='cancelled'}/>}
+    {display!=='overview'&&<TripRouteMap tripId={trip.id} version={current.version} activeTrip={running} location={location} locationStale={stale} onSessionExpired={onSessionExpired}/>}
     {action&&<Overlay title={action==='start'?'Start trip':'Complete trip'} description={current.patient_name} busy={busy} onClose={()=>setAction(null)} error={actionError} onDismissError={()=>setActionError('')} footer={<><button className="patient-primary" type="button" disabled={busy||(!conflict&&(action==='start'?!canStart:!running))} onClick={()=>void execute(conflict)}>{busy?'Saving…':conflict?'Reload trip':action==='start'?'Start trip':'Complete trip'}</button><button type="button" disabled={busy} onClick={()=>setAction(null)}>Back</button></>}>
       <dl className="schedule-detail-fields"><div><dt>From</dt><dd>{current.origin}</dd></div><div><dt>To</dt><dd>{current.destination}</dd></div></dl>
       <p className="trip-action-note">{action==='start'?'Start this assigned journey now? Location sharing is a separate choice.':'Confirm that this journey has finished? Location sharing will stop.'}</p>

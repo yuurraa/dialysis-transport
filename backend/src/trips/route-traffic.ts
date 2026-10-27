@@ -27,7 +27,7 @@ export function routeTraffic(route:DrivingRoute,snapshot:TrafficSnapshot) {
     }
   }
   let total=0,covered=0,fastest=0,slowest=0,unbounded=false;
-  const matches=new Map<string,RoadSpeedBand>();
+  const matches=new Map<string,RoadSpeedBand&{route_geometry:[number,number][][]}>();
   const baseline=route.distanceMetres>0?route.durationSeconds/route.distanceMetres:0;
   const routeCells=new Map<string,{a:[number,number];b:[number,number]}[]>();
   for(let index=1;index<geometry.length;index++){
@@ -49,7 +49,15 @@ export function routeTraffic(route:DrivingRoute,snapshot:TrafficSnapshot) {
       }
       const metres=length/steps,base=metres*baseline;total+=metres;
       if(!best){fastest+=base;slowest+=base;continue;}
-      matches.set(best.linkId,best);covered+=metres;
+      let match=matches.get(best.linkId);
+      if(!match){match={...best,route_geometry:[]};matches.set(best.linkId,match);}
+      // Draw only the route portion used by this observation, never the provider's straight chord.
+      const from:[number,number]=[a[0]+(b[0]-a[0])*step/steps,a[1]+(b[1]-a[1])*step/steps];
+      const to:[number,number]=[a[0]+(b[0]-a[0])*(step+1)/steps,a[1]+(b[1]-a[1])*(step+1)/steps];
+      const piece=match.route_geometry.at(-1),last=piece?.at(-1);
+      if(piece&&last&&Math.abs(last[0]-from[0])<1e-10&&Math.abs(last[1]-from[1])<1e-10)piece.push(to);
+      else match.route_geometry.push([from,to]);
+      covered+=metres;
       fastest+=Math.max(base,metres/Math.max(best.maximumSpeedKmh,1)*3.6);
       if(best.minimumSpeedKmh<=0)unbounded=true;
       else slowest+=Math.max(base,metres/best.minimumSpeedKmh*3.6);

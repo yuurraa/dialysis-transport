@@ -175,15 +175,19 @@ test('coordinator assigns and unassigns a driver while patient and driver views 
 });
 
 
-test('patient confirms and cancels an upcoming pickup with stale-version recovery', async ({page}) => {
+test('patient acknowledges and cancels an upcoming trip with stale-version recovery', async ({page}) => {
   await seedSession(page);
   await page.setViewportSize({width:390,height:844});
   await page.clock.install({time:new Date('2026-10-20T02:00:00Z')});
-  let trip={...fixtureTrip,lifecycle:'scheduled',assigned_driver_id:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',pickup_at:'2026-10-21T00:00:00Z',confirmed_at:null as string|null,assignment:{driver_name:'Fixture Driver',driver_phone:'82345678',plate:'TEST123',make:'Fixture',model:'Car',patient_phone:'81234567'}};
+  let trip={...fixtureTrip,id:'cccccccc-cccc-4ccc-8ccc-cccccccccccc',lifecycle:'scheduled',status:'on-track',assigned_driver_id:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',pickup_at:'2026-10-21T00:00:00Z',confirmed_at:null as string|null,assignment:{driver_name:'Fixture Driver',driver_phone:'82345678',plate:'TEST123',make:'Fixture',model:'Car',patient_phone:'81234567'}};
   let stale=true;
   await page.route('**/api/auth/me',route=>route.fulfill({json:{account:{...activeAccount,role:'patient'}}}));
-  await page.route('**/api/trips?*',route=>route.fulfill({json:{trips:[trip],total:1,page:1,pageSize:10,counts:{},next_trip:trip.lifecycle==='cancelled'?null:trip}}));
-  await page.route(`**/api/trips/${fixtureTrip.id}`,route=>route.fulfill({json:trip}));
+  await page.route('**/api/trips?*',route=>{
+    const status=new URL(route.request().url()).searchParams.get('status')??'all';
+    const included=status==='all'||status.split(',').includes(trip.lifecycle==='cancelled'?'cancelled':'upcoming');
+    return route.fulfill({json:{trips:included?[trip]:[],total:included?1:0,page:1,pageSize:10,counts:{upcoming:trip.lifecycle==='scheduled'?1:0,cancelled:trip.lifecycle==='cancelled'?1:0},next_trip:trip.lifecycle==='cancelled'?null:trip}});
+  });
+  await page.route(`**/api/trips/${trip.id}`,route=>route.fulfill({json:trip}));
   await page.route('**/api/trips/*/history?*',route=>route.fulfill({json:{events:[{id:'history-event',event:'assigned',actor:'coordinator',created_at:'2026-10-20T01:00:00Z'}],total:1,page:1,pageSize:10}}));
   await page.route('**/api/trips/*/confirm',route=>{
     expect(route.request().method()).toBe('PATCH');expect(route.request().postDataJSON()).toEqual({version:trip.version});
@@ -197,6 +201,7 @@ test('patient confirms and cancels an upcoming pickup with stale-version recover
   });
   await page.goto('/dashboard/trips');
   await page.getByRole('button',{name:'View trip details',exact:true}).click();
+  await expect(page).toHaveURL(new RegExp(`/dashboard/trips/${trip.id}$`));
   const details=page.getByRole('region',{name:'Trip details',exact:true});
   await details.getByRole('button',{name:'History',exact:true}).click();
   const history=page.getByRole('dialog',{name:'Trip history',exact:true});
@@ -205,16 +210,16 @@ test('patient confirms and cancels an upcoming pickup with stale-version recover
   await history.getByRole('button',{name:'Close',exact:true}).click();
   await expect(details).toBeVisible();
 
-  await details.getByRole('button',{name:'Confirm pickup',exact:true}).click();
-  const confirmation=page.getByRole('dialog',{name:'Confirm pickup',exact:true});
+  await details.getByRole('button',{name:'Acknowledge trip',exact:true}).click();
+  const confirmation=page.getByRole('dialog',{name:'Acknowledge trip',exact:true});
   await confirmation.getByRole('button',{name:'Back',exact:true}).click();
   expect(trip.confirmed_at).toBeNull();
-  await details.getByRole('button',{name:'Confirm pickup',exact:true}).click();
-  await confirmation.getByRole('button',{name:'Confirm pickup',exact:true}).click();
+  await details.getByRole('button',{name:'Acknowledge trip',exact:true}).click();
+  await confirmation.getByRole('button',{name:'Acknowledge trip',exact:true}).click();
   await expect(confirmation.getByRole('button',{name:'Reload trip',exact:true})).toBeVisible();
   await confirmation.getByRole('button',{name:'Reload trip',exact:true}).click();
-  await confirmation.getByRole('button',{name:'Confirm pickup',exact:true}).click();
-  await expect(details).toContainText('Pickup confirmed by patient.');
+  await confirmation.getByRole('button',{name:'Acknowledge trip',exact:true}).click();
+  await expect(details).toContainText('Trip acknowledged by patient.');
   await details.getByRole('button',{name:'Cancel trip',exact:true}).click();
   const cancellation=page.getByRole('dialog',{name:'Cancel trip',exact:true});
   await cancellation.getByRole('button',{name:'Back',exact:true}).click();
@@ -224,6 +229,10 @@ test('patient confirms and cancels an upcoming pickup with stale-version recover
   await expect(details.locator('.trip-status-badge')).toHaveText('Cancelled');
   await expect(details.getByRole('button',{name:'Cancel trip',exact:true})).toHaveCount(0);
   await details.getByRole('button',{name:'Close trip details',exact:true}).click();
+  await expect(page.getByText('No trips scheduled.',{exact:true})).toBeVisible();
+  await page.getByRole('button',{name:'Filters',exact:true}).click();
+  await page.getByRole('dialog',{name:'Trip filters',exact:true}).getByRole('checkbox',{name:/^Cancelled/}).check();
+  await page.getByRole('button',{name:'Apply Filters',exact:true}).click();
   await expect(page.getByRole('region',{name:'Trip list',exact:true})).toContainText('Cancelled');
 });
 

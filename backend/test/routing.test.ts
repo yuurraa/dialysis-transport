@@ -2,6 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { OneMapService } from '../src/integrations/onemap.service';
 import { LtaService, type TrafficSnapshot } from '../src/integrations/lta.service';
+import type { SupabaseClient } from '@supabase/supabase-js';
+import { SupabaseService } from '../src/supabase.module';
+import { TripRoutingService } from '../src/trips/trip-routing.service';
 import { routeTraffic } from '../src/trips/route-traffic';
 
 test('OneMap validates provider responses, caches authentication and refuses ambiguous addresses', async context => {
@@ -40,7 +43,7 @@ test('LTA publishes only complete validated feeds and shares refreshes without s
   const incident={Type:'Heavy Traffic',Latitude:1.3,Longitude:103.8,Message:'Fixture congestion'};
   const speed={LinkID:'123',RoadName:'Fixture road',SpeedBand:2,MinimumSpeed:'10',MaximumSpeed:'19',StartLat:1.3,StartLon:103.8,EndLat:1.301,EndLon:103.801};
   const requests:string[]=[];
-  let malformed=false,fail=false,hold=false,release:(()=>void)|undefined;
+  let malformed=false,large=false,fail=false,hold=false,release:(()=>void)|undefined;
   context.mock.method(globalThis,'fetch',async(input:string|URL,options?:RequestInit)=>{
     const url=new URL(String(input));requests.push(url.pathname+url.search);
     assert.equal(url.origin,'https://datamall2.mytransport.sg');
@@ -49,15 +52,17 @@ test('LTA publishes only complete validated feeds and shares refreshes without s
     if(fail)return new Response('private provider diagnostics',{status:503});
     if(hold)return new Promise<Response>(resolve=>{release=()=>resolve(Response.json({value:[]}));});
     if(url.pathname.endsWith('/TrafficIncidents'))return Response.json({value:url.searchParams.get('$skip')==='0'?Array.from({length:500},()=>incident):[incident]});
-    return Response.json({value:[{...speed,...(malformed?{MinimumSpeed:''}:{})},{...speed,LinkID:'open-ended',SpeedBand:8,MinimumSpeed:70,MaximumSpeed:999}]});
+    if(large)return Response.json({value:Number(url.searchParams.get('$skip'))<=50000?Array.from({length:500},()=>speed):[]});
+    return Response.json({value:[{...speed,...(malformed?{MinimumSpeed:''}:{})},{...speed,LinkID:'open-ended',SpeedBand:8,MinimumSpeed:70,MaximumSpeed:999},{...speed,LinkID:'no-observation',SpeedBand:0,MinimumSpeed:'',MaximumSpeed:''}]});
   });
   const service=new LtaService();
   const [first,second]=await Promise.all([service.getTraffic(),service.getTraffic()]);
-  assert.equal(first.incidents.length,501);assert.equal(first.speedBands[0].minimumSpeedKmh,10);
+  assert.equal(first.incidents.length,501);assert.equal(first.speedBands[0].minimumSpeedKmh,10);assert.equal(first.speedBands.length,2);
   assert.deepEqual(second,first);assert.equal(requests.length,3);
   first.incidents.length=0;
   assert.equal((await service.getTraffic()).incidents.length,501);
   assert.equal(requests.length,3);
+  large=true;assert.equal((await new LtaService().getSpeedBands()).length,50500);large=false;
   malformed=true;await assert.rejects(new LtaService().getTraffic());
   fail=true;await assert.rejects(new LtaService().getIncidents(),error=>{
     assert.ok(error instanceof Error);assert.ok(!error.message.includes('private provider'));return true;
@@ -72,17 +77,43 @@ test('LTA publishes only complete validated feeds and shares refreshes without s
 });
 
 
-test('Route traffic uses nearby forward links, preserves uncovered baseline and leaves stopped traffic unbounded', () => {
+test('Route traffic preserves observed coverage and shows roads for future/unassigned/ended trips without forecasting arrivals', async () => {
   const route={geometry:[[1.3,103.8],[1.3,103.81]] as [number,number][],distanceMetres:1112,durationSeconds:120,encodedPolyline:''};
-  const forward={linkId:'forward',roadName:'Fixture road',speedBand:2,minimumSpeedKmh:10,maximumSpeedKmh:19,start:{latitude:1.3,longitude:103.8},end:{latitude:1.3,longitude:103.805}};
+  const forward={linkId:'forward',roadName:'Fixture road',speedBand:2,minimumSpeedKmh:10,maximumSpeedKmh:19,start:{latitude:1.3001,longitude:103.8},end:{latitude:1.3001,longitude:103.805}};
   const reverse={...forward,linkId:'reverse',start:forward.end,end:forward.start};
   const snapshot:TrafficSnapshot={incidents:[{latitude:1.3,longitude:103.802,type:'Obstacle',message:'Fixture obstacle'},{latitude:1.4,longitude:103.9,type:'Roadwork',message:'Unrelated work'}],speedBands:[forward,reverse],retrievedAt:new Date().toISOString(),incidentsRetrievedAt:new Date().toISOString(),speedBandsRetrievedAt:new Date().toISOString()};
   const result=routeTraffic(route,snapshot);
   assert.equal(result.incidents.length,1);assert.deepEqual(result.speed_bands.map(road=>road.linkId),['forward']);
+  assert.ok(result.speed_bands[0].route_geometry.length>0);
+  assert.ok(result.speed_bands[0].route_geometry.every(piece=>piece.length>=2&&piece.every(([latitude])=>latitude===1.3)));
   assert.ok(result.coverage_percent>40&&result.coverage_percent<65);
   assert.ok(result.minimum_seconds>120);assert.ok(result.maximum_seconds!>result.minimum_seconds);
   const stopped=routeTraffic(route,{...snapshot,speedBands:[{...forward,minimumSpeedKmh:0,maximumSpeedKmh:9,speedBand:1}]});
   assert.equal(stopped.maximum_seconds,null);
   const missing=routeTraffic(route,{...snapshot,speedBands:[reverse]});
   assert.equal(missing.coverage_percent,0);assert.equal(missing.minimum_seconds,120);
+  const saved={...route,origin:'Fixture home',destination:'Fixture centre',origin_coordinates:forward.start,destination_coordinates:forward.end,distance_metres:route.distanceMetres,duration_seconds:route.durationSeconds};
+  let trip={id:'fixture-trip',version:1,origin:saved.origin,destination:saved.destination,lifecycle:'scheduled',assigned_driver_id:'fixture-driver' as string|null,pickup_at:new Date(Date.now()+5*86400000).toISOString() as string|null,dropoff_at:null,arrival_by:new Date(Date.now()+5*86400000+1800000).toISOString()};
+  const chain={select(){return this;},eq(){return this;},is(){return this;},abortSignal(){return this;},async maybeSingle(){return {data:trip,error:null};}};
+  const client={from:()=>chain,rpc:()=>({abortSignal:async()=>({data:{trip},error:null})})} as unknown as SupabaseClient;
+  let feedReads=0;
+  const database={forIntegration:()=>({rpc:()=>({abortSignal:async()=>({data:saved,error:null})})})} as unknown as SupabaseService;
+  const lta={getTraffic:async()=>{feedReads++;return snapshot;}} as unknown as LtaService;
+  const service=new TripRoutingService(database,{} as OneMapService,lta);
+  for(const lifecycle of ['scheduled','cancelled','completed']){
+    trip={...trip,lifecycle};
+    const current=await service.traffic(client,trip.id);
+    assert.equal(current.state,'current');
+    assert.ok('assessment_scope' in current&&current.assessment_scope==='road-conditions');
+    assert.ok('estimated_arrival_from' in current&&current.estimated_arrival_from===null);
+    assert.ok('speed_bands' in current&&current.speed_bands.length>0);
+  }
+  trip={...trip,lifecycle:'scheduled',assigned_driver_id:null,pickup_at:null};
+  assert.equal((await service.traffic(client,trip.id)).state,'current');
+  const before=feedReads;
+  assert.equal((await service.traffic(client,trip.id,true)).state,'unassigned');
+  trip={...trip,assigned_driver_id:'fixture-driver',pickup_at:new Date(Date.now()+5*86400000).toISOString()};
+  assert.equal((await service.traffic(client,trip.id,true)).state,'not_due');
+  assert.equal(feedReads,before);
+
 });
