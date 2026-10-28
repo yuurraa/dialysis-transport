@@ -26,6 +26,8 @@ For Supabase authentication, copy `frontend/.env.example` to `frontend/.env.loca
 
 Sign-in uses Google through Supabase Auth; enable the Google provider and apply the account database setup before testing with a real account. See [Authentication](docs/authentication.md) for provider setup and the current implementation status.
 
+The web-application is hosted live on https://dialysis-transport.onrender.com. The backend may take a short while to spin up.
+
 ## Commands
 
 | Command | Description |
