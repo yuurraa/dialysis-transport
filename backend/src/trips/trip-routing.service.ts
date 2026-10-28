@@ -1,3 +1,4 @@
+import { tripNow, type TripClock } from './trip-clock';
 import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { OneMapService } from '../integrations/onemap.service';
@@ -11,7 +12,7 @@ export interface RoadRoute {
   origin_coordinates:Coordinates; destination_coordinates:Coordinates;
   distance_metres:number; duration_seconds:number; duration_minutes:number; assessed_at:string;
 }
-interface RoutableTrip { id:string; version:number; origin:string; destination:string; duration_minutes:number; status:string; review_required:boolean; assigned_driver_id:string|null; route_snapshot:RoadRoute|null; lifecycle:string; pickup_at:string|null; dropoff_at:string|null; arrival_by:string|null; demo_owner_id?:string|null }
+interface RoutableTrip extends TripClock { id:string; version:number; origin:string; destination:string; duration_minutes:number; status:string; review_required:boolean; assigned_driver_id:string|null; route_snapshot:RoadRoute|null; lifecycle:string; pickup_at:string|null; dropoff_at:string|null; arrival_by:string|null; demo_owner_id?:string|null }
 const failed=()=>new ServiceUnavailableException({code:'route_unavailable',message:'Route assessment is unavailable.'});
 
 @Injectable()
@@ -188,17 +189,17 @@ export class TripRoutingService {
   private async simulatedTraffic(trip:RoutableTrip,signal:AbortSignal) {
     const context=await this.demoContext(trip,signal);
     const route=trip.route_snapshot??await this.route(trip.origin,trip.destination,signal);
-    const delay=context.traffic==='delay'?15:0,now=Date.now();
+    const delay=context.traffic==='delay'?15:0,realNow=Date.now(),now=tripNow(trip,realNow);
     const active=trip.lifecycle==='in-progress',assigned=!!trip.assigned_driver_id&&trip.lifecycle==='scheduled';
     const remaining=active?Math.max(0,1-context.progress/100):1;
     const departure=assigned?Math.max(now,Date.parse(trip.pickup_at!)):now;
     const baseline=departure+route.duration_seconds*remaining*1000;
-    const eta=baseline+delay*60000,stamp=new Date(now).toISOString();
+    const eta=baseline+delay*60000,stamp=new Date(realNow).toISOString();
     const middle=route.geometry[Math.floor(route.geometry.length/2)]??[1.35,103.8];
     return {state:'current',simulated:true,assessment_scope:active||assigned?'trip-arrival':'road-conditions',
       risk:delay?'at-risk':'no-delay-detected',impact:delay?'high':'low',coverage_percent:100,
       availability:{incidents:'current',speeds:'current'},assessed_at:stamp,incidents_retrieved_at:stamp,speeds_retrieved_at:stamp,
-      estimate_expires_at:new Date(now+120000).toISOString(),estimated_departure_at:new Date(departure).toISOString(),
+      estimate_expires_at:new Date(realNow+120000).toISOString(),estimated_departure_at:new Date(departure).toISOString(),
       baseline_arrival_at:active||assigned?new Date(baseline).toISOString():null,
       estimated_arrival_from:active||assigned?new Date(eta).toISOString():null,estimated_arrival_until:active||assigned?new Date(eta).toISOString():null,
       delay_from_minutes:delay,delay_until_minutes:delay,departure_basis:active?'live-location':'scheduled',trip_version:trip.version,

@@ -1,3 +1,4 @@
+import { tripNow } from './trip-clock';
 import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, NotFoundException, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 import { TripRoutingService } from './trip-routing.service';
 import { AuthService } from '../auth/auth.service';
@@ -116,9 +117,10 @@ export class TripsService {
     this.assignmentId(id);
     if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some(key => !['driver_id','pickup_at','version'].includes(key))) throw new BadRequestException('Invalid assignment.');
     const input = body as Record<string, unknown>;
-    this.assignmentId(input.driver_id); this.pickup(input.pickup_at);
+    this.assignmentId(input.driver_id); this.pickup(input.pickup_at, false);
     if (!Number.isSafeInteger(input.version) || (input.version as number)<1 || (input.version as number)>2147483647) throw new BadRequestException('A valid trip version is required.');
-    await this.routes.prepare(client, id, input.pickup_at, input.version as number);
+    const prepared=await this.routes.prepare(client, id, input.pickup_at, input.version as number);
+    if(Date.parse(input.pickup_at)<=tripNow(prepared))throw new BadRequestException('Choose an upcoming pickup time.');
     const result = await client.rpc('assign_trip', { target: id, driver: input.driver_id, starts: input.pickup_at, expected_version: input.version });
     this.check(result.error, 'Trip');
     return result.data;

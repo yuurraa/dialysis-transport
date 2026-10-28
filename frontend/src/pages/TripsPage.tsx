@@ -1,3 +1,4 @@
+import { tripNow, type TripClock } from '../lib/tripClock';
 import { useDashboardViewState } from '../components/DashboardViewState';
 import TripProgress from '../components/TripProgress';
 import TripHistoryDialog from '../components/TripHistoryDialog';
@@ -9,7 +10,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { InfoButton, Overlay, PageHeading, ListToolbar, ListPagination, ChoiceGroup, SortOverlay, ListError, sortSummary } from '../components/DashboardUI';
 import { ApiError, apiGet, apiRequest } from '../lib/api';
 
-export interface Trip {
+export interface Trip extends TripClock {
   demo_owner_id?:string|null;
   id: string; version: number; patient_id: string; patient_name: string; source_schedule_id: string; session_date: string;
   direction: 'outbound' | 'return'; origin: string; destination: string; treatment_start: string; treatment_end: string;
@@ -299,10 +300,10 @@ export default function TripsPage({ coordinator, driver = false,caregiver=false,
   }
   const patientActions = !coordinator && !driver;
   const upcomingDetails = !!details && !details.first_started_at && (!details.lifecycle || details.lifecycle === 'scheduled')
-    && Date.parse(details.pickup_at ?? details.pickup_not_before ?? new Date(Date.parse(details.arrival_by!) - (details.duration_minutes ?? 30) * 60000).toISOString()) > Date.now();
+    && Date.parse(details.pickup_at ?? details.pickup_not_before ?? new Date(Date.parse(details.arrival_by!) - (details.duration_minutes ?? 30) * 60000).toISOString()) > tripNow(details);
   const canConfirmPickup = upcomingDetails && !!details?.assigned_driver_id && !details.confirmed_at && !details.review_required && !details.driver_unavailable_at;
   const canReportUnavailability = driver && !!details?.assigned_driver_id && !details.driver_unavailable_at
-    && ((!details.lifecycle || details.lifecycle === 'scheduled') && Date.parse(details.dropoff_at ?? '') > Date.now() || details.lifecycle === 'in-progress');
+    && ((!details.lifecycle || details.lifecycle === 'scheduled') && Date.parse(details.dropoff_at ?? '') > tripNow(details) || details.lifecycle === 'in-progress');
   const actionLabel = pickupAction === 'unavailable' ? 'Report unavailability' : pickupAction === 'cancel' ? 'Cancel trip' : 'Acknowledge trip';
   const canRecover=coordinator&&!!details&&details.status==='at-risk'&&(details.lifecycle==='scheduled'||details.lifecycle==='in-progress')&&!!details.assigned_driver_id&&!details.review_required;
   async function refreshProgressMetadata(quiet=false) {
@@ -370,7 +371,7 @@ export default function TripsPage({ coordinator, driver = false,caregiver=false,
   return <div className="trips-workspace">
     {tripId?<section ref={detailPanel} tabIndex={-1} className="dashboard-trips page-panel trip-detail-page" aria-labelledby="trip-details-title" aria-busy={detailLoading}>
       <PageHeading id="trip-details-title" title="Trip details" actions={<>
-        {details?.id===tripId&&coordinator&&(!details.lifecycle||details.lifecycle==='scheduled')&&<button className="list-info-control" type="button" aria-label={details.assigned_driver_id?'Manage driver assignment':'Assign driver'} title={details.assigned_driver_id?'Manage driver assignment':'Assign driver'} disabled={Date.parse(details.pickup_at??details.treatment_start)<=Date.now()} onClick={()=>setAssigning(details)}>{assignmentIcon}</button>}
+        {details?.id===tripId&&coordinator&&(!details.lifecycle||details.lifecycle==='scheduled')&&<button className="list-info-control" type="button" aria-label={details.assigned_driver_id?'Manage driver assignment':'Assign driver'} title={details.assigned_driver_id?'Manage driver assignment':'Assign driver'} disabled={Date.parse(details.pickup_at??details.treatment_start)<=tripNow(details)} onClick={()=>setAssigning(details)}>{assignmentIcon}</button>}
         {details?.id===tripId&&<button className="list-info-control" type="button" aria-label="History" title="History" onClick={()=>setHistoryTrip(details.id)}><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 11a9 9 0 1 1 2.5 7M3 4v7h7M12 7v5l3 2"/></svg></button>}
         <button className="list-info-control" type="button" aria-label="Close trip details" title="Close trip details" onClick={()=>onNavigate('/dashboard/trips')}><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
       </>}/>
@@ -426,7 +427,7 @@ export default function TripsPage({ coordinator, driver = false,caregiver=false,
               <p><RouteAddress address={trip.destination} /></p>
             </div>
           </div>
-          <div className="patient-actions trip-stop-actions">{coordinator && (!trip.lifecycle || trip.lifecycle === 'scheduled') && <button className="list-info-control trip-assignment-control" type="button" aria-label={trip.assigned_driver_id ? 'Manage driver assignment' : 'Assign driver'} title={trip.assigned_driver_id ? 'Manage driver assignment' : 'Assign driver'} disabled={Date.parse(trip.pickup_at ?? trip.treatment_start) <= Date.now()} onClick={() => setAssigning(trip)}>{assignmentIcon}</button>}<InfoButton label="View trip details" onClick={() => onNavigate(`/dashboard/trips/${trip.id}`)} /></div>
+          <div className="patient-actions trip-stop-actions">{coordinator && (!trip.lifecycle || trip.lifecycle === 'scheduled') && <button className="list-info-control trip-assignment-control" type="button" aria-label={trip.assigned_driver_id ? 'Manage driver assignment' : 'Assign driver'} title={trip.assigned_driver_id ? 'Manage driver assignment' : 'Assign driver'} disabled={Date.parse(trip.pickup_at ?? trip.treatment_start) <= tripNow(trip)} onClick={() => setAssigning(trip)}>{assignmentIcon}</button>}<InfoButton label="View trip details" onClick={() => onNavigate(`/dashboard/trips/${trip.id}`)} /></div>
           {coordinator && selecting ? <label className="trip-selection-cell"><input type="checkbox" aria-label={`Select ${trip.patient_name}, ${tripDate(trip.treatment_start)}, ${trip.direction === 'outbound' ? 'outbound' : 'return'}`} checked={selectedTrips.has(trip.id)} onChange={() => setSelectedTrips(current => { const updated = new Set(current); if (updated.has(trip.id)) updated.delete(trip.id); else updated.add(trip.id); return updated; })} /></label> : <span className="record-number" title="Row number">{(data.page - 1) * data.pageSize + index + 1}</span>}
         </article>)}</div>}
 

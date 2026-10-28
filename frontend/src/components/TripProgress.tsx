@@ -1,3 +1,4 @@
+import { tripNow } from '../lib/tripClock';
 import type { ReactNode } from 'react';
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -116,7 +117,7 @@ export default function TripProgress({trip,driver,statusBadge,actionsHost,onChan
   }
   const current=progress&&progress.trip.version>=trip.version?progress.trip:trip;
   const running=current.lifecycle==='in-progress';
-  const canStart=driver&&(!current.lifecycle||current.lifecycle==='scheduled')&&!!current.assigned_driver_id&&!current.driver_unavailable_at&&!current.review_required&&!!current.pickup_at&&Date.parse(current.pickup_at)<=now;
+  const canStart=driver&&(!current.lifecycle||current.lifecycle==='scheduled')&&!!current.assigned_driver_id&&!current.driver_unavailable_at&&!current.review_required&&!!current.pickup_at&&Date.parse(current.pickup_at)<=tripNow(current,now);
   const location=running&&!readError?progress?.location??null:null;
   const stale=!!location&&(now-Date.parse(location.recorded_at)>30000||now-Date.parse(location.received_at)>30000);
   return <>

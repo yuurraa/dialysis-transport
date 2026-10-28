@@ -1,3 +1,4 @@
+import { tripNow } from '../lib/tripClock';
 import { useEffect, useRef, useState } from 'react';
 import { Overlay, ListError } from './DashboardUI';
 import { apiGet, apiRequest, ApiError } from '../lib/api';
@@ -82,7 +83,7 @@ export default function TripAssignmentDialog({ trip, onClose, onChanged, onSessi
   const assigned = Boolean(current.assigned_driver_id);
   return <Overlay title={assigned ? 'Driver assignment' : 'Assign driver'} description={current.patient_name} className="trip-assignment-dialog" onClose={onClose} busy={busy} onSubmit={event => { event.preventDefault(); if (!assigned) void save(); }} noValidate error={error} onDismissError={() => setError('')}
     footer={<>{conflict ? <button className="patient-primary" type="button" disabled={busy || loading} onClick={() => void findDrivers(pickup || localPickup(current), true)}>Reload assignment</button>
-      : assigned ? <button className="button-danger" type="button" disabled={busy || loading || !current.pickup_at || Date.parse(current.pickup_at) <= Date.now()} onClick={() => void save(true)}>{busy ? 'Saving…' : 'Unassign driver'}</button>
+      : assigned ? <button className="button-danger" type="button" disabled={busy || loading || !current.pickup_at || Date.parse(current.pickup_at) <= tripNow(current)} onClick={() => void save(true)}>{busy ? 'Saving…' : 'Unassign driver'}</button>
       : <button className="patient-primary" type="submit" disabled={busy || loading || !selected || pickup !== loadedPickup}>{busy ? 'Saving…' : 'Assign driver'}</button>}<button type="button" disabled={busy} onClick={onClose}>Close</button></>}>
     <dl className="schedule-detail-fields"><div><dt>From</dt><dd>{current.origin}</dd></div><div><dt>To</dt><dd>{current.destination}</dd></div><div><dt>{current.direction === 'outbound' ? 'Arrive by' : 'Earliest pickup'}</dt><dd>{new Intl.DateTimeFormat('en-SG',{dateStyle:'medium',timeStyle:'short',timeZone:'Asia/Singapore'}).format(new Date((current.arrival_by ?? current.pickup_not_before)!))}</dd></div></dl>
     {assigned ? <><dl className="trip-detail-timings"><div><dt>Driver</dt><dd>{current.assignment?.driver_name}</dd></div><div><dt>Car</dt><dd>{current.assignment?.plate} · {current.assignment?.make} {current.assignment?.model}</dd></div><div><dt>Pickup (Singapore time)</dt><dd>{current.pickup_at && new Intl.DateTimeFormat('en-SG',{dateStyle:'medium',timeStyle:'short',timeZone:'Asia/Singapore'}).format(new Date(current.pickup_at))}</dd></div></dl><p className="treatment-hint">Unassigning releases this driver and returns the trip to Unfilled.</p></>
