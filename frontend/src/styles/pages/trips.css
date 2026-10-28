@@ -1158,10 +1158,10 @@
 .trip-detail-page { overflow-y: auto; overscroll-behavior: contain; }
 .dashboard-trips.trip-detail-page { scrollbar-gutter: stable; padding-inline-end: 16px; }
 .trip-detail-page:focus { outline: none; }
-.trip-detail-page .page-heading { margin-bottom: 24px; align-items: flex-start; flex-wrap: nowrap; }
+.trip-detail-page .page-heading { margin-bottom: 0; align-items: flex-start; flex-wrap: nowrap; }
 .trip-detail-page .page-heading > div:first-child { flex: 1 1 auto; }
 .trip-detail-page .page-heading-actions { flex: 0 0 auto; flex-wrap: nowrap; gap: 4px; }
-.trip-detail-summary { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px 24px; margin-bottom: 12px; }
+.trip-detail-summary { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px 24px; margin-bottom: 24px; }
 .trip-detail-summary-main { display: flex; flex-direction: column; align-items: flex-start; min-width: 0; gap: 4px; }
 .trip-execution-times { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 24px; margin: 0; }
 .trip-execution-times > div { display: grid; align-content: start; gap: 4px; min-width: 0; }
@@ -1174,7 +1174,9 @@
 .trip-detail-page-actions { margin: 0; flex-wrap: wrap; gap: 8px; }
 .trip-detail-page-actions .trip-execution-primary { order: -1; }
 .trip-detail-page-actions:empty { display: none; }
-.trip-detail-tabs { display: flex; gap: 24px; margin-bottom: 24px; border-bottom: 1px solid var(--ui-border); }
+.trip-detail-toolbar { display: flex; justify-content: space-between; align-items: stretch; flex-wrap: wrap; gap: 12px 24px; margin-bottom: 12px; border-bottom: 1px solid var(--ui-border); }
+.trip-detail-tabs { display: flex; gap: 24px; }
+.trip-detail-toolbar .trip-detail-page-actions { padding-bottom: 8px; }
 .trip-detail-page .trip-detail-tabs button { min-height: 44px; padding: 10px 4px; margin-bottom: -1px; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; color: var(--ui-muted); white-space: nowrap; }
 .trip-detail-page .trip-detail-tabs button[aria-pressed=true] { border-bottom-color: var(--ui-accent); color: var(--ui-text); }
 .trip-detail-page .trip-detail-tabs button:hover { color: var(--ui-text); background: transparent; }
@@ -1192,7 +1194,7 @@
 .trip-detail-passenger .trip-detail-timings { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .trip-detail-page .trip-progress, .trip-detail-page .trip-map { margin-top: 0; padding-top: 0; border-top: 0; }
 .trip-detail-page .trip-progress { margin-bottom: 24px; }
-.trip-detail-page .trip-map-canvas, .trip-detail-page .trip-map-status { height: clamp(320px, 55svh, 560px); }
+.trip-detail-page .trip-map-canvas, .trip-detail-page .trip-map-status { height: clamp(380px, 65svh, 760px); }
 @media (max-width: 900px) {
   .trip-detail-overview .trip-journey-details { grid-template-columns: minmax(0, 1fr); gap: 24px; }
   .trip-detail-treatment { padding: 24px 0 0; border-left: 0; border-top: 1px solid var(--ui-border); }
@@ -1203,15 +1205,16 @@
   .trip-detail-summary .trip-detail-identity { flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; }
   .trip-detail-summary .trip-detail-identity > [aria-hidden=true] { display: none; }
   .trip-detail-summary-main { width: 100%; }
-  .trip-detail-page .page-heading { gap: 12px; margin-bottom: 20px; }
-  .trip-detail-summary { margin-bottom: 12px; }
+  .trip-detail-page .page-heading { gap: 12px; margin-bottom: 0; }
+  .trip-detail-toolbar { flex-direction: column; border-bottom: 0; }
+  .trip-detail-toolbar .trip-detail-page-actions { padding-bottom: 8px; }
   .trip-detail-page-actions { justify-content: flex-start; }
-  .trip-detail-tabs { gap: 24px; margin-bottom: 24px; }
-  .trip-detail-page .trip-map-canvas, .trip-detail-page .trip-map-status { height: clamp(280px, 48svh, 440px); }
+  .trip-detail-tabs { gap: 24px; border-bottom: 1px solid var(--ui-border); }
+  .trip-detail-page .trip-map-canvas, .trip-detail-page .trip-map-status { height: clamp(340px, 60svh, 560px); }
 }
 
 /* Route observations stay beside the map on wide screens and below it on phones. */
-.trip-route-layout { --trip-route-map-height: clamp(320px, 55svh, 560px); --trip-route-heading-height: 36px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 380px); gap: 24px; align-items: start; }
+.trip-route-layout { --trip-route-map-height: clamp(380px, 65svh, 760px); --trip-route-heading-height: 36px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 380px); gap: 24px; align-items: start; }
 .trip-route-visual { min-width: 0; }
 .trip-route-layout > .trip-traffic { min-width: 0; margin: 0; padding: 0 12px 0 24px; border-top: 0; border-left: 1px solid var(--ui-border); }
 .trip-route-layout .trip-route-visual > .trip-map-heading { min-height: var(--trip-route-heading-height); margin-bottom: 0; align-items: center; }
@@ -1222,6 +1225,7 @@
 .trip-route-layout .trip-obstacles { flex: 1 1 0; min-height: 0; max-height: none; margin-bottom: 16px; }
 .trip-route-layout .trip-traffic-footer { margin-top: auto; }
 .trip-traffic > .trip-map-heading { align-items: center; }
+.trip-traffic-title { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-width: 0; }
 .trip-traffic-comparison { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 16px; margin: 0 0 16px; }
 .trip-traffic-comparison dt { color: var(--ui-muted); font-size: .8125rem; }
 .trip-traffic-comparison dd { margin: 4px 0 0; font-size: .875rem; font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; }
@@ -1272,7 +1276,7 @@
   .trip-obstacles { max-height: none; overflow: visible; scrollbar-gutter: auto; padding-right: 0; }
 }
 @media (max-width: 760px) {
-  .trip-route-layout { --trip-route-map-height: clamp(280px, 48svh, 440px); }
+  .trip-route-layout { --trip-route-map-height: clamp(340px, 60svh, 560px); }
 }
 .trip-detail-page-actions .trip-recovery-control:disabled { background: var(--ui-disabled); border-color: var(--ui-border); color: var(--ui-muted); opacity: 1; }
 .trip-feedback-form fieldset { margin: 0; padding: 0; border: 0; }

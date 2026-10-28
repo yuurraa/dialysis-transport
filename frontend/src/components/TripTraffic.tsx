@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { useEffect, useRef, useState } from 'react';
 import { RefreshButton } from './DashboardUI';
 import { ApiError, apiGet } from '../lib/api';
@@ -40,7 +41,7 @@ const time=(value:string)=>new Intl.DateTimeFormat('en-SG',{hour:'2-digit',minut
 const delay=(from:number|null|undefined,until:number|null|undefined)=>from==null?'Unavailable':until==null?`+${from} min or more`:from===until?`${from?'+':''}${from} min`:`+${from}–${until} min`;
 
 /** Refresh observations while visible; failed reads never become a clear-road claim. */
-export default function TripTraffic({tripId,version,activeTrip,locationAvailable,onSessionExpired,onUpdate,selectedIncident,onSelectIncident}:{tripId:string;version:number;activeTrip:boolean;locationAvailable:boolean;onSessionExpired:()=>void;onUpdate:(value:TrafficView|null)=>void;selectedIncident:string|null;onSelectIncident:(key:string)=>void}) {
+export default function TripTraffic({statusBadge,tripId,version,activeTrip,locationAvailable,onSessionExpired,onUpdate,selectedIncident,onSelectIncident}:{statusBadge?:ReactNode;tripId:string;version:number;activeTrip:boolean;locationAvailable:boolean;onSessionExpired:()=>void;onUpdate:(value:TrafficView|null)=>void;selectedIncident:string|null;onSelectIncident:(key:string)=>void}) {
   const [assessment,setData]=useState<TrafficView|null>(null),[error,setError]=useState(''),[loading,setLoading]=useState(true);
   const refresh=useRef<()=>void>(()=>{});
   const [now,setNow]=useState(Date.now);
@@ -90,7 +91,7 @@ export default function TripTraffic({tripId,version,activeTrip,locationAvailable
   const speedsUnavailable=!!data?.availability&&data.availability.speeds!=='current';
   if(data?.state==='ended')return null;
   return <section className="trip-traffic" aria-label="Current traffic">
-    <div className="trip-map-heading"><h3>Current traffic</h3>{data?.simulated&&<span className="trip-map-note">Simulated</span>}</div>
+    <div className="trip-map-heading"><div className="trip-traffic-title"><h3>Current traffic</h3>{statusBadge}</div>{data?.simulated&&<span className="trip-map-note">Simulated</span>}</div>
     {error&&!data?<p className="trip-map-note trip-map-feedback" role="status"><span>{error}</span><RefreshButton label="Refresh traffic" busy={loading} onClick={()=>refresh.current()}/></p>
       :!data?<p className="trip-map-note" role="status">Checking traffic…</p>
       :data.state!=='current'?<p className="trip-map-note">Traffic is not available yet.</p>

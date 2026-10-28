@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { apiGet, apiRequest, ApiError } from '../lib/api';
@@ -10,7 +11,7 @@ interface Progress { trip:Trip; sharing:boolean; location:TrackingPoint|null }
 const timestamp=(value:string)=>new Intl.DateTimeFormat('en-SG',{dateStyle:'medium',timeStyle:'short',timeZone:'Asia/Singapore'}).format(new Date(value));
 
 /** Location consent is separate from execution; failure to share never blocks the trip. */
-export default function TripProgress({trip,driver,actionsHost,onChanged,onUnavailable,onSessionExpired,onNotify,display='journey'}:{display?:'overview'|'journey';trip:Trip;driver:boolean;actionsHost:HTMLElement|null;onChanged:(trip:Trip)=>void;onNotify:(message:string,urgent:boolean)=>void;onUnavailable:()=>void;onSessionExpired:()=>void}) {
+export default function TripProgress({trip,driver,statusBadge,actionsHost,onChanged,onUnavailable,onSessionExpired,onNotify,display='journey'}:{statusBadge?:ReactNode;display?:'overview'|'journey';trip:Trip;driver:boolean;actionsHost:HTMLElement|null;onChanged:(trip:Trip)=>void;onNotify:(message:string,urgent:boolean)=>void;onUnavailable:()=>void;onSessionExpired:()=>void}) {
   const [progress,setProgress]=useState<Progress|null>(null);
   const [readError,setReadError]=useState(false);
   const [retry,setRetry]=useState(0);
@@ -132,7 +133,7 @@ export default function TripProgress({trip,driver,actionsHost,onChanged,onUnavai
         {current.handover_at&&current.lifecycle==='scheduled'&&<p className="trip-map-note" role="status">Awaiting replacement pickup.</p>}
         {running&&<p className="trip-map-note" role="status">{readError?'Location unavailable.':location?`${stale?'Last known location':'Location updated'}: ${timestamp(location.received_at)} · Accuracy ±${Math.round(location.accuracy_metres)} m`:progress?.sharing?'Waiting for the driver’s location.':'Location is not being shared.'}</p>}
     </section>}
-    {display!=='overview'&&<TripRouteMap tripId={trip.id} routeKey={JSON.stringify([current.origin,current.destination])} version={current.version} activeTrip={running} location={location} locationStale={stale} onSessionExpired={onSessionExpired}/>}
+    {display!=='overview'&&<TripRouteMap statusBadge={statusBadge} tripId={trip.id} routeKey={JSON.stringify([current.origin,current.destination])} version={current.version} activeTrip={running} location={location} locationStale={stale} onSessionExpired={onSessionExpired}/>}
     {display==='journey'&&readError&&<p className="trip-map-note trip-map-feedback trip-progress-feedback" role="status"><span>Progress unavailable.</span><RefreshButton label="Refresh progress" onClick={()=>setRetry(value=>value+1)}/></p>}
     {action&&<Overlay title={action==='start'?'Start trip':'Complete trip'} description={current.patient_name} busy={busy} onClose={()=>setAction(null)} error={actionError} onDismissError={()=>setActionError('')} footer={<><button className="patient-primary" type="button" disabled={busy||(!conflict&&(action==='start'?!canStart:!running))} onClick={()=>void execute(conflict)}>{busy?'Saving…':conflict?'Reload trip':action==='start'?'Start trip':'Complete trip'}</button><button type="button" disabled={busy} onClick={()=>setAction(null)}>Back</button></>}>
       <dl className="schedule-detail-fields"><div><dt>From</dt><dd>{current.origin}</dd></div><div><dt>To</dt><dd>{current.destination}</dd></div></dl>

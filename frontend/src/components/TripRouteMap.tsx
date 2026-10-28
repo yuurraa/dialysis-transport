@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import type { Map as LeafletMap, LayerGroup } from 'leaflet';
 import { useEffect, useRef, useState } from 'react';
 import { RefreshButton } from './DashboardUI';
@@ -14,7 +15,7 @@ interface RouteView { route:RoadRoute; reserved_minutes:number|null; saved:boole
 const attribution='<img src="https://www.onemap.gov.sg/web-assets/images/logo/om_logo.png" style="height:20px;width:20px" alt="OneMap"/>&nbsp;<a href="https://www.onemap.gov.sg/" target="_blank" rel="noopener noreferrer">OneMap</a>&nbsp;&copy;&nbsp;contributors&nbsp;&#124;&nbsp;<a href="https://www.sla.gov.sg/" target="_blank" rel="noopener noreferrer">Singapore Land Authority</a>';
 
 /** Map data is read from an authorised trip endpoint; no credentials enter the browser. */
-export default function TripRouteMap({tripId,onSessionExpired,location=null,locationStale=false,version=0,activeTrip=false,showTraffic=true,routeKey=''}:{tripId:string;version?:number;activeTrip?:boolean;showTraffic?:boolean;onSessionExpired:()=>void;location?:TrackingPoint|null;locationStale?:boolean;routeKey?:string}) {
+export default function TripRouteMap({statusBadge,tripId,onSessionExpired,location=null,locationStale=false,version=0,activeTrip=false,showTraffic=true,routeKey=''}:{statusBadge?:ReactNode;tripId:string;version?:number;activeTrip?:boolean;showTraffic?:boolean;onSessionExpired:()=>void;location?:TrackingPoint|null;locationStale?:boolean;routeKey?:string}) {
   const [data,setData]=useState<RouteView|null>(null);
   const [traffic,setTraffic]=useState<TrafficView|null>(null);
   const [selectedIncident,setSelectedIncident]=useState<string|null>(null);
@@ -130,18 +131,16 @@ export default function TripRouteMap({tripId,onSessionExpired,location=null,loca
       if(selected){controls.current?.map.panTo(marker.getLatLng(),{animate:false});marker.openPopup();}else marker.closePopup();
     }
   },[selectedIncident,traffic,mapReady]);
-  const stale=data&&Date.parse(data.route.assessed_at)<Date.now()-24*3600000;
   return <section className={`trip-map${showTraffic?' trip-route-layout':''}`} aria-label="Driving route">
     <div className="trip-route-visual">
     <div className="trip-map-heading"><h3>Route</h3>{data&&!error&&<span>Approx. {data.route.duration_minutes} min · {(data.route.distance_metres/1000).toFixed(1)} km</span>}</div>
     {!canShowMap?<div className="trip-map-status" role="status">{error?<><p className="trip-map-note trip-map-feedback"><span>{error}</span><RefreshButton label="Refresh route" busy={loading} onClick={()=>refresh.current()}/></p></>:'Loading route…'}</div>:<>
       <div className="trip-map-canvas" ref={canvas} role="region" aria-label="Driving route map" />
       {error&&<p className="trip-map-note trip-map-feedback" role="status"><span>{error}{!data&&location?' Showing driver location only.':''}</span><RefreshButton label="Refresh route" busy={loading} onClick={()=>refresh.current()}/></p>}
-      {data&&stale&&<p className="trip-map-note">Saved route estimate.</p>}
       {location&&<button className="trip-map-locate" type="button" disabled={!mapReady} onClick={()=>controls.current?.map.panTo([location.latitude,location.longitude],{animate:false})}>Show driver</button>}
     </>}
     <div className="trip-map-legend" aria-label="Map legend"><button type="button" className="trip-legend-location" disabled={!data} onClick={()=>showEndpoint('A')}><i aria-hidden="true" className="trip-legend-endpoint">A</i>Pickup</button><button type="button" className="trip-legend-location" disabled={!data} onClick={()=>showEndpoint('B')}><i aria-hidden="true" className="trip-legend-endpoint">B</i>Destination</button><span><i aria-hidden="true" className="trip-legend-route"/>Route</span>{showTraffic&&<><span><i aria-hidden="true" className="trip-legend-slow"/>20–29 km/h</span><span><i aria-hidden="true" className="trip-legend-heavy"/>0–19 km/h</span><span><i aria-hidden="true" className="trip-legend-obstacle"/>Obstacle</span></>}</div>
     </div>
-    {showTraffic&&<TripTraffic tripId={tripId} version={version} activeTrip={activeTrip} locationAvailable={!!location&&!locationStale&&location.accuracy_metres<=100} onSessionExpired={onSessionExpired} onUpdate={setTraffic} selectedIncident={selectedIncident} onSelectIncident={selectIncident}/>}
+    {showTraffic&&<TripTraffic statusBadge={statusBadge} tripId={tripId} version={version} activeTrip={activeTrip} locationAvailable={!!location&&!locationStale&&location.accuracy_metres<=100} onSessionExpired={onSessionExpired} onUpdate={setTraffic} selectedIncident={selectedIncident} onSelectIncident={selectIncident}/>}
   </section>;
 }
