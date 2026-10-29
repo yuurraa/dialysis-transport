@@ -1,3 +1,4 @@
+import { CalendarService } from '../src/integrations/calendar.service';
 import 'reflect-metadata';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -44,6 +45,13 @@ test('requires a verified session and returns persisted account separately from 
     assert.equal((await request('/me', 'GET', undefined, token)).status, 403);
     assert.equal((await request('/register', 'POST', { role: 'patient', displayName: 'Test' }, token)).status, 403);
   }
+  // Calendar consent is role-restricted independently of Google sign-in.
+  let calendarRole='driver',calendarStatus='active';
+  const calendar=new CalendarService({verifyIdentity:async()=>({account:{id:account.id,role:calendarRole,status:calendarStatus}})} as unknown as AuthService,gateway as unknown as SupabaseService);
+  await assert.rejects(calendar.status());
+  for(const forbidden of ['driver','coordinator']){calendarRole=forbidden;await assert.rejects(calendar.status('Bearer fixture'));}
+  calendarRole='patient';calendarStatus='inactive';await assert.rejects(calendar.authorize('Bearer fixture'));
+  // Denied roles must never reach credentials, consent state or provider requests.
   current = null;
   const result = await request('/me');
   assert.equal(result.status, 200);

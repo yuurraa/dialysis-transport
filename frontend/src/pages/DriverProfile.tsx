@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { ApiError, apiGet, apiRequest } from '../lib/api';
 import { ListError, PageHeading } from '../components/DashboardUI';
 import { emptyPersonal, PersonalFields, type PersonalDetails } from '../components/PersonalFields';
@@ -6,7 +6,7 @@ import { Toast, ToastRegion } from '../components/Toast';
 
 type Driver = PersonalDetails & { version: number };
 /** Personal account edits are independent of vehicle registration and approval. */
-export default function DriverProfile({ notify, onSessionExpired,role='driver',accountId }: { notify: (message: string) => void; onSessionExpired: () => void;role?:'driver'|'caregiver';accountId?:string }) {
+export default function DriverProfile({ notify, onSessionExpired,role='driver',accountId,calendar }: { notify: (message: string) => void; onSessionExpired: () => void;role?:'driver'|'caregiver';accountId?:string;calendar?:ReactNode }) {
   const label=role==='caregiver'?'Caregiver':'Driver';
   const [driver, setDriver] = useState<Driver | null>(null);
   const [draft, setDraft] = useState<PersonalDetails | null>(null);
@@ -70,7 +70,7 @@ export default function DriverProfile({ notify, onSessionExpired,role='driver',a
     {loading ? <div className="account-loading patients-loading" role="status"><span className="account-spinner" aria-hidden="true" /><span>Loading...</span></div>
       : error ? <ListError title={`${label} details could not be loaded`} message={error} onRetry={() => setAttempt(value => value + 1)} />
       : draft&&(driver||role==='caregiver') ? <form ref={form} className={`patient-profile-form${editing ? ' patient-editing' : ''}`} aria-label={`${label} profile`} aria-busy={saving} onSubmit={save} onKeyDown={event => { if (event.key === 'Escape' && editing && !saving) { event.preventDefault(); cancel(); } }}>
-          <div className="patient-readonly-fields panel-scroll" role="region" aria-label={`Your ${role} details`} tabIndex={0}><fieldset className="patient-form-fields" disabled={!editing || saving} aria-label={`${label} personal information`}><PersonalFields prefix={`${role}-profile`} draft={draft} onChange={setDraft} /></fieldset></div>
+          <div className="patient-readonly-fields panel-scroll" role="region" aria-label={`Your ${role} details`} tabIndex={0}><fieldset className="patient-form-fields" disabled={!editing || saving} aria-label={`${label} personal information`}><PersonalFields prefix={`${role}-profile`} draft={draft} onChange={setDraft} /></fieldset>{calendar&&<div className="patient-form-fields calendar-profile-fields">{calendar}</div>}</div>
           <div className="patient-profile-actions"><div className="patient-actions">
             {editing ? <><button key="save-profile" className="patient-primary" type="submit" disabled={saving || conflict}>{saving ? 'Saving…' : 'Save profile'}</button><button type="button" disabled={saving} onClick={cancel}>Cancel</button></> : <button key="edit-profile" ref={edit} className="patient-primary" type="button" onClick={() => setEditing(true)}>Edit profile</button>}
             {conflict && <button type="button" disabled={saving} onClick={() => setAttempt(value => value + 1)}>Reload latest details</button>}

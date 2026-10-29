@@ -151,3 +151,34 @@
 .coordinator-links p, .coordinator-links ul { margin: 0; font-size: .875rem; line-height: 1.6; }
 .coordinator-links p { color: var(--ui-muted); }
 .coordinator-links ul { list-style: none; padding: 0; display: grid; gap: 8px; overflow-wrap: anywhere; }
+
+.patient-account-profile .calendar-connection {
+  display: block;
+  flex: 0 0 auto;
+  width: 100%;
+  min-height: auto;
+  margin-top: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  overflow: visible;
+}
+.calendar-connection h2 { margin: 0 0 8px; font-size: .875rem; font-weight: 600; }
+.calendar-connection-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  min-height: 64px;
+  padding: 10px 14px;
+  border: 1px solid var(--ui-control-border);
+  border-radius: var(--ui-control-radius);
+  background: var(--ui-field);
+}
+.calendar-connection-field .trip-map-note { margin: 0; font-size: .875rem; }
+.patient-account-profile .calendar-connection .patient-actions { padding-top: 0; }
+
+.calendar-profile-fields { margin-top: 20px; }

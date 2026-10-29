@@ -236,10 +236,28 @@ test('patient acknowledges and cancels an upcoming trip with stale-version recov
     trip={...trip,version:trip.version+1,lifecycle:'cancelled',status:'resolved'};
     return route.fulfill({json:{...trip,assigned_driver_id:null,pickup_at:null,assignment:null,confirmed_at:null}});
   });
+  let calendarWrites=0,calendarEnabled=false;
+  await page.route('**/api/calendar/trips/*',route=>{
+    if(route.request().method()==='POST'){calendarWrites++;expect(route.request().postDataJSON()).toEqual({enabled:true,minutes:null});calendarEnabled=true;}
+    return route.fulfill({json:{configured:true,connected:true,enabled:calendarEnabled,minutes:null,sync_status:'pending'}});
+  });
   await page.goto('/dashboard/trips');
   await page.getByRole('button',{name:'View trip details',exact:true}).click();
   await expect(page).toHaveURL(new RegExp(`/dashboard/trips/${trip.id}$`));
   const details=page.getByRole('region',{name:'Trip details',exact:true});
+  const calendarButton=details.getByRole('button',{name:'Add to Google Calendar',exact:true});
+  await expect(calendarButton.locator('.calendar-event-dot')).toHaveCount(1);
+  expect(calendarWrites).toBe(0);
+  await calendarButton.click();
+  let calendarDialog=page.getByRole('dialog',{name:'Google Calendar event',exact:true});
+  await calendarDialog.getByRole('button',{name:'Close',exact:true}).click();
+  expect(calendarWrites,'Opening or closing the calendar must not create an event.').toBe(0);
+  await calendarButton.click();
+  calendarDialog=page.getByRole('dialog',{name:'Google Calendar event',exact:true});
+  await calendarDialog.getByRole('button',{name:'Add to Google Calendar',exact:true}).click();
+  await expect.poll(()=>calendarWrites).toBe(1);
+  await expect(details.locator('.calendar-event-dot')).toHaveCount(0);
+
   await details.getByRole('button',{name:'History',exact:true}).click();
   const history=page.getByRole('dialog',{name:'Trip history',exact:true});
   await expect(history).toContainText('Driver assigned');

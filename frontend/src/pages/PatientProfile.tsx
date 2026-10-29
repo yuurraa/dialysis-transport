@@ -1,5 +1,5 @@
 import { PageHeading } from '../components/DashboardUI';
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { ApiError, apiGet, apiRequest } from '../lib/api';
 import { PatientFields, patientDraft, type Patient } from './PatientsPage';
 
@@ -7,8 +7,8 @@ type Details = ReturnType<typeof patientDraft>;
 
 
 /** Ownership is derived on the server; the browser cannot select another patient's record. */
-export default function PatientProfile({ notify, onSessionExpired, onProfileResolved }: {
-  notify: (message: string) => void; onSessionExpired: () => void; onProfileResolved: (complete: boolean, fullName?: string) => void;
+export default function PatientProfile({ notify, onSessionExpired, onProfileResolved, calendar }: {
+  notify: (message: string) => void; onSessionExpired: () => void; onProfileResolved: (complete: boolean, fullName?: string) => void; calendar?:ReactNode;
 }) {
   const [profile, setProfile] = useState<Patient | null>(null);
   const [draft, setDraft] = useState<Details | null>(null);
@@ -81,6 +81,7 @@ export default function PatientProfile({ notify, onSessionExpired, onProfileReso
           onKeyDown={event => { if (event.key === 'Escape' && editing && !saving) { event.preventDefault(); cancelEditing(); } }}>
           <div className="patient-readonly-fields panel-scroll" tabIndex={0} role="region" aria-label="Your patient details">
             <PatientFields draft={draft} onChange={setDraft} disabled={!editing || saving || profile.status !== 'active'} />
+            {calendar&&<div className="patient-form-fields calendar-profile-fields">{calendar}</div>}
           </div>
           <div className="patient-profile-actions">
             {saveError && <div className="profile-save-error" role="alert"><p>{saveError}</p><button type="button" aria-label="Dismiss error" onClick={() => setSaveError('')}>Dismiss</button></div>}

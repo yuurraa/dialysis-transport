@@ -1,3 +1,4 @@
+import { CalendarConnection } from '../components/CalendarControls';
 import TripNotifications from '../components/TripNotifications';
 import DemoTools from '../components/DemoTools';
 import { DashboardViewStateProvider } from '../components/DashboardViewState';
@@ -184,7 +185,7 @@ export default function Dashboard({ account, demoAdmin, avatarUrl, onSignOut, si
     <div className="patient-field"><label htmlFor="coordinator-email">Email</label><input id="coordinator-email" type="email" value={account.email} readOnly autoComplete="email" /></div>
     <div className="patient-field"><label htmlFor="coordinator-role">Role</label><input id="coordinator-role" value={roleNames[account.role]} readOnly /></div>
     <div className="patient-field"><label htmlFor="coordinator-status">Status</label><input id="coordinator-status" value={account.status === 'active' ? 'Active' : 'Inactive'} readOnly /></div>
-  </fieldset>}</section>}{patient && <div className="patient-account-profile"><PatientProfile notify={notify} onSessionExpired={onSessionExpired} onProfileResolved={profileResolved} /></div>}</>;
+  </fieldset>}</section>}{patient && <div className="patient-account-profile"><PatientProfile notify={notify} onSessionExpired={onSessionExpired} onProfileResolved={profileResolved} calendar={!account.demo_access_owner_id&&!account.demo_owner_id?<CalendarConnection notify={notify} onSessionExpired={onSessionExpired} />:undefined} /></div>}</>;
   const pages: Record<DashboardPath, ReactNode> = {
     '/dashboard/trips': trips,
     '/dashboard/availability': <DriverAvailability notify={notify} onSessionExpired={onSessionExpired} vehicleRegistered={Boolean(driverRegistered)} onViewVehicle={() => navigate('/dashboard/vehicle')} />,
@@ -194,7 +195,7 @@ export default function Dashboard({ account, demoAdmin, avatarUrl, onSignOut, si
     '/dashboard/caregivers': <CaregiversPage notify={notify} onSessionExpired={onSessionExpired} />,
     '/dashboard/drivers': <DriversPage notify={notify} onSessionExpired={onSessionExpired} />,
     '/dashboard/connections': <CaregiverConnections role={account.role === 'caregiver' ? 'caregiver' : 'patient'} notify={notify} onSessionExpired={onSessionExpired} />,
-    '/dashboard/account': driver || account.role === 'caregiver' ? <div className="patient-account-profile"><DriverProfile role={account.role === 'caregiver' ? 'caregiver' : 'driver'} accountId={account.id} notify={notify} onSessionExpired={onSessionExpired} /></div> : accountDetails,
+    '/dashboard/account': driver || account.role === 'caregiver' ? <div className="patient-account-profile"><DriverProfile role={account.role === 'caregiver' ? 'caregiver' : 'driver'} accountId={account.id} notify={notify} onSessionExpired={onSessionExpired} calendar={account.role==='caregiver'&&!account.demo_access_owner_id&&!account.demo_owner_id?<CalendarConnection notify={notify} onSessionExpired={onSessionExpired} />:undefined} /></div> : accountDetails,
     '/dashboard/trips/:tripId': trips,
   };
 

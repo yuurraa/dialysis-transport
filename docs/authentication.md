@@ -53,7 +53,7 @@ The coordinator Drivers list supports server-side name/phone/email/ID/plate sear
 
 Use the actual deployed hostname. Keep localhost for local development. If Google OAuth is in Testing mode, add the team's Google accounts as test users. Start and finish login in the same browser and origin; use HTTPS for phone testing.
 
-Only the Supabase URL and publishable key belong in the frontend environment. Google Calendar uses separate consent and backend credentials; Google login alone does not grant Calendar access.
+Only the Supabase URL and publishable key belong in the frontend environment. Google Calendar uses separate consent and backend credentials; Google login alone does not grant Calendar access. Patients and caregivers can connect their own calendar from My Account and opt in to pickup reminders from Trip details. Calendar grants are encrypted on the backend and cannot be read with a browser token. See [Calendar setup](apis-and-responsive-design.md#google-calendar).
 
 ## Database setup
 

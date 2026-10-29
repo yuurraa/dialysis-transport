@@ -4018,5 +4018,187 @@ do $$ begin if exists(select 1 from pg_roles where rolname='service_role') then
   grant execute on function private.demo_manage(uuid,text,jsonb),public.demo_manage(uuid,text,jsonb),private.demo_trip_context(uuid),public.demo_trip_context(uuid) to service_role;
 end if; end; $$;
 
+-- UC-13: recipient-owned Calendar credentials and durable, leased reminder work.
+-- Only the backend service identity can read these tables; no browser token access.
+create table if not exists public.calendar_connections (
+  account_id uuid primary key references public.accounts(id) on delete cascade,
+  encrypted_tokens text,
+  google_subject text,
+  status text not null default 'reconnect' check(status in ('connected','reconnect','disconnecting')),
+  version integer not null default 1,
+  updated_at timestamptz not null default now()
+);
+alter table public.calendar_connections add column if not exists google_subject text;
+alter table public.calendar_connections add column if not exists cleanup_token uuid;
+alter table public.calendar_connections add column if not exists cleanup_until timestamptz;
+alter table public.calendar_connections drop constraint if exists calendar_connections_status_check;
+alter table public.calendar_connections add constraint calendar_connections_status_check check(status in ('connected','reconnect','disconnecting','disconnected'));
+create table if not exists public.calendar_oauth_states (
+  state_hash text primary key,
+  account_id uuid not null references public.calendar_connections(account_id) on delete cascade,
+  connection_version integer not null,
+  verifier text not null,
+  encrypted_tokens text,
+  google_subject text,
+  expires_at timestamptz not null
+);
+alter table public.calendar_oauth_states add column if not exists encrypted_tokens text;
+alter table public.calendar_oauth_states add column if not exists google_subject text;
+create table if not exists public.calendar_reminders (
+  id uuid primary key default gen_random_uuid(),
+  account_id uuid not null references public.calendar_connections(account_id) on delete cascade,
+  trip_id uuid not null references public.trips(id) on delete cascade,
+  minutes integer default null check(minutes in (15,30,60,120,1440)),
+  enabled boolean not null default true,
+  revision bigint not null default 1,
+  synced_revision bigint not null default 0,
+  event_id uuid not null default gen_random_uuid(),
+  sync_status text not null default 'pending' check(sync_status in ('pending','synced','retry','reconnect')),
+  attempts integer not null default 0,
+  next_attempt_at timestamptz not null default now(),
+  lease_token uuid,
+  lease_until timestamptz,
+  unique(account_id,trip_id)
+);
+alter table public.calendar_reminders alter column minutes drop not null;
+alter table public.calendar_reminders alter column minutes set default null;
+alter table public.calendar_reminders add column if not exists event_id uuid not null default gen_random_uuid();
+create index if not exists calendar_reminders_pending on public.calendar_reminders(next_attempt_at) where revision<>synced_revision;
+alter table public.calendar_connections enable row level security;
+alter table public.calendar_oauth_states enable row level security;
+alter table public.calendar_reminders enable row level security;
+revoke all on public.calendar_connections,public.calendar_oauth_states,public.calendar_reminders from public,anon,authenticated;
+do $$ begin if exists(select 1 from pg_roles where rolname='service_role') then
+  grant select,insert,update,delete on public.calendar_connections,public.calendar_oauth_states,public.calendar_reminders to service_role;
+end if; end $$;
+
+create or replace function private.calendar_trip_allowed(recipient uuid,target uuid) returns boolean
+language sql stable security definer set search_path='' as $$
+  select exists(select 1 from public.accounts a join public.trips t on t.id=target
+    join public.patients p on p.id=t.patient_id join public.accounts pa on pa.id=p.account_id
+    where a.id=recipient and a.status='active' and a.role in ('patient','caregiver')
+      and a.demo_owner_id is null and not exists(select 1 from private.seeded_accounts s where s.account_id=a.id)
+      and t.demo_owner_id is null and p.status='active' and pa.status='active' and pa.role='patient'
+      and ((a.role='patient' and p.account_id=a.id) or (a.role='caregiver' and exists(
+        select 1 from public.caregiver_links l where l.caregiver_id=a.id and l.patient_id=p.id and l.active))));
+$$;
+revoke all on function private.calendar_trip_allowed(uuid,uuid) from public,anon,authenticated;
+
+-- Every queued change increments revision; old in-flight work cannot acknowledge a newer change.
+create or replace function private.calendar_dirty() returns trigger
+language plpgsql security definer set search_path='' as $$
+begin
+  if tg_table_name='trips' then
+    if row(new.pickup_at,new.dropoff_at,new.session_date,new.origin,new.destination,new.lifecycle,new.deleted_at,new.assigned_driver_id)
+       is not distinct from row(old.pickup_at,old.dropoff_at,old.session_date,old.origin,old.destination,old.lifecycle,old.deleted_at,old.assigned_driver_id) then return new; end if;
+    update public.calendar_reminders set enabled=case when new.lifecycle='cancelled' and old.lifecycle<>'cancelled' then false else enabled end,revision=revision+1,sync_status='pending',next_attempt_at=now(),attempts=0 where trip_id=new.id;
+  elsif tg_table_name='caregiver_links' then
+    update public.calendar_reminders r set revision=revision+1,sync_status='pending',next_attempt_at=now(),attempts=0
+      where r.account_id=coalesce(new.caregiver_id,old.caregiver_id) and r.trip_id in(select id from public.trips where patient_id=coalesce(new.patient_id,old.patient_id));
+  elsif tg_table_name='patients' then
+    if new.status is not distinct from old.status then return new; end if;
+    update public.calendar_reminders set revision=revision+1,sync_status='pending',next_attempt_at=now(),attempts=0 where trip_id in(select id from public.trips where patient_id=new.id);
+  elsif tg_table_name='calendar_connections' then
+    if row(new.status,new.version) is not distinct from row(old.status,old.version) then return new; end if;
+    update public.calendar_reminders set revision=revision+1,sync_status='pending',next_attempt_at=now(),attempts=0 where account_id=new.account_id;
+  else
+    if row(new.status,new.role) is not distinct from row(old.status,old.role) then return new; end if;
+    update public.calendar_reminders set revision=revision+1,sync_status='pending',next_attempt_at=now(),attempts=0
+      where account_id=new.id or trip_id in(select t.id from public.trips t join public.patients p on p.id=t.patient_id where p.account_id=new.id);
+  end if;
+  return coalesce(new,old);
+end;
+$$;
+revoke all on function private.calendar_dirty() from public,anon,authenticated;
+drop trigger if exists calendar_trip_changed on public.trips;
+create trigger calendar_trip_changed after update on public.trips for each row execute function private.calendar_dirty();
+drop trigger if exists calendar_link_changed on public.caregiver_links;
+create trigger calendar_link_changed after insert or update or delete on public.caregiver_links for each row execute function private.calendar_dirty();
+drop trigger if exists calendar_account_changed on public.accounts;
+create trigger calendar_account_changed after update on public.accounts for each row execute function private.calendar_dirty();
+drop trigger if exists calendar_patient_changed on public.patients;
+create trigger calendar_patient_changed after update on public.patients for each row execute function private.calendar_dirty();
+drop trigger if exists calendar_connection_changed on public.calendar_connections;
+create trigger calendar_connection_changed after update on public.calendar_connections for each row execute function private.calendar_dirty();
+
+-- Called with the user's JWT as well as verified at the API, so opt-in cannot outlive link access.
+create or replace function public.calendar_set_reminder(target uuid,reminder_minutes integer,desired boolean) returns jsonb
+language plpgsql security definer set search_path='' as $$
+declare recipient uuid; saved public.calendar_reminders; journey public.trips;
+begin
+  select id into recipient from public.accounts where auth_user_id=(select auth.uid()) and status='active' and role in ('patient','caregiver');
+  perform private.verified_email();
+  if recipient is null or not private.calendar_trip_allowed(recipient,target) then raise exception 'Calendar access denied.' using errcode='42501'; end if;
+  if (reminder_minutes is not null and reminder_minutes not in (15,30,60,120,1440)) or desired is null then raise exception 'Invalid reminder.' using errcode='22023'; end if;
+  perform 1 from public.calendar_connections where account_id=recipient and status='connected' for update;
+  if not found then raise exception 'Connect Calendar first.' using errcode='22023'; end if;
+  select * into journey from public.trips where id=target for share;
+  if journey.deleted_at is not null then raise exception 'Trip unavailable.' using errcode='22023'; end if;
+  insert into public.calendar_reminders(account_id,trip_id,minutes,enabled) values(recipient,target,reminder_minutes,desired)
+    on conflict(account_id,trip_id) do update set minutes=excluded.minutes,enabled=excluded.enabled,revision=calendar_reminders.revision+1,sync_status='pending',next_attempt_at=now(),attempts=0
+    returning * into saved;
+  return jsonb_build_object('enabled',saved.enabled,'minutes',saved.minutes,'sync_status',saved.sync_status);
+end;
+$$;
+revoke all on function public.calendar_set_reminder(uuid,integer,boolean) from public,anon;
+grant execute on function public.calendar_set_reminder(uuid,integer,boolean) to authenticated;
+
+create or replace function public.calendar_claim_jobs() returns jsonb
+language plpgsql security definer set search_path='' as $$
+declare result jsonb;
+begin
+  if coalesce(current_setting('request.jwt.claims',true),'{}')::jsonb->>'role' is distinct from 'service_role' then raise exception 'Service access required.' using errcode='42501'; end if;
+  with candidates as (
+    select r.id from public.calendar_reminders r join public.calendar_connections c on c.account_id=r.account_id
+      where r.revision<>r.synced_revision and r.next_attempt_at<=now() and (r.lease_until is null or r.lease_until<now())
+        and c.status in ('connected','disconnecting') order by r.next_attempt_at,r.id limit 5 for update of r skip locked
+  ), claimed as (
+    update public.calendar_reminders r set lease_token=gen_random_uuid(),lease_until=now()+interval '2 minutes'
+      from candidates c where r.id=c.id returning r.*
+  ) select coalesce(jsonb_agg(to_jsonb(r)||jsonb_build_object('desired',r.enabled and c.status='connected' and private.calendar_trip_allowed(r.account_id,r.trip_id)
+      and t.deleted_at is null,
+      'pickup_at',t.pickup_at,'dropoff_at',t.dropoff_at,'session_date',t.session_date,'lifecycle',t.lifecycle,'origin',t.origin,'destination',t.destination)), '[]'::jsonb)
+    into result from claimed r join public.trips t on t.id=r.trip_id join public.calendar_connections c on c.account_id=r.account_id;
+  return result;
+end;
+$$;
+revoke all on function public.calendar_claim_jobs() from public,anon,authenticated;
+do $$ begin if exists(select 1 from pg_roles where rolname='service_role') then grant execute on function public.calendar_claim_jobs() to service_role; end if; end $$;
+
+-- Disconnect cleanup has its own lease so only one backend can revoke a grant.
+-- Final deletion and credential clearing are guarded together against a newer connection.
+create or replace function public.calendar_claim_disconnects() returns jsonb
+language plpgsql security definer set search_path='' as $$
+declare result jsonb;
+begin
+  if coalesce(nullif(current_setting('request.jwt.claims',true),''),'{}')::jsonb->>'role' is distinct from 'service_role' then raise exception 'Service access required.' using errcode='42501'; end if;
+  with candidates as (
+    select c.account_id from public.calendar_connections c where c.status='disconnecting'
+      and (c.cleanup_until is null or c.cleanup_until<now())
+      and not exists(select 1 from public.calendar_reminders r where r.account_id=c.account_id and (r.revision<>r.synced_revision or r.sync_status<>'synced'))
+      order by c.updated_at,c.account_id limit 5 for update skip locked
+  ), claimed as (
+    update public.calendar_connections c set cleanup_token=gen_random_uuid(),cleanup_until=now()+interval '2 minutes'
+      from candidates p where c.account_id=p.account_id returning c.*
+  ) select coalesce(jsonb_agg(to_jsonb(c)),'[]'::jsonb) into result from claimed c;
+  return result;
+end;
+$$;
+create or replace function public.calendar_finish_disconnect(target uuid,expected_version integer,token uuid) returns boolean
+language plpgsql security definer set search_path='' as $$
+begin
+  if coalesce(nullif(current_setting('request.jwt.claims',true),''),'{}')::jsonb->>'role' is distinct from 'service_role' then raise exception 'Service access required.' using errcode='42501'; end if;
+  perform 1 from public.calendar_connections where account_id=target and version=expected_version and status='disconnecting' and cleanup_token=token and cleanup_until>now() for update;
+  if not found then return false; end if;
+  delete from public.calendar_reminders where account_id=target;
+  update public.calendar_connections set status='disconnected',encrypted_tokens=null,google_subject=null,version=version+1,cleanup_token=null,cleanup_until=null,updated_at=now() where account_id=target;
+  return true;
+end;
+$$;
+revoke all on function public.calendar_claim_disconnects(),public.calendar_finish_disconnect(uuid,integer,uuid) from public,anon,authenticated;
+do $$ begin if exists(select 1 from pg_roles where rolname='service_role') then
+  grant execute on function public.calendar_claim_disconnects(),public.calendar_finish_disconnect(uuid,integer,uuid) to service_role;
+end if; end $$;
+
 notify pgrst, 'reload schema';
 commit;

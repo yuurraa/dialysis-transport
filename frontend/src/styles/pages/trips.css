@@ -1245,7 +1245,7 @@
 .trip-obstacles-heading > span { color: var(--ui-muted); font-size: .8125rem; }
 .trip-obstacles { position: relative; list-style: none; padding: 0 12px 0 0; margin: 8px 0 0; max-height: clamp(200px, 38svh, 380px); overflow-y: auto; scrollbar-gutter: stable; }
 .trip-obstacles li + li { border-top: 1px solid var(--ui-border); }
-.trip-map .trip-obstacle { display: flex; align-items: flex-start; gap: 10px; width: 100%; min-height: 44px; padding: 12px 8px; border: 0; border-radius: 0; background: transparent; color: var(--ui-text); text-align: left; }
+.trip-map .trip-obstacle { display: grid; grid-template-columns: 24px minmax(0, 1fr); align-items: start; justify-content: start; gap: 10px; width: 100%; min-height: 44px; padding: 12px 0; border: 0; border-radius: 0; background: transparent; color: var(--ui-text); text-align: left; }
 .trip-map .trip-obstacle[aria-pressed=true] { background: var(--ui-hover); }
 .trip-obstacle-number { display: inline-grid; place-items: center; flex: 0 0 24px; height: 24px; margin-top: 1px; border: 1px solid var(--ui-danger); border-radius: 50%; color: var(--ui-danger); font-size: .75rem; font-weight: 600; }
 .trip-obstacle[aria-pressed=true] .trip-obstacle-number { background: var(--ui-danger); color: #fff; }
@@ -1295,3 +1295,6 @@
 .driver-journey-statistics dt { color: var(--ui-muted); font-size: .875rem; }
 .driver-journey-statistics dd { margin: 6px 0 0; font-size: 1.375rem; font-weight: 600; }
 .driver-journey-statistics dd span { display: block; margin-top: 4px; color: var(--ui-muted); font-size: .8125rem; font-weight: 400; }
+
+.list-info-control.calendar-event-control { position: relative; }
+.calendar-event-dot { position: absolute; top: 5px; right: 5px; width: 7px; height: 7px; border-radius: 50%; background: var(--ui-accent); box-shadow: 0 0 0 2px var(--ui-canvas); }

@@ -1,3 +1,4 @@
+import { CalendarEventButton } from '../components/CalendarControls';
 import { tripNow, type TripClock } from '../lib/tripClock';
 import { useDashboardViewState } from '../components/DashboardViewState';
 import TripProgress from '../components/TripProgress';
@@ -372,6 +373,7 @@ export default function TripsPage({ coordinator, driver = false,caregiver=false,
     {tripId?<section ref={detailPanel} tabIndex={-1} className="dashboard-trips page-panel trip-detail-page" aria-labelledby="trip-details-title" aria-busy={detailLoading}>
       <PageHeading id="trip-details-title" title="Trip details" actions={<>
         {details?.id===tripId&&coordinator&&(!details.lifecycle||details.lifecycle==='scheduled')&&<button className="list-info-control" type="button" aria-label={details.assigned_driver_id?'Manage driver assignment':'Assign driver'} title={details.assigned_driver_id?'Manage driver assignment':'Assign driver'} disabled={Date.parse(details.pickup_at??details.treatment_start)<=tripNow(details)} onClick={()=>setAssigning(details)}>{assignmentIcon}</button>}
+        {details?.id===tripId&&!coordinator&&!driver&&!details.demo_owner_id&&<CalendarEventButton key={details.id} trip={details} notify={setToast} onSessionExpired={onSessionExpired}/>}
         {details?.id===tripId&&<button className="list-info-control" type="button" aria-label="History" title="History" onClick={()=>setHistoryTrip(details.id)}><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 11a9 9 0 1 1 2.5 7M3 4v7h7M12 7v5l3 2"/></svg></button>}
         <button className="list-info-control" type="button" aria-label="Close trip details" title="Close trip details" onClick={()=>onNavigate('/dashboard/trips')}><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
       </>}/>

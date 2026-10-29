@@ -80,6 +80,8 @@ export async function expectHeaderContext(page: Page) {
 
 // API/Auth boundaries use fixtures; React runs unchanged and unexpected Auth traffic is denied.
 export async function mockServices({ page }: { page: Page }) {
+  await page.route('**/api/calendar/trips/*', route => route.fulfill({ json: { configured: false, connected: false, enabled: false } }));
+  await page.route('**/api/calendar', route => route.fulfill({ json: { configured: false, connected: false, status: 'unconfigured' } }));
   await page.route('https://www.onemap.gov.sg/**', route => route.fulfill({ contentType: 'image/png', body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a7p8AAAAASUVORK5CYII=', 'base64') }));
   await page.route('**/api/trips/*/traffic', route => route.fulfill({ status: 503, json: {} }));
   await page.route('**/api/trips/*/progress', route => route.fulfill({ status: 503, json: {} }));

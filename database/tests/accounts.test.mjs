@@ -1331,6 +1331,35 @@ test('trip notifications are recipient-only, durable and history respects curren
   const {local,own,ids,trips,assign}=await assignmentFixture();
   try {
     let trip=await assign(trips.find(row=>row.direction==='outbound'));
+    const calendarOwner=(await local.query("select id from public.accounts where auth_user_id=$1",[patient])).rows[0].id;
+    await local.query("insert into public.calendar_connections(account_id,status,encrypted_tokens) values($1,'connected','encrypted-fixture')",[calendarOwner]);
+    const unassigned=trips.find(row=>row.direction==='return'&&!row.assigned_driver_id);
+    const dateEvent=(await own(patient,'select public.calendar_set_reminder($1,null,true) as event',[unassigned.id]))[0].event;
+    assert.equal(dateEvent.enabled,true,'An unassigned trip can be manually added as an all-day event.');
+    await local.query('delete from public.calendar_reminders where trip_id=$1',[unassigned.id]);
+    const reminder=(await own(patient,'select public.calendar_set_reminder($1,30,true) as reminder',[trip.id]))[0].reminder;
+    assert.equal(reminder.enabled,true);assert.equal(reminder.sync_status,'pending');
+    const eventOnly=(await own(patient,'select public.calendar_set_reminder($1,null,true) as event',[trip.id]))[0].event;
+    assert.equal(eventOnly.enabled,true);assert.equal(eventOnly.minutes,null,'An event can be created without a popup notification.');
+    await assert.rejects(own(driver,'select public.calendar_set_reminder($1,30,true)',[trip.id]),/Calendar access/);
+    await assert.rejects(own(coordinator,'select public.calendar_set_reminder($1,30,true)',[trip.id]),/Calendar access/);
+    await assert.rejects(own(patient,'select encrypted_tokens from public.calendar_connections'),/permission denied/);
+    await assert.rejects(own(patient,'select public.calendar_claim_jobs()'),/permission denied/);
+    const claimCalendar=async()=>{
+      await local.exec('begin');
+      try{
+        await local.query("select set_config('request.jwt.claims',$1,true)",[JSON.stringify({role:'service_role'})]);
+        const rows=(await local.query('select public.calendar_claim_jobs() as jobs')).rows[0].jobs;
+        await local.exec('commit');return rows;
+      }catch(error){await local.exec('rollback');throw error;}
+    };
+    const beforeGrant=(await local.query('select revision from public.calendar_reminders where account_id=$1',[calendarOwner])).rows[0].revision;
+    await local.query('update public.calendar_connections set version=version+1 where account_id=$1',[calendarOwner]);
+    const afterGrant=(await local.query('select revision from public.calendar_reminders where account_id=$1',[calendarOwner])).rows[0].revision;
+    assert.ok(afterGrant>beforeGrant,'Replacing a connected grant must enqueue previously synced reminders.');
+    const calendarJobs=await claimCalendar();assert.equal(calendarJobs.length,1);assert.equal(calendarJobs[0].desired,true);
+    assert.equal(calendarJobs[0].origin,trip.origin);assert.equal(calendarJobs[0].patient_name,undefined,'Calendar jobs exclude patient identity and treatment details.');
+    assert.equal((await claimCalendar()).length,0,'An active lease prevents duplicate work.');
     const inbox=async who=>(await own(who,'select public.list_trip_notifications(1) as inbox'))[0].inbox;
     const patientInbox=await inbox(patient);const driverInbox=await inbox(driver);
     assert.equal(patientInbox.unread,1);assert.equal(driverInbox.unread,1);
@@ -1352,6 +1381,9 @@ test('trip notifications are recipient-only, durable and history respects curren
     assert.ok(history.events.some(event=>event.event==='assigned'&&event.actor==='coordinator'));
     await assert.rejects(own(stranger,'select public.trip_history_page($1,1)',[trip.id]),/Trip access/);
     trip=(await own(patient,'select public.cancel_trip($1,$2) as trip',[trip.id,trip.version]))[0].trip;
+    await local.query("update public.calendar_reminders set lease_until=now()-interval '1 minute'");
+    const cancelledJobs=await claimCalendar();assert.equal(cancelledJobs.length,1);assert.equal(cancelledJobs[0].desired,false,'Cancellation queues Calendar event removal.');
+    assert.ok(cancelledJobs[0].revision>calendarJobs[0].revision);
     assert.ok((await inbox(driver)).notifications.some(item=>item.event==='cancelled'));
     assert.ok((await own(driver,'select public.trip_history_page($1,1) as data',[trip.id]))[0].data.events.some(event=>event.event==='cancelled'));
     assert.ok((await inbox(coordinator)).notifications.some(item=>item.event==='cancelled'));

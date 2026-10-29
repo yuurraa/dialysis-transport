@@ -5,6 +5,11 @@ test.beforeEach(mockServices);
 test("patient edits their profile in place, discards drafts and saves once", async ({ page }) => {
   await seedSession(page);
   await page.route('**/api/auth/me', route => route.fulfill({ json: { account: activeAccount } }));
+  let calendarDeletes=0;
+  await page.route('**/api/calendar',route=>{
+    if(route.request().method()==='DELETE'){calendarDeletes++;return route.fulfill({json:{connected:false,status:'disconnecting'}});}
+    return route.fulfill({json:{configured:true,connected:true,status:'connected'}});
+  });
   let saves = 0;
   let releaseSave: (() => void) | undefined;
   const patient = { id: session.user.id, version: 1, full_name: 'Fixture Patient', birth_date: '1990-04-12', gender: 'female', phone: '+65 81234567', pickup_address: 'Fixture Street', unit_no: '', postal_code: '560123', notes: '', mobility: 'ambulant', assistance_required: false, status: 'active' };
@@ -51,5 +56,17 @@ test("patient edits their profile in place, discards drafts and saves once", asy
   await expect(page.getByRole('button', { name: 'Edit profile', exact: true })).toBeFocused();
   await expect(street).toHaveValue(`Saved Street ${width}`);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  const calendar=page.getByRole('region',{name:'Google Calendar',exact:true});
+  await expect(calendar).toContainText('Connected');
+  await calendar.getByRole('button',{name:'Disconnect',exact:true}).click();
+  const consent=page.getByRole('dialog',{name:'Disconnect Google Calendar',exact:true});
+  await expect(consent).toBeVisible();
+  await consent.getByRole('button',{name:'Cancel',exact:true}).click();
+  expect(calendarDeletes).toBe(0);
+  await calendar.getByRole('button',{name:'Disconnect',exact:true}).click();
+  await page.getByRole('dialog',{name:'Disconnect Google Calendar',exact:true}).getByRole('button',{name:'Disconnect',exact:true}).click();
+  await expect.poll(()=>calendarDeletes).toBe(1);
+  await expect(calendar).toContainText('Removing reminders and disconnecting');
+
 
 });
