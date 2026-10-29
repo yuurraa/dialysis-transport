@@ -581,7 +581,7 @@ test('trip search precedes pagination and manual generation restores deleted tri
     assert.equal((await list(coordinator,'Fixture street')).total,26);
     assert.equal((await list(coordinator,'Fixture Patient')).total,26);
     assert.equal((await list(coordinator,ids.patient)).total,26);
-    assert.equal((await list(patient,ids.patient)).total,0);
+    assert.equal((await list(patient,ids.patient)).total,26,'Patient-ID search matches the patient’s own permitted trips.');
     assert.equal((await list(coordinator,'','outbound')).total,13);
     assert.equal((await list(coordinator,'','outbound,return')).total,26);
     for (const direction of ['', 'outbound,unknown', 'all,return', 'outbound,']) await assert.rejects(list(coordinator,'',direction), /Invalid/);

@@ -1,4 +1,6 @@
 import { Controller, Get, Module } from '@nestjs/common';
+import { APP_FILTER } from '@nestjs/core';
+import { RequestBodyFilter } from './request-body.filter';
 import { SupabaseModule } from './supabase.module';
 import { DriversModule } from './drivers/drivers.module';
 import { AuthModule } from './auth/auth.module';
@@ -18,5 +20,6 @@ class HealthController {
 @Module({
   imports: [DriversModule, SupabaseModule, AuthModule, ProfilesModule, SchedulingModule, TripsModule, IntegrationsModule, DemoModule],
   controllers: [HealthController],
+  providers: [{provide:APP_FILTER,useClass:RequestBodyFilter}],
 })
 export class AppModule {}

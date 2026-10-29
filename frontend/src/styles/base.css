@@ -76,3 +76,14 @@ input::placeholder, textarea::placeholder {
     transition: none;
   }
 }
+
+/* Image branding keeps the established header dimensions and owns its tile border. */
+:root { --brand-logo: url('/images/logo-light.svg'); }
+:root[data-theme=dark] { --brand-logo: url('/images/logo-dark.svg'); }
+.brand-mark.brand-symbol, .brand-mark.dashboard-brand-symbol, .brand-mark.dashboard-mobile-mark {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent var(--brand-logo) center / contain no-repeat;
+  box-shadow: none;
+}

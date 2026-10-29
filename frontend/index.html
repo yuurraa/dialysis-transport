@@ -3,7 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Dialysis Transport</title>
+    <title>OneDialysis</title>
+    <link id="app-favicon" rel="icon" type="image/svg+xml" href="/images/logo-light.svg" />
     <meta name="theme-color" content="#F6F4EE" />
     <script>
       (() => {
@@ -13,6 +14,9 @@
           if (stored === 'dark') theme = 'dark';
         } catch {}
         document.documentElement.dataset.theme = theme;
+        const favicon = document.getElementById('app-favicon');
+        favicon.href = theme === 'dark' ? '/images/logo-dark.svg' : '/images/logo-light.svg';
+        favicon.type = 'image/svg+xml';
         document.querySelector('meta[name="theme-color"]').setAttribute('content', theme === 'dark' ? '#1C1A18' : '#F6F4EE');
       })();
     </script>

@@ -1,12 +1,13 @@
+import BrandMark from './BrandMark';
 import type { ReactNode } from 'react';
 import ThemeControl from './ThemeControl';
 
 /** Public landing layout; authenticated dashboards have their own workspace. */
 export default function PageLayout({ children, restoring = false, accountCreation = false }: { children: ReactNode; restoring?: boolean; accountCreation?: boolean }) {
   return <main className={`landing-page${restoring ? ' session-restoring' : ''}`} aria-busy={restoring}>
-    <div className="landing-header"><header className="landing-brand" aria-label="Dialysis Transport">
-      <span className="brand-symbol" aria-hidden="true">DT</span>
-      <span>Dialysis Transport</span>
+    <div className="landing-header"><header className="landing-brand" aria-label="OneDialysis">
+      <BrandMark className="brand-symbol" />
+      <span>OneDialysis</span>
     </header><ThemeControl /></div>
     <div className="landing-content">
       <section className="landing-intro" aria-labelledby="landing-title">

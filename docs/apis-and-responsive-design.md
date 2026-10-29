@@ -203,7 +203,7 @@ Driver Account Details uses the same Account Management subheader, neutral edita
 
 All content overlays use centred, content-sized popup dialogs on desktop and mobile, with viewport gutters and 12px footer bottom padding. Information views, patient/driver/car details, schedule editors, trip generation, filters and sort all share this layout. Long content scrolls inside the dialog while its heading and actions remain visible; mobile content dialogs do not expand to full-screen sheets.
 
-The mobile navigation drawer uses the pink DT brand mark beside Dialysis Transport and an X button labelled Close navigation for accessibility. Close, Escape, backdrop and navigation dismissals slide the drawer out and fade its backdrop before releasing the modal and scroll lock; reduced-motion preferences skip these animations.
+The mobile navigation drawer uses the theme-aware app logo beside OneDialysis and an X button labelled Close navigation for accessibility. Close, Escape, backdrop and navigation dismissals slide the drawer out and fade its backdrop before releasing the modal and scroll lock; reduced-motion preferences skip these animations.
 
 `GET /api/drivers/:id/week?start=YYYY-MM-DD` lets active coordinators inspect a Driver’s effective dated availability and assigned journeys. The schedule icon opens this week plus the next three, using dated desktop columns or mobile day/range rows. Free availability is green and assigned windows are red, with clickable journey details. Ineligible Drivers remain inspectable with a note; empty data and service failures have separate states. The older `/availability` endpoint returns the recurring template rather than the dated calendar.
 

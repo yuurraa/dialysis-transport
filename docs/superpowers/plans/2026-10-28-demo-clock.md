@@ -50,8 +50,9 @@ upgrade. Reset Scenario remains available if an earlier run already moved its bo
 To stop using simulation, reset the scenario or return to ordinary trips; clock fields
 are ignored for untagged trips. No production database changes were made in this task.
 
-The database suite has a pre-existing failing test named `trip search precedes
-pagination and manual generation restores deleted trips with history`: its patient-ID
-search assertion expects zero matches and gets 26. The same isolated failure was
-reproduced against HEAD's unchanged schema. It is outside the demo-clock change.
+The pre-existing patient-ID search assertion in `trip search precedes pagination and
+manual generation restores deleted trips with history` has been corrected: the
+patient should find their own 26 permitted trips by Patient ID, matching the shared
+search query. The correction changes the test expectation only; tests have not been
+rerun by the agent.
 Browser tests are not run automatically under frontend/src/styles/README.md.

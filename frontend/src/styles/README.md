@@ -34,3 +34,5 @@
 Use `npm run build --workspace frontend` for TypeScript and CSS compilation, and `git diff --check` for whitespace issues. A structural extraction can also be audited by comparing each selector's declaration sequence within its media/supports context; review competing selectors when changing import order. Browser tests require an explicit user request and must not be run automatically. No new tests are needed solely for moving stylesheet rules.
 
 `pages/availability.css` owns the weekly driver grid, mobile day ranges and approval state; shared forms, focus colours, overlays and toasts remain in their existing stylesheets.
+
+Shared branding uses `BrandMark.tsx` with the supplied dark/light images embedded in `public/images/logo-dark.svg` and `logo-light.svg`. The SVG viewports trim unused outer space without redrawing the supplied artwork. Theme variables in `base.css` select the header image; `index.html` and `ThemeControl.tsx` keep the browser tab icon in sync. Header sizes and mobile visibility remain in their existing stylesheets.

@@ -1174,7 +1174,7 @@
 .trip-detail-page-actions { margin: 0; flex-wrap: wrap; gap: 8px; }
 .trip-detail-page-actions .trip-execution-primary { order: -1; }
 .trip-detail-page-actions:empty { display: none; }
-.trip-detail-toolbar { display: flex; justify-content: space-between; align-items: stretch; flex-wrap: wrap; gap: 12px 24px; margin-bottom: 12px; border-bottom: 1px solid var(--ui-border); }
+.trip-detail-toolbar { display: flex; justify-content: space-between; align-items: stretch; flex-wrap: wrap; gap: 12px 24px; padding-top: 8px; margin-bottom: 12px; border-bottom: 1px solid var(--ui-border); }
 .trip-detail-tabs { display: flex; gap: 24px; }
 .trip-detail-toolbar .trip-detail-page-actions { padding-bottom: 8px; }
 .trip-detail-page .trip-detail-tabs button { min-height: 44px; padding: 10px 4px; margin-bottom: -1px; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; color: var(--ui-muted); white-space: nowrap; }

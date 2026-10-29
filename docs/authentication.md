@@ -106,3 +106,7 @@ My Vehicle shows licence and car details, status, submission date and the curren
 All Account Details headings include the shared Account Management subheader. Drivers edit name, phone, birth date and gender through Edit profile → Save profile/Cancel. Owner updates send the profile version, preserve drafts on failure and use the shared viewport toast for errors. Login status, identity, role and vehicle approval are unchanged by personal edits.
 
 Active coordinators inspect effective availability and bookings through the Driver List schedule icon and `GET /api/drivers/:id/week`. Drivers use the separate `GET /api/drivers/me/week` endpoint. Coordinator inspection grants no availability writes; inactive/unapproved Drivers remain visible with an eligibility note.
+
+## Invalid request bodies
+
+Malformed JSON and JSON primitives rejected by the request parser return HTTP 400 before controller authentication runs, including for anonymous callers. Valid JSON sent to protected endpoints without sign-in still returns HTTP 401. The global request-body filter normalises parser failures to a sanitised client error and delegates other exceptions to Nest’s standard handler.

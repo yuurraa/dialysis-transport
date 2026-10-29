@@ -1,4 +1,4 @@
-# Dialysis Transport
+# OneDialysis
 
 An SC2006 project for coordinating recurring transport to and from dialysis centres, supporting transport coordinators, drivers, patients and caregivers. The web interface adapts to mobile and desktop screens.
 

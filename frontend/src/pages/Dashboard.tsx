@@ -1,3 +1,4 @@
+import BrandMark from '../components/BrandMark';
 import { CalendarConnection } from '../components/CalendarControls';
 import TripNotifications from '../components/TripNotifications';
 import DemoTools from '../components/DemoTools';
@@ -203,15 +204,15 @@ export default function Dashboard({ account, demoAdmin, avatarUrl, onSignOut, si
     <a className="dashboard-skip" href="#dashboard-main">Skip to content</a>
     <header className="dashboard-header">
       <div className="dashboard-header-inner">
-        <a className="dashboard-brand" href={homePath} onClick={event => follow(event, homePath)} aria-label="Dialysis Transport dashboard">
-          <span className="dashboard-brand-symbol" aria-hidden="true">DT</span><span>Dialysis Transport</span>
+        <a className="dashboard-brand" href={homePath} onClick={event => follow(event, homePath)} aria-label="OneDialysis dashboard">
+          <BrandMark className="dashboard-brand-symbol" /><span>OneDialysis</span>
         </a>
         <div className="dashboard-top-navigation">{navigation}</div>
         <div className="dashboard-mobile-heading">
           <button className="dashboard-menu-toggle" ref={menuButton} type="button" aria-label="Open navigation" aria-haspopup="dialog" aria-expanded={menuOpen} aria-controls="dashboard-drawer" onClick={() => { setMenuOpen(true); setDropdown(null); }}>
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" /></svg>
           </button>
-          <span className="dashboard-mobile-mark" aria-label="Dialysis Transport">DT</span><span className="dashboard-mobile-title">{label(routes.find(route => route.path === current)!)}</span>
+          <BrandMark className="dashboard-mobile-mark" /><span className="dashboard-mobile-title">{label(routes.find(route => route.path === current)!)}</span>
         </div>
         <div className="dashboard-account-actions" ref={headerActions}>
           <time className="dashboard-header-clock" dateTime={now.toISOString()} aria-label={`${date}, ${time} Singapore time`}><span className="dashboard-date-full">{date}</span><span className="dashboard-date-compact" aria-hidden="true">{compactDate}</span><span className="dashboard-clock">{time}</span></time>
@@ -264,7 +265,7 @@ export default function Dashboard({ account, demoAdmin, avatarUrl, onSignOut, si
       if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) setMenuOpen(false);
     }}>
       <header className="dashboard-drawer-header">
-        <span className="dashboard-drawer-brand"><span className="dashboard-brand-symbol" aria-hidden="true">DT</span><span>Dialysis Transport</span></span>
+        <span className="dashboard-drawer-brand"><BrandMark className="dashboard-brand-symbol" /><span>OneDialysis</span></span>
         <button className="dashboard-drawer-close" ref={drawerClose} type="button" aria-label="Close navigation" onClick={() => setMenuOpen(false)}>
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true"><path d="m6 6 12 12M6 18 18 6" /></svg>
         </button>

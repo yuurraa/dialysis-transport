@@ -270,23 +270,19 @@ test('BB-13 registration: structurally wrong bodies are 400', async () => {
   assert.equal((await call('POST', '/auth/register', { token: 'unregistered', raw: 'role=patient', contentType: 'text/plain' })).status, 400);
 });
 
-/**
- * KNOWN DEFECT D1 (found by these black-box tests): a request body that is not an object/array
- * (malformed JSON such as '{"role":', or JSON primitives such as null, "text", 42) is answered with
- * HTTP 500 "Internal server error" instead of 400. The application's own services reject such bodies
- * with 400, but the framework's body parser fails first. Marked TODO so the suite stays green; remove the
- * flag once the defect is fixed.
- */
-test('BB-D1 malformed JSON and JSON primitives must be client errors (400), not 500', { todo: 'D1: body-parser failures surface as HTTP 500' }, async () => {
+// Body parsing precedes controller validation and authentication.
+test('BB-D1 malformed JSON and JSON primitives must be client errors (400), not 500', async () => {
   for (const raw of ['{"role":', '{', 'null', '"text"', '42', 'true', "{'single':'quotes'}"]) {
     assert.equal((await call('POST', '/auth/register', { token: 'unregistered', raw })).status, 400, `body ${raw}`);
     assert.equal((await call('POST', '/trips/generate', { token: 'coordinator', raw })).status, 400, `body ${raw}`);
   }
 });
 
-test('BB-D2 an anonymous caller who also sends malformed JSON is still told to sign in (401)', { todo: 'D1: body-parser failures surface as HTTP 500' }, async () => {
-  assert.equal((await call('POST', '/trips/generate', { raw: '{"bad":' })).status, 401);
-  assert.equal((await call('PATCH', `/trips/${ID}/confirm`, { raw: 'null' })).status, 401);
+test('BB-D2 malformed anonymous requests are 400; valid JSON still requires sign-in', async () => {
+  assert.equal((await call('POST', '/trips/generate', { raw: '{"bad":' })).status, 400);
+  assert.equal((await call('PATCH', `/trips/${ID}/confirm`, { raw: 'null' })).status, 400);
+  assert.equal((await call('POST', '/trips/generate', { body: {} })).status, 401);
+  assert.equal((await call('PATCH', `/trips/${ID}/confirm`, { body: {} })).status, 401);
 });
 
 test('BB-14 registering the same Google account twice is a conflict (409)', async () => {

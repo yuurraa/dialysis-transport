@@ -9,6 +9,8 @@ export default function ThemeControl() {
   const [theme, setTheme] = useState<Theme>(() => validTheme(document.documentElement.dataset.theme));
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
+    const favicon=document.querySelector<HTMLLinkElement>('#app-favicon');
+    if(favicon){favicon.href=theme==='dark'?'/images/logo-dark.svg':'/images/logo-light.svg';favicon.type='image/svg+xml';}
     document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'dark' ? '#1C1A18' : '#F6F4EE');
     const sync = (event: StorageEvent) => {
       if (event.key === preferenceKey || event.key === null) setTheme(validTheme(event.newValue));
