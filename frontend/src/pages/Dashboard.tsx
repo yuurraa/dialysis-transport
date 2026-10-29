@@ -5,7 +5,7 @@ import { ApiError, apiGet } from '../lib/api';
 import { ListError, PageHeading } from '../components/DashboardUI';
 import ThemeControl from '../components/ThemeControl';
 import TreatmentSchedules from './TreatmentSchedules';
-import { useCallback, useEffect, useRef, useState, type MouseEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type MouseEvent, type ReactNode } from 'react';
 import DriverProfile from './DriverProfile';
 import CaregiverConnections from './CaregiverConnections';
 import PatientProfile from './PatientProfile';
@@ -16,6 +16,7 @@ import DriverRegistration, { type DriverVehicle } from './DriverRegistration';
 import DriverAvailability from './DriverAvailability';
 import TripsPage from './TripsPage';
 import { roleNames, type Account } from './AccountPanel';
+import { homePath, matchRoute, navigate, routesFor, usePath, type DashboardPath, type DashboardRoute } from '../routes';
 
 const unavailableTripsIcon = <span className="dashboard-data-status-icon" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="5" width="16" height="16" rx="3" /><path d="M8 3v4m8-4v4M4 11h16m-10 4 4 4m0-4-4 4" /></svg></span>;
 
@@ -23,8 +24,6 @@ interface Props {
   account: Account;
   demoAdmin?:boolean;
   avatarUrl?: string;
-  path: string;
-  onNavigate: (path: string, replace?: boolean) => void;
   onSignOut: () => void;
   signingOut: boolean;
   notify: (message: string) => void;
@@ -33,7 +32,8 @@ interface Props {
 }
 
 /** Shared role workspace with server-authorized trip data for patients and coordinators. */
-export default function Dashboard({ account, demoAdmin, avatarUrl, path, onNavigate, onSignOut, signingOut, notify, onSessionExpired, onPatientProfileMissing }: Props) {
+export default function Dashboard({ account, demoAdmin, avatarUrl, onSignOut, signingOut, notify, onSessionExpired, onPatientProfileMissing }: Props) {
+  const path = usePath();
   const [demoOpen,setDemoOpen]=useState(false);
   const [now, setNow] = useState(() => new Date());
   useEffect(() => {
@@ -127,13 +127,19 @@ export default function Dashboard({ account, demoAdmin, avatarUrl, path, onNavig
     return () => { active = false; };
   }, [driver, account.id, driverReload, vehicleChanged, onSessionExpired]);
 
-  const tripDetailsId=path.match(/^\/dashboard\/trips\/([0-9a-f-]{36})$/i)?.[1]?.toLowerCase();
-  const driverTripsPage = driver && (path === '/dashboard/trips'||!!tripDetailsId);
-  const availabilityPage = driver && path === '/dashboard/availability';
-  const driversPage = account.role === 'coordinator' && path === '/dashboard/drivers';
-  const home = '/dashboard/trips';
+  const routes = routesFor(account);
+  const match = matchRoute(account, path);
+  // A path the account may not open renders Trips until LoginPage's guard replaces it.
+  const current: DashboardPath = match?.route.path ?? homePath;
+  const tripDetailsId = match?.id;
+  const tripsPage = current === homePath || current === '/dashboard/trips/:tripId';
+  const label = (route: DashboardRoute) => route.path === '/dashboard/vehicle' && !driverRegistered ? 'Register Vehicle' : typeof route.label === 'function' ? route.label(account) : route.label;
+  // Vehicle-dependent driver pages wait for /drivers/me; the role guard alone admits them.
+  const awaitingVehicle = driver && !tripsPage && current !== '/dashboard/account';
   const patient = account.role === 'patient';
-  const caregiverTransport=account.role==='caregiver'&&(path==='/dashboard/schedules'||path==='/dashboard/trips'||!!tripDetailsId);
+  const accountPage = current === '/dashboard/account';
+  const schedulesPage = current === '/dashboard/schedules';
+  const caregiverTransport = account.role === 'caregiver' && (schedulesPage || tripsPage);
   const [linkedPatients,setLinkedPatients]=useState<{patient_id:string;patient_name:string;active:boolean}[]|null>(null),[linksError,setLinksError]=useState(false),[linksRetry,setLinksRetry]=useState(0);
   useEffect(()=>{
     if(!caregiverTransport)return;
@@ -147,21 +153,16 @@ export default function Dashboard({ account, demoAdmin, avatarUrl, path, onNavig
     });
     return()=>{live=false;};
   },[caregiverTransport,account.id,linksRetry,onSessionExpired]);
-  const accountPage = path === '/dashboard/account';
   const profileResolved = useCallback((complete: boolean) => {
     if (!complete) onPatientProfileMissing();
   }, [onPatientProfileMissing]);
-  const schedulesPage = ['patient','caregiver','coordinator'].includes(account.role) && path === '/dashboard/schedules';
-  const patientsPage = account.role === 'coordinator' && path === '/dashboard/patients';
-  const caregiversPage=account.role==='coordinator'&&path==='/dashboard/caregivers';
-  const connectionsPage=['patient','caregiver'].includes(account.role)&&path==='/dashboard/connections';
   const date = new Intl.DateTimeFormat('en-SG', { dateStyle: 'full', timeZone: 'Asia/Singapore' }).format(now);
   const compactDate = new Intl.DateTimeFormat('en-SG', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Singapore' }).format(now);
   const time = new Intl.DateTimeFormat('en-SG', { hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23', timeZone: 'Asia/Singapore' }).format(now);
   function follow(event: MouseEvent<HTMLAnchorElement>, target: string) {
     if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     event.preventDefault();
-    onNavigate(target);
+    navigate(target);
     setDropdown(null);
     setMenuOpen(false);
     if (dropdown) {
@@ -169,25 +170,39 @@ export default function Dashboard({ account, demoAdmin, avatarUrl, path, onNavig
     }
   }
 
+  // Driver vehicle links appear once registration is known; Availability only once approved.
+  const shown = (route: DashboardRoute) => route.nav && (!driver || route.path === homePath || (driverRegistered !== null && (route.path !== '/dashboard/availability' || driverRegistered)));
   const navigation = <nav className="dashboard-navigation" aria-label="Dashboard">
-    {driver ? <>
-      <a href="/dashboard/trips" onClick={event => follow(event, '/dashboard/trips')} aria-current={driverTripsPage ? 'page' : undefined}>Trips</a>
-      {driverRegistered !== null && <>
-      {driverRegistered && <a href="/dashboard/availability" onClick={event => follow(event, '/dashboard/availability')} aria-current={availabilityPage ? 'page' : undefined}>Availability</a>}
-      <a href="/dashboard/vehicle" onClick={event => follow(event, '/dashboard/vehicle')} aria-current={path === '/dashboard/vehicle' ? 'page' : undefined}>{driverRegistered ? 'My Vehicle' : 'Register Vehicle'}</a></>}
-    </> : <a href="/dashboard/trips" onClick={event => follow(event, '/dashboard/trips')} aria-current={path === '/dashboard/trips'||tripDetailsId ? 'page' : undefined}>Trips</a>}
-    {['patient','caregiver','coordinator'].includes(account.role) && <a href="/dashboard/schedules" onClick={event => follow(event, '/dashboard/schedules')} aria-current={schedulesPage ? 'page' : undefined}>Schedules</a>}
-    {account.role === 'coordinator' && <a href="/dashboard/patients" onClick={event => follow(event, '/dashboard/patients')} aria-current={patientsPage ? 'page' : undefined}>Patients</a>}
-    {account.role==='coordinator'&&<a href="/dashboard/caregivers" onClick={event=>follow(event,'/dashboard/caregivers')} aria-current={caregiversPage?'page':undefined}>Caregivers</a>}
-    {account.role === 'coordinator' && <a href="/dashboard/drivers" onClick={event => follow(event, '/dashboard/drivers')} aria-current={driversPage ? 'page' : undefined}>Drivers</a>}
-    {['patient','caregiver'].includes(account.role)&&<a href="/dashboard/connections" onClick={event=>follow(event,'/dashboard/connections')} aria-current={connectionsPage?'page':undefined}>{patient?'Caregivers':'Patient'}</a>}
+    {routes.filter(shown).map(route => <a key={route.path} href={route.path} onClick={event => follow(event, route.path)} aria-current={path === route.path || (route.path === homePath && tripDetailsId) ? 'page' : undefined}>{label(route)}</a>)}
   </nav>;
+
+  // Caregiver Trips and Schedules wait for the linked-patient list; the role guard alone admits them.
+  const caregiverPages = <section className={linkedPatients?.length&&!linksError?'caregiver-transport-workspace':'dashboard-trips patients-panel page-panel caregiver-connections'} aria-label="Linked patient transport">{linksError?<ListError title="Linked patients could not be loaded" message="Please try again." onRetry={()=>setLinksRetry(value=>value+1)}/>:linkedPatients===null?<div className="account-loading patients-loading" role="status"><span className="account-spinner" aria-hidden="true"/><span>Loading...</span></div>:!linkedPatients.length?<><PageHeading id="caregiver-transport-title" title={schedulesPage?'Treatment schedules':'Patient trips'} eyebrow={schedulesPage?'Treatment Management':'Linked Patient Trip Management'}/><div className="connections-empty">{unavailableTripsIcon}<h2>No linked patients</h2><p>Link a patient to manage their transport.</p><div className="patient-actions"><button type="button" className="patient-primary" onClick={()=>navigate('/dashboard/connections')}>Link a patient</button></div></div></>:schedulesPage?<TreatmentSchedules coordinator={false} caregiverPatients={linkedPatients} notify={notify} onSessionExpired={onSessionExpired}/>:<TripsPage coordinator={false} caregiver tripId={tripDetailsId} onNavigate={navigate} onSessionExpired={onSessionExpired}/>}</section>;
+  const trips = driver ? <TripsPage coordinator={false} driver tripId={tripDetailsId} onNavigate={navigate} onSessionExpired={onSessionExpired} /> : account.role === 'caregiver' ? caregiverPages : <TripsPage coordinator={account.role === 'coordinator'} tripId={tripDetailsId} onNavigate={navigate} onSessionExpired={onSessionExpired} />;
+  const accountDetails = <>{!patient && <section className="dashboard-trips" aria-labelledby={account.role === 'coordinator' ? 'account-details-title' : 'role-profile-title'}><PageHeading id={account.role === 'coordinator' ? 'account-details-title' : 'role-profile-title'} title="Account Details" eyebrow="Account Management" description={<span className="profile-id">{roleNames[account.role]} ID: {account.id}</span>} />{account.role === 'coordinator' && <fieldset className="patient-form-fields coordinator-account-fields" disabled aria-label="Coordinator account details">
+    <div className="patient-field"><label htmlFor="coordinator-username">Username</label><input id="coordinator-username" value={account.display_name} readOnly autoComplete="username" /></div>
+    <div className="patient-field"><label htmlFor="coordinator-email">Email</label><input id="coordinator-email" type="email" value={account.email} readOnly autoComplete="email" /></div>
+    <div className="patient-field"><label htmlFor="coordinator-role">Role</label><input id="coordinator-role" value={roleNames[account.role]} readOnly /></div>
+    <div className="patient-field"><label htmlFor="coordinator-status">Status</label><input id="coordinator-status" value={account.status === 'active' ? 'Active' : 'Inactive'} readOnly /></div>
+  </fieldset>}</section>}{patient && <div className="patient-account-profile"><PatientProfile notify={notify} onSessionExpired={onSessionExpired} onProfileResolved={profileResolved} /></div>}</>;
+  const pages: Record<DashboardPath, ReactNode> = {
+    '/dashboard/trips': trips,
+    '/dashboard/availability': <DriverAvailability notify={notify} onSessionExpired={onSessionExpired} vehicleRegistered={Boolean(driverRegistered)} onViewVehicle={() => navigate('/dashboard/vehicle')} />,
+    '/dashboard/vehicle': <div className="patient-account-profile"><DriverRegistration notify={notify} onSessionExpired={onSessionExpired} registered={Boolean(driverRegistered)} onVehicleChange={vehicleChanged} /></div>,
+    '/dashboard/schedules': account.role === 'caregiver' ? caregiverPages : <TreatmentSchedules coordinator={account.role === 'coordinator'} notify={notify} onSessionExpired={onSessionExpired} />,
+    '/dashboard/patients': <PatientsPage notify={notify} onSessionExpired={onSessionExpired} />,
+    '/dashboard/caregivers': <CaregiversPage notify={notify} onSessionExpired={onSessionExpired} />,
+    '/dashboard/drivers': <DriversPage notify={notify} onSessionExpired={onSessionExpired} />,
+    '/dashboard/connections': <CaregiverConnections role={account.role === 'caregiver' ? 'caregiver' : 'patient'} notify={notify} onSessionExpired={onSessionExpired} />,
+    '/dashboard/account': driver || account.role === 'caregiver' ? <div className="patient-account-profile"><DriverProfile role={account.role === 'caregiver' ? 'caregiver' : 'driver'} accountId={account.id} notify={notify} onSessionExpired={onSessionExpired} /></div> : accountDetails,
+    '/dashboard/trips/:tripId': trips,
+  };
 
   return <DashboardViewStateProvider><div className="dashboard-page">
     <a className="dashboard-skip" href="#dashboard-main">Skip to content</a>
     <header className="dashboard-header">
       <div className="dashboard-header-inner">
-        <a className="dashboard-brand" href={home} onClick={event => follow(event, home)} aria-label="Dialysis Transport dashboard">
+        <a className="dashboard-brand" href={homePath} onClick={event => follow(event, homePath)} aria-label="Dialysis Transport dashboard">
           <span className="dashboard-brand-symbol" aria-hidden="true">DT</span><span>Dialysis Transport</span>
         </a>
         <div className="dashboard-top-navigation">{navigation}</div>
@@ -195,7 +210,7 @@ export default function Dashboard({ account, demoAdmin, avatarUrl, path, onNavig
           <button className="dashboard-menu-toggle" ref={menuButton} type="button" aria-label="Open navigation" aria-haspopup="dialog" aria-expanded={menuOpen} aria-controls="dashboard-drawer" onClick={() => { setMenuOpen(true); setDropdown(null); }}>
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" /></svg>
           </button>
-          <span className="dashboard-mobile-mark" aria-label="Dialysis Transport">DT</span><span className="dashboard-mobile-title">{tripDetailsId?'Trip details':accountPage ? 'My Account' : connectionsPage ? patient?'Caregivers':'Patient' : driverTripsPage ? 'Trips' : driversPage ? 'Drivers' : availabilityPage ? 'Availability' : driver ? driverRegistered ? 'My Vehicle' : 'Register Vehicle' : caregiversPage ? 'Caregivers' : patientsPage ? 'Patients' : schedulesPage ? 'Schedules' : 'Trips'}</span>
+          <span className="dashboard-mobile-mark" aria-label="Dialysis Transport">DT</span><span className="dashboard-mobile-title">{label(routes.find(route => route.path === current)!)}</span>
         </div>
         <div className="dashboard-account-actions" ref={headerActions}>
           <time className="dashboard-header-clock" dateTime={now.toISOString()} aria-label={`${date}, ${time} Singapore time`}><span className="dashboard-date-full">{date}</span><span className="dashboard-date-compact" aria-hidden="true">{compactDate}</span><span className="dashboard-clock">{time}</span></time>
@@ -207,7 +222,7 @@ export default function Dashboard({ account, demoAdmin, avatarUrl, path, onNavig
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9" /><circle cx="12" cy="9" r="3" /><path d="M6 19a6 6 0 0 1 12 0" /></svg>
           </button>
           <section className="dashboard-dropdown dashboard-notifications" id="dashboard-notifications" aria-label="Notifications" style={{display: dropdown === 'notifications' ? undefined : 'none'}}>
-            <TripNotifications key={account.id} open={dropdown === 'notifications'} onUnread={setUnreadNotifications} onError={notify} onSessionExpired={onSessionExpired} onOpenTrip={(trip,rate)=>{setDropdown(null);notificationsButton.current?.focus();const path=`/dashboard/trips/${trip.id}`;onNavigate(path);if(rate&&account.role==='patient'&&trip.lifecycle==='completed'&&trip.assigned_driver_id){window.history.replaceState(window.history.state,'',`${path}?tab=rate`);window.dispatchEvent(new Event('trip-rating-requested'));}}} onOpenPage={page=>{setDropdown(null);notificationsButton.current?.focus();onNavigate(`/dashboard/${page}`);}} />
+            <TripNotifications key={account.id} open={dropdown === 'notifications'} onUnread={setUnreadNotifications} onError={notify} onSessionExpired={onSessionExpired} onOpenTrip={(trip,rate)=>{setDropdown(null);notificationsButton.current?.focus();const path=`/dashboard/trips/${trip.id}`;navigate(path);if(rate&&account.role==='patient'&&trip.lifecycle==='completed'&&trip.assigned_driver_id){window.history.replaceState(window.history.state,'',`${path}?tab=rate`);window.dispatchEvent(new Event('trip-rating-requested'));}}} onOpenPage={page=>{setDropdown(null);notificationsButton.current?.focus();navigate(`/dashboard/${page}`);}} />
           </section>
           {dropdown === 'account' && <section className="dashboard-dropdown" id="dashboard-account-menu" aria-label="Account">
             <div className="dashboard-profile">
@@ -226,15 +241,10 @@ export default function Dashboard({ account, demoAdmin, avatarUrl, path, onNavig
       </div>
     </header>
 
-    {demoAdmin&&<DemoTools account={account} open={demoOpen} onOpen={()=>setDemoOpen(true)} onClose={()=>setDemoOpen(false)} onNavigate={onNavigate} notify={notify}/>}
+    {demoAdmin&&<DemoTools account={account} open={demoOpen} onOpen={()=>setDemoOpen(true)} onClose={()=>setDemoOpen(false)} onNavigate={navigate} notify={notify}/>}
     <div className="dashboard-workspace">
     <main className="dashboard-main" id="dashboard-main" tabIndex={-1}>
-      {driver && !accountPage && !driverTripsPage && driverLoadError ? <section className="dashboard-trips patients-panel page-panel"><ListError title="Driver dashboard could not be loaded" message="Your vehicle registration could not be loaded. Please try again." onRetry={() => setDriverReload(value => value + 1)} /></section> : driver && !accountPage && !driverTripsPage && driverRegistered === null ? <div className="account-loading patients-loading" role="status"><span className="account-spinner" aria-hidden="true" /><span>Loading...</span></div> : connectionsPage ? <CaregiverConnections role={account.role==='caregiver'?'caregiver':'patient'} notify={notify} onSessionExpired={onSessionExpired}/> : caregiverTransport ? <section className={linkedPatients?.length&&!linksError?'caregiver-transport-workspace':'dashboard-trips patients-panel page-panel caregiver-connections'} aria-label="Linked patient transport">{linksError?<ListError title="Linked patients could not be loaded" message="Please try again." onRetry={()=>setLinksRetry(value=>value+1)}/>:linkedPatients===null?<div className="account-loading patients-loading" role="status"><span className="account-spinner" aria-hidden="true"/><span>Loading...</span></div>:!linkedPatients.length?<><PageHeading id="caregiver-transport-title" title={schedulesPage?'Treatment schedules':'Patient trips'} eyebrow={schedulesPage?'Treatment Management':'Linked Patient Trip Management'}/><div className="connections-empty">{unavailableTripsIcon}<h2>No linked patients</h2><p>Link a patient to manage their transport.</p><div className="patient-actions"><button type="button" className="patient-primary" onClick={()=>onNavigate('/dashboard/connections')}>Link a patient</button></div></div></>:schedulesPage?<TreatmentSchedules coordinator={false} caregiverPatients={linkedPatients} notify={notify} onSessionExpired={onSessionExpired}/>:<TripsPage coordinator={false} caregiver tripId={tripDetailsId} onNavigate={onNavigate} onSessionExpired={onSessionExpired}/>}</section> : driversPage ? <DriversPage notify={notify} onSessionExpired={onSessionExpired} /> : availabilityPage ? <DriverAvailability notify={notify} onSessionExpired={onSessionExpired} vehicleRegistered={Boolean(driverRegistered)} onViewVehicle={() => onNavigate('/dashboard/vehicle')} /> : driverTripsPage ? <TripsPage coordinator={false} driver tripId={tripDetailsId} onNavigate={onNavigate} onSessionExpired={onSessionExpired} /> : driver && !accountPage ? <div className="patient-account-profile"><DriverRegistration notify={notify} onSessionExpired={onSessionExpired} registered={Boolean(driverRegistered)} onVehicleChange={vehicleChanged} /></div> : schedulesPage ? <TreatmentSchedules coordinator={account.role === 'coordinator'} notify={notify} onSessionExpired={onSessionExpired} /> : caregiversPage ? <CaregiversPage notify={notify} onSessionExpired={onSessionExpired}/> : patientsPage ? <PatientsPage notify={notify} onSessionExpired={onSessionExpired} /> : accountPage && ['driver','caregiver'].includes(account.role) ? <div className="patient-account-profile"><DriverProfile role={account.role==='caregiver'?'caregiver':'driver'} accountId={account.id} notify={notify} onSessionExpired={onSessionExpired} /></div> : accountPage ? <>{!patient && <section className="dashboard-trips" aria-labelledby={account.role === 'coordinator' ? 'account-details-title' : 'role-profile-title'}><PageHeading id={account.role === 'coordinator' ? 'account-details-title' : 'role-profile-title'} title="Account Details" eyebrow="Account Management" description={<span className="profile-id">{roleNames[account.role]} ID: {account.id}</span>} />{account.role === 'coordinator' && <fieldset className="patient-form-fields coordinator-account-fields" disabled aria-label="Coordinator account details">
-        <div className="patient-field"><label htmlFor="coordinator-username">Username</label><input id="coordinator-username" value={account.display_name} readOnly autoComplete="username" /></div>
-        <div className="patient-field"><label htmlFor="coordinator-email">Email</label><input id="coordinator-email" type="email" value={account.email} readOnly autoComplete="email" /></div>
-        <div className="patient-field"><label htmlFor="coordinator-role">Role</label><input id="coordinator-role" value={roleNames[account.role]} readOnly /></div>
-        <div className="patient-field"><label htmlFor="coordinator-status">Status</label><input id="coordinator-status" value={account.status === 'active' ? 'Active' : 'Inactive'} readOnly /></div>
-      </fieldset>}</section>}{patient && <div className="patient-account-profile"><PatientProfile notify={notify} onSessionExpired={onSessionExpired} onProfileResolved={profileResolved} /></div>}</> : ['coordinator', 'patient'].includes(account.role) ? <TripsPage coordinator={account.role === 'coordinator'} tripId={tripDetailsId} onNavigate={onNavigate} onSessionExpired={onSessionExpired} /> : null}
+      {awaitingVehicle && driverLoadError ? <section className="dashboard-trips patients-panel page-panel"><ListError title="Driver dashboard could not be loaded" message="Your vehicle registration could not be loaded. Please try again." onRetry={() => setDriverReload(value => value + 1)} /></section> : awaitingVehicle && driverRegistered === null ? <div className="account-loading patients-loading" role="status"><span className="account-spinner" aria-hidden="true" /><span>Loading...</span></div> : pages[current]}
     </main>
     </div>
     <dialog className="dashboard-drawer" data-closing={drawerClosing} onAnimationEnd={event => { if (drawerClosing && event.target === event.currentTarget && event.animationName === 'drawer-exit') setDrawerVisible(false); }} ref={drawer} id="dashboard-drawer" aria-label="Menu navigation" onKeyDown={event => {

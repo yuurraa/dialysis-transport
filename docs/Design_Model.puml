@@ -1,0 +1,358 @@
+@startuml
+top to bottom direction
+
+scale max 3000 width
+skinparam classAttributeIconSize 0
+skinparam style strictuml
+
+package "Domain Model" {
+
+    class "Transport Coordinator" <<entity>> {
+        - **coordinatorID** : String <<PK>>
+        - loginDetails : String
+        - coordinatorContact : String
+        - accountStatus : String
+
+        + updateContact(newContact : String) : void
+        + updateAccountStatus(newStatus : String) : void 
+    }
+
+    class "Patient" <<entity>> {
+        - **patientID** : String <<PK>>
+        - loginDetails : String
+        - patientContact : String
+        - accountStatus : String
+        - patientMobility : String
+        - pickupLocation : String
+
+        + updatePickupLocation(newLocation : String) : void
+        + updateContact(newContact : String) : void
+        + updateMobility(newMobility : String) : void
+        + updateAccountStatus(newStatus : String) : void 
+    }
+
+    class "Caregiver" <<entity>> {
+        - **caregiverID** : String <<PK>>
+        - loginDetails : String
+        - caregiverContact : String
+        - accountStatus : String
+       
+        + updateContact(newContact : String) : void 
+        + updateAccountStatus(newStatus : String) : void
+    }
+
+    class "Driver" <<entity>> {
+        - **driverID** : String <<PK>>
+        - driverName : String
+        - driverContact : String
+        - driverAssistanceClearance : String
+        - accountStatus : String
+
+        + updateContact(newContact : String) : void
+        + updateAssistanceClearance(newClearance : String) : void
+        + updateAccountStatus(newStatus : String) : void 
+    }
+
+    class "Vehicle" <<entity>> {
+        - **vehicleID** : String <<PK>>
+        - vehicleEquipment : String
+        - vehicleCapacity : Integer
+        - vehicleModel : String
+        - vehicleColour : String
+
+        + updateEquipment(newEquipment : String) : void
+        + updateCapacity(newCapacity : Integer) : void 
+    }
+
+    class "Dialysis Centre" <<entity>> {
+        - **centreID** : String <<PK>>
+        - centreName : String
+        - centreAddress : String
+    }
+
+    class "Treatment Slot" as TreatmentSlot <<entity>> {
+        - **treatmentID** : String <<PK>>
+        - treatmentTime : DateTime
+
+        + updateTreatmentTime(newTime : DateTime) : void
+    }
+
+    class "Trip" <<entity>> {
+        - **tripID** : String <<PK>>
+        - tripProgress : String
+        - tripStatus : String
+        - pickupTime : DateTime
+        - tripType : String
+
+        + updateStatus(status : String) : void
+        + updateProgress(progress : String) : void 
+        + updatePickupTime(newTime : DateTime) : void
+    }
+
+    class "Availability Window" as AvailabilityWindow <<entity>> {
+        - **driverID** : String <<PK, FK>>
+        - **startTime** : DateTime <<PK>>
+        - endTime : DateTime
+
+        + updateWindow(startTime : DateTime, endTime : DateTime) : void
+        + overlaps(startTime : DateTime, endTime : DateTime) : Boolean
+    }
+
+    class "Route Assessment" as RouteAssessment <<entity>> {
+        - **tripID** : String <<PK, FK>>
+        - **assessmentID** : String <<PK>>
+        - routePath : String
+        - routeDistance : Float
+        - travelTime : Duration
+        - recalculatedETA : DateTime
+
+        + updateETA(newETA : DateTime) : void
+    }
+
+    class "Trip Log" as TripLog <<entity>> {
+        - **tripID** : String 
+        - **timestamp** : DateTime 
+        - tripEvent : String
+        - resultingState : String
+        - action : String
+    }
+
+    class "Traffic Disruption" as TrafficDisruption <<entity>> {
+        - **disruptionID** : String <<PK>>
+        - disruptionType : String
+        - speedBands : String
+    }
+    
+    class "Caregiver Patient Link" as CaregiverPatientLink <<entity>> {
+        - linkID : String
+        - linkStatus : String
+}
+    class "Recovery Action" as RecoveryAction <<entity>>{
+        - recoveryRank : Integer
+        - approvalStatus : String
+        - actionType : String
+        - recoveryActionID : String
+}
+    class "Notification" <<entity>> {
+        - notificationID : String
+        - deliveryStatus : String
+        - message : String
+        - timestamp : DateTime
+
+}
+    class "Driver Rating" as DriverRating <<entity>> {
+        - ratingID : String
+        - ratingValue : Integer
+        - ratingDate : DateTime
+}
+    class "Driver Preference" as DriverPreference <<entity>> {
+        - preferenceID : String
+        - dateSet : DateTime
+}
+    class "Calendar Reminder" as CalendarReminder <<entity>> {
+        - reminderID : String
+        - externalEventID : String
+        - syncStatus: String
+}
+}
+package "Control" {
+
+    class AuthenticationControl <<control>> {
+        + authenticateUser(userID : String, password : String) : Boolean
+        + authorizeRole(userID : String, role : String) : Boolean
+}
+
+    class ProfileManagerControl <<control>> {
+        + createProfile() : void
+        + viewProfile(id : String) : void
+        + editProfile(id : String) : void
+        + deactivateProfile(id : String) : void
+        + linkCaregiverToPatient(caregiver : Caregiver, patient : Patient) : void
+        + validateCaregiverAccess(caregiver : Caregiver, patient : Patient) : Boolean
+}
+
+    class ScheduleControl <<control>> {
+        + generateRecurringTrips(patient : Patient, slot : TreatmentSlot) : List<Trip>
+        + updateRecurringSchedule(patient : Patient) : void
+        + findSuitableDrivers(trip : Trip) : List<Driver>
+        + findCompatibleVehicles(trip : Trip) : List<Vehicle>
+        + assignDriver(trip : Trip, driver : Driver) : void
+        + assignVehicle(trip : Trip, vehicle : Vehicle) : void
+        + identifyUnfilledTrip(trip : Trip) : void
+}
+    class MonitoringControl <<control>> {
+        + retrieveCurrentTrips() : List<Trip>  
+        + categorizeTrips() : void
+        + filterTripsByStatus(status : String) : List<Trip>
+    }
+
+    class RiskRecoveryControl <<control>> {
+        + generateRecoveryOptions(trip : Trip) : List<RecoveryAction>
+        + rankRecoveryOptions(options : List<RecoveryAction>) : List<RecoveryAction>
+        + approveRecovery(action : RecoveryAction) : void
+        + applyRecovery(action : RecoveryAction, trip : Trip) : void
+        + markUnfilledCritical(trip : Trip) : void
+    }
+
+    class AvailabilityControl <<control>> {
+        + getAvailability(driver : Driver) : List<AvailabilityWindow>
+        + addAvailability(driver : Driver, window : AvailabilityWindow) : void
+        + updateAvailability(window : AvailabilityWindow) : void
+        + validateAvailability(window: AvailabilityWindow) : Boolean
+        + reportSuddenUnavailability(driver : Driver, trip : Trip) : void
+    }
+
+    class RouteAssessmentControl <<control>> {
+        + getBaselineRoute(trip : Trip) : RouteAssessment
+        + getTrafficConditions() : List<TrafficDisruption>
+        + mapTrafficToRoute(assessment : RouteAssessment) : void
+        + recalculateETA(assessment : RouteAssessment) : DateTime
+    }
+
+    class TrackingControl <<control>> {
+        + getDriverLocation(driver : Driver) : String
+        + getTripProgress(trip : Trip) : String
+        + updateTracking(trip : Trip) : void
+        + stopLocationSharing(trip : Trip) : void
+    }
+
+    class NotificationControl <<control>> {
+        + identifyAffectedUsers(trip : Trip) : List<String>
+        + generateNotification(trip : Trip) : Notification
+        + sendNotification(notification : Notification) : void
+    }
+
+    class TripControl <<control>> {
+        + retrievePatientNextTrip(patient : Patient) : Trip
+        + confirmTrip(trip : Trip) : void
+        + validateCancellation(trip : Trip) : Boolean
+        + cancelTrip(trip : Trip) : void
+        + releaseAssignedResources(trip : Trip) : void
+        + findReassignmentOpportunity(trip : Trip) : void 
+       
+    }
+
+    class TripHistoryControl <<control>> {
+        + recordAssignment(trip : Trip) : void
+        + recordDisruption(trip : Trip) : void
+        + recordRecovery(trip : Trip) : void
+        + recordReassignment(trip : Trip) : void
+        + recordCancellation(trip : Trip) : void
+        + recordFinalStatus(trip : Trip) : void
+}
+  
+
+    class FeedbackAndPreferenceControl <<control>> {
+        + validateDriverRating(patient : Patient, driver : Driver, trip : Trip) : Boolean
+        + submitDriverRating(patient : Patient, driver : Driver, trip : Trip, rating : Integer) : void
+        + setPreferredDriver(patient : Patient, driver : Driver) : void
+        + updatePreferredDriver(patient : Patient, driver : Driver) : void
+        + removePreferredDriver(patient : Patient) : void
+}
+ 
+
+    class CalendarSyncControl <<control>> {
+        + createReminder(trip : Trip) : CalendarReminder
+        + updateReminder(reminder : CalendarReminder, trip : Trip) : void
+    + removeReminder(reminder : CalendarReminder) : void
+    + syncReminder(reminder : CalendarReminder) : Boolean
+ }
+}
+
+package "Application" {
+    class Application {
+        + main() : void
+        - initializeSystem() : void
+}
+}
+' ------------------------------
+' CONTROL → ENTITY DEPENDENCIES
+' ------------------------------
+
+AuthenticationControl ..> "Transport Coordinator"
+AuthenticationControl ..> Patient
+AuthenticationControl ..> Caregiver
+AuthenticationControl ..> Driver
+
+ProfileManagerControl ..> Patient
+ProfileManagerControl ..> Caregiver
+ProfileManagerControl ..> Driver
+ProfileManagerControl ..> Vehicle
+ProfileManagerControl ..> CaregiverPatientLink
+
+ScheduleControl ..> Patient
+ScheduleControl ..> TreatmentSlot
+ScheduleControl ..> Trip
+ScheduleControl ..> Driver
+ScheduleControl ..> Vehicle
+
+MonitoringControl ..> Trip
+
+RiskRecoveryControl ..> Trip
+RiskRecoveryControl ..> RecoveryAction
+
+AvailabilityControl ..> Driver
+AvailabilityControl ..> AvailabilityWindow
+AvailabilityControl ..> Trip
+
+RouteAssessmentControl ..> Trip
+RouteAssessmentControl ..> RouteAssessment
+RouteAssessmentControl ..> TrafficDisruption
+
+TrackingControl ..> Trip
+TrackingControl ..> Driver
+
+NotificationControl ..> Trip
+NotificationControl ..> Notification
+
+TripControl ..> Trip
+TripControl ..> Patient
+TripControl ..> Driver
+TripControl ..> Vehicle
+
+TripHistoryControl ..> Trip
+TripHistoryControl ..> TripLog
+
+FeedbackAndPreferenceControl ..> Patient
+FeedbackAndPreferenceControl ..> Driver
+FeedbackAndPreferenceControl ..> Trip
+FeedbackAndPreferenceControl ..> DriverRating
+FeedbackAndPreferenceControl ..> DriverPreference
+
+CalendarSyncControl ..> Trip
+CalendarSyncControl ..> CalendarReminder
+
+' --------------------------------
+' ASSOCIATIONS AND MULTIPLICITIES 
+' --------------------------------
+
+Caregiver "1" -- "0..*" CaregiverPatientLink : has >
+Patient "1" -- "0..*" CaregiverPatientLink : linked through >
+Patient "1" -- "1..*" TreatmentSlot : requires >
+TreatmentSlot "*" -- "1" "Dialysis Centre" : hosted at >
+Driver "1" -- "*" AvailabilityWindow : declares >
+Trip "*" -- "1" Patient : transports >
+Trip "*" -- "0..1" Driver : assigned to >
+Trip "*" -- "0..1" Vehicle : utilizes >
+Trip "*" -- "1" TreatmentSlot : anchored to >
+Trip "1" -- "0..*" RouteAssessment : evaluates <
+Trip "1" -- "0..*" TripLog : audit history >
+RouteAssessment "*" -- "0..*" TrafficDisruption : impacted by >
+' Recovery
+Trip "1" -- "0..*" RecoveryAction : has >
+
+' Notifications
+Trip "1" -- "0..*" Notification : generates >
+
+' Driver ratings
+Patient "1" -- "0..*" DriverRating : submits >
+Driver "1" -- "0..*" DriverRating : receives >
+Trip "1" -- "0..1" DriverRating : receives >
+
+' Driver preference
+Patient "1" -- "0..1" DriverPreference : sets >
+Driver "1" -- "0..*" DriverPreference : preferred in >
+
+' Calendar reminders
+Trip "1" -- "0..*" CalendarReminder : has >
+@enduml

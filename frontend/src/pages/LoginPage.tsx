@@ -6,11 +6,12 @@ import PageLayout from '../components/PageLayout';
 import Dashboard from './Dashboard';
 import { demoSessionEvent, getDemoSession, setDemoSession } from '../lib/demoSession';
 import { hasSignupSelection, supabase } from '../lib/supabase';
+import { homePath, matchRoute, navigate, usePath } from '../routes';
 import { completeGoogleAccountSelection, startGoogleAccountSelection, type SignupDraft } from '../lib/googleAccountSelection';
 
 /** UC-01: Google session plus database-backed account registration and access. */
 export default function LoginPage() {
-  const [path, setPath] = useState(window.location.pathname);
+  const path = usePath();
   const [resolvedAccount, setResolvedAccount] = useState<{ userId: string; account: Account | null } | null>(null);
   const [user, setUser] = useState<User | null>(null);
   const [demoAccount,setDemoAccount]=useState<Account|null>(null);
@@ -36,23 +37,13 @@ export default function LoginPage() {
     setToast(previous => ({ message: text, id: (previous?.id ?? 0) + 1, kind }));
   }, []);
 
-  const navigate = useCallback((target: string, replace = false) => {
-    window.history[replace ? 'replaceState' : 'pushState'](null, '', target);
-    setPath(target);
-    window.scrollTo(0, 0);
-  }, []);
-  useEffect(() => {
-    const changed = () => setPath(window.location.pathname);
-    window.addEventListener('popstate', changed);
-    return () => window.removeEventListener('popstate', changed);
-  }, []);
   const onAccountResolved = useCallback((account: Account | null) => {
     if (user) setResolvedAccount({ userId: user.id, account });
   }, [user?.id]);
   const onPatientProfileMissing = useCallback(() => {
     setResolvedAccount(previous => previous?.account?.role === 'patient' ? { ...previous, account: { ...previous.account, profile_complete: false } } : previous);
     navigate('/', true);
-  }, [navigate]);
+  }, []);
   const originalAccount = resolvedAccount?.userId === user?.id ? resolvedAccount?.account : null;
   const account = user ? demoAccount??originalAccount : null;
   const restoringAccount = checking || Boolean(user && resolvedAccount?.userId !== user.id);
@@ -60,12 +51,9 @@ export default function LoginPage() {
   useEffect(() => {
     if (checking) return;
     if (dashboardAccess && account?.role === 'patient' && path === '/dashboard/profile') { navigate('/dashboard/account', true); return; }
-    const home = '/dashboard/trips';
-    const allowed = [home, '/dashboard/account', ...(['patient','caregiver'].includes(account?.role??'')?['/dashboard/connections']:[]), ...(account?.role === 'driver' ? ['/dashboard/trips', '/dashboard/availability', '/dashboard/vehicle'] : []), ...(['patient','caregiver','coordinator'].includes(account?.role ?? '') ? ['/dashboard/schedules'] : []), ...(account?.role === 'coordinator' ? ['/dashboard/patients','/dashboard/caregivers','/dashboard/drivers'] : [])];
-    const tripDetails=['patient','caregiver','coordinator','driver'].includes(account?.role??'')&&/^\/dashboard\/trips\/[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(path);
-    if (dashboardAccess && !allowed.includes(path) && !tripDetails) navigate(home, true);
+    if (dashboardAccess && account && !matchRoute(account, path)) navigate(homePath, true);
     else if (path.startsWith('/dashboard') && (!user || (resolvedAccount?.userId === user.id && !dashboardAccess))) navigate('/', true);
-  }, [checking, dashboardAccess, account?.role, path, user?.id, resolvedAccount, navigate]);
+  }, [checking, dashboardAccess, account, path, user?.id, resolvedAccount]);
 
   const loading = checking || (!user && Boolean(supabase) && !backendReady) || Boolean(user && accountLoading);
   useEffect(() => {
@@ -242,7 +230,7 @@ export default function LoginPage() {
 
   return (
     <>
-      {dashboardAccess && account && !checking ? <Dashboard key={`${account.id}:${account.role}`} account={account} demoAdmin={Boolean(originalAccount?.demo_admin&&originalAccount.role==='coordinator')} avatarUrl={demoAccount?undefined:typeof user?.user_metadata.avatar_url === 'string' ? user.user_metadata.avatar_url : typeof user?.user_metadata.picture === 'string' ? user.user_metadata.picture : undefined} path={path} onNavigate={navigate} onSignOut={() => void signOut()} signingOut={busy === 'signout'} notify={notify} onSessionExpired={expireSession} onPatientProfileMissing={onPatientProfileMissing} /> : <PageLayout restoring={restoringAccount} accountCreation={Boolean(user && !restoringAccount && (!account || (['patient', 'driver', 'caregiver'].includes(account.role) && account.status === 'active' && account.profile_complete !== true)))}>
+      {dashboardAccess && account && !checking ? <Dashboard key={`${account.id}:${account.role}`} account={account} demoAdmin={Boolean(originalAccount?.demo_admin&&originalAccount.role==='coordinator')} avatarUrl={demoAccount?undefined:typeof user?.user_metadata.avatar_url === 'string' ? user.user_metadata.avatar_url : typeof user?.user_metadata.picture === 'string' ? user.user_metadata.picture : undefined} onSignOut={() => void signOut()} signingOut={busy === 'signout'} notify={notify} onSessionExpired={expireSession} onPatientProfileMissing={onPatientProfileMissing} /> : <PageLayout restoring={restoringAccount} accountCreation={Boolean(user && !restoringAccount && (!account || (['patient', 'driver', 'caregiver'].includes(account.role) && account.status === 'active' && account.profile_complete !== true)))}>
       <section className={`entry-card ${user ? 'entry-card-account' : ''}`} aria-busy={checking || Boolean(busy)} aria-label={user ? 'Your account' : 'Sign in'}>
         {checking || (!user && supabase && !backendReady) ? <div className="account-loading" role="status" aria-label={checking ? 'Checking sign-in' : 'Connecting to service'}><span className="account-spinner" aria-hidden="true" /><span>Loading...</span></div> : user ? (
           <AccountPanel key={user.id} email={user.email} onSignOut={() => void signOut()} onCancel={() => void signOut(true)} onSessionExpired={expireSession} signingOut={busy === 'signout'} onAccountResolved={onAccountResolved} onLoadingChange={setAccountLoading} onChangeGoogleAccount={changeGoogleAccount} initialDraft={signupDraft} />
