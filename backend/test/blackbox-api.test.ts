@@ -3,7 +3,7 @@ import { test, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from '../src/app.module';
-import { SupabaseService } from '../src/supabase.module';
+import { SupabaseService } from '../src/infrastructure/database/supabase.module';
 
 /**
  * BLACK-BOX API TESTS

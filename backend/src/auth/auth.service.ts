@@ -1,8 +1,8 @@
 import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, Logger, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
-import { SupabaseService } from '../supabase.module';
-import { personalInput } from '../profiles/personal-input';
-import { patientInput } from '../profiles/patient-input';
-import type { UserRole } from '../types';
+import { SupabaseService } from '../infrastructure/database/supabase.module';
+import { personalInput } from '../profiles/validation/personal-input';
+import { patientInput } from '../profiles/validation/patient-input';
+import type { UserRole } from '../common/types';
 
 interface Account {
   id: string;

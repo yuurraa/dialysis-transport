@@ -1,11 +1,11 @@
 import 'reflect-metadata';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { AvailabilityService } from '../src/drivers/availability.service';
+import { AvailabilityService } from '../src/drivers/availability/availability.service';
 import { TripsService } from '../src/trips/trips.service';
 import type { AuthService } from '../src/auth/auth.service';
-import type { SupabaseService } from '../src/supabase.module';
-import type { TripRoutingService } from '../src/trips/trip-routing.service';
+import type { SupabaseService } from '../src/infrastructure/database/supabase.module';
+import type { TripRoutingService } from '../src/trips/routing/trip-routing.service';
 
 /**
  * Boundary value analysis and control-flow (branch/path) tests for service-layer guards.

@@ -1,7 +1,7 @@
 import { Controller, Get, Module } from '@nestjs/common';
 import { APP_FILTER } from '@nestjs/core';
-import { RequestBodyFilter } from './request-body.filter';
-import { SupabaseModule } from './supabase.module';
+import { RequestBodyFilter } from './common/filters/request-body.filter';
+import { SupabaseModule } from './infrastructure/database/supabase.module';
 import { DriversModule } from './drivers/drivers.module';
 import { AuthModule } from './auth/auth.module';
 import { ProfilesModule } from './profiles/profiles.module';

@@ -1,12 +1,12 @@
 import { BadRequestException, Body, Controller, ForbiddenException, Get, Headers, Inject, Injectable, Module, Post, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
 import { AuthService } from '../auth/auth.service';
-import { SupabaseService } from '../supabase.module';
+import { SupabaseService } from '../infrastructure/database/supabase.module';
 import { TripsModule } from '../trips/trips.module';
 import { TripsService } from '../trips/trips.service';
 
 interface DemoActor { id:string; auth_user_id:string|null; email:string; role:string; status:'active'|'inactive'; demo_access_owner_id:string; seed_key:string }
-interface DemoState { actors:DemoActor[]; scenario:{trip_id:string;progress:number;traffic:string}|null; trip:{id:string;lifecycle:string;demo_owner_id:string}|null }
+interface DemoState { cohort_owner_id:string; operator_id:string; actors:DemoActor[]; scenario:{trip_id:string;progress:number;traffic:string}|null; trip:{id:string;lifecycle:string;demo_owner_id:string}|null }
 
 /** Fixture controls require the real Google coordinator, even while viewing a demo actor. */
 @Injectable()
@@ -30,6 +30,8 @@ export class DemoService {
       if(['22023','PT409','23514','22P02'].includes(result.error.code??''))throw new BadRequestException({code:'demo_action_unavailable'});
       throw new ServiceUnavailableException({code:'demo_unavailable'});
     }
+    if(!result.data||typeof result.data.cohort_owner_id!=='string'||!/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(result.data.cohort_owner_id))
+      throw new ServiceUnavailableException({code:'demo_schema_outdated'});
     return result.data as DemoState;
   }
   async state(header?:string) {const owner=await this.owner(header);return this.manage(owner.id,'state');}
@@ -38,13 +40,15 @@ export class DemoService {
     const pending=this.preparing.get(owner.id);if(pending)return pending;
     const work=(async()=>{
       const state=await this.manage(owner.id,'setup');
+      const cohortOwner=state.cohort_owner_id;
       for(const actor of state.actors){
+        if(actor.demo_access_owner_id!==cohortOwner)throw new ForbiddenException({code:'demo_forbidden'});
         if(actor.auth_user_id)continue;
         const admin=this.database.forIntegration().auth.admin;
         const created=await admin.createUser({id:actor.id,email:actor.email,email_confirm:true,
-          app_metadata:{demo_account_id:actor.id,demo_owner_id:owner.id}});
+          app_metadata:{demo_account_id:actor.id,demo_owner_id:cohortOwner}});
         const user=created.data.user??(await admin.getUserById(actor.id)).data.user;
-        if(!user||user.id!==actor.id||user.email!==actor.email||user.app_metadata.demo_account_id!==actor.id||user.app_metadata.demo_owner_id!==owner.id)
+        if(!user||user.id!==actor.id||user.email!==actor.email||user.app_metadata.demo_account_id!==actor.id||user.app_metadata.demo_owner_id!==cohortOwner)
           throw new ServiceUnavailableException({code:'demo_identity_unavailable'});
         await this.manage(owner.id,'attach',{account_id:actor.id});
       }
@@ -57,10 +61,10 @@ export class DemoService {
     const owner=await this.owner(header);
     const input=this.input(body,['account_id']);
     const state=await this.manage(owner.id,'state');
-    const actor=state.actors.find(a=>a.id===input.account_id&&a.demo_access_owner_id===owner.id&&a.auth_user_id===a.id&&a.status==='active');
+    const actor=state.actors.find(a=>a.id===input.account_id&&a.demo_access_owner_id===state.cohort_owner_id&&a.auth_user_id===a.id&&a.status==='active');
     if(!actor)throw new ForbiddenException({code:'demo_forbidden'});
     const existing=await this.database.forIntegration().auth.admin.getUserById(actor.id);
-    if(existing.error||!existing.data.user||existing.data.user.email!==actor.email||existing.data.user.app_metadata.demo_account_id!==actor.id||existing.data.user.app_metadata.demo_owner_id!==owner.id)
+    if(existing.error||!existing.data.user||existing.data.user.email!==actor.email||existing.data.user.app_metadata.demo_account_id!==actor.id||existing.data.user.app_metadata.demo_owner_id!==state.cohort_owner_id)
       throw new ServiceUnavailableException({code:'demo_identity_unavailable'});
     const link=await this.database.forIntegration().auth.admin.generateLink({type:'magiclink',email:actor.email});
     if(link.error||link.data.user.id!==actor.id||!link.data.properties.hashed_token)throw new ServiceUnavailableException({code:'demo_identity_unavailable'});
@@ -78,7 +82,7 @@ export class DemoService {
     if(input.action==='move'){
       if(!Number.isInteger(input.percent)||(input.percent as number)<0||(input.percent as number)>100)throw new BadRequestException('Choose a position from 0 to 100.');
       const state=await this.manage(owner.id,'state');
-      if(!state.trip||state.trip.demo_owner_id!==owner.id||state.trip.lifecycle!=='in-progress')throw new BadRequestException({code:'demo_action_unavailable'});
+      if(!state.trip||state.trip.demo_owner_id!==state.cohort_owner_id||state.trip.lifecycle!=='in-progress')throw new BadRequestException({code:'demo_action_unavailable'});
       const result=await this.trips.tripRoute(header,state.trip.id);
       const geometry=result.route.geometry;
       // Interpolate by distance, so a dense section of the polyline does not slow movement.

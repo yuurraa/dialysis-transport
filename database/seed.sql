@@ -27,13 +27,21 @@ create temporary table retired_demo_links on commit drop as
 do $$
 declare owner uuid; scope record; actor public.accounts; fixture record; person uuid; caregiver uuid; vehicle public.driver_vehicles;
 begin
-  select a.id into owner from public.accounts a
+  if not private.demo_administrator() then raise exception 'Sign in as a real coordinator and enable its demo_admin flag before applying the seed.'; end if;
+  -- Existing registry ownership is identity metadata, not the current operator's capability.
+  if (select count(distinct owner_id) from private.seeded_accounts)>1 then
+    raise exception 'Expected one shared demo cohort. Ownership was not changed.';
+  end if;
+  select owner_id into owner from private.seeded_accounts limit 1;
+  if owner is null then
+    select a.id into owner from public.accounts a
     join auth.users u on u.id=a.auth_user_id
     where a.role='coordinator' and a.status='active' and a.demo_admin and a.demo_owner_id is null
       and u.email_confirmed_at is not null
       and exists(select 1 from auth.identities i where i.user_id=u.id and i.provider='google')
       and not exists(select 1 from private.seeded_accounts s where s.account_id=a.id)
-    order by a.created_at,a.id limit 1;
+      order by a.created_at,a.id limit 1;
+  end if;
   if owner is null then raise exception 'Sign in as a real coordinator and enable its demo_admin flag before applying the seed.'; end if;
   if exists(select 1 from private.seeded_accounts where owner_id<>owner) then
     raise exception 'Seed accounts already belong to a different administrator. Ownership was not changed.';

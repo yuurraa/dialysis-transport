@@ -72,6 +72,7 @@ test('users cannot write roles/status directly or access other accounts', async 
   await assert.rejects(asUser(patient, 'update public.accounts set demo_admin=true'), /permission denied/);
   await assert.rejects(asUser(patient, "select public.demo_manage('22222222-2222-4222-8222-222222222222','setup','{}')"), /permission denied/);
   await assert.rejects(asUser(patient, "select public.demo_trip_context('11111111-1111-4111-8111-111111111111')"), /permission denied/);
+  await assert.rejects(asUser(patient, 'select private.demo_administrator()'), /permission denied/);
   await assert.rejects(asUser(patient, "insert into public.accounts(email, display_name, role, status) values ('hacker@example.test', 'Hacker', 'coordinator', 'active')"), /permission denied/);
   assert.equal((await asUser(driver, 'select * from public.accounts')).length, 0);
   assert.equal((await asUser(patient, 'select * from public.accounts')).length, 1);
@@ -112,8 +113,27 @@ test('preconfigured coordinator links by verified email once, without letting re
     assert.equal(first.actors.find(actor=>actor.role==='coordinator').demo_admin,false);
     assert.ok(first.actors.every(actor=>actor.demo_access_owner_id===account.id&&actor.demo_owner_id===null&&!actor.display_name.includes('Demo')));
     const again=await manage('setup');assert.equal(again.trip.id,first.trip.id);assert.deepEqual(again.actors.map(actor=>actor.id),first.actors.map(actor=>actor.id));
-    const reset=await manage('reset',{confirmed:true});assert.notEqual(reset.trip.id,first.trip.id);assert.equal(reset.scenario.traffic,'normal');
     await db.exec('reset role;');
+    const otherAuth=(await db.query("insert into auth.users(id,email,email_confirmed_at) values(gen_random_uuid(),'other.coordinator@example.test',now()) returning id")).rows[0].id;
+    await db.query("insert into auth.identities(user_id,provider) values($1,'google')",[otherAuth]);
+    await db.query('update public.accounts set auth_user_id=$1,demo_admin=true where id=$2',[otherAuth,other]);
+    // The cohort remains usable after its original administrator loses the capability.
+    await db.query('update public.accounts set demo_admin=false where id=$1',[account.id]);
+    await db.exec(seed);
+    assert.deepEqual((await db.query('select distinct owner_id from private.seeded_accounts')).rows,[{owner_id:account.id}]);
+    await db.exec('set local role service_role;');
+    const shared=async(action,details={})=>(await db.query('select public.demo_manage($1,$2,$3::jsonb) as state',[other,action,JSON.stringify(details)])).rows[0].state;
+    const sharedSetup=await shared('setup');
+    assert.equal(sharedSetup.cohort_owner_id,account.id);assert.equal(sharedSetup.trip.id,first.trip.id);
+    assert.deepEqual(sharedSetup.actors.map(actor=>actor.id),first.actors.map(actor=>actor.id));
+    const reset=await shared('reset',{confirmed:true});assert.notEqual(reset.trip.id,first.trip.id);assert.equal(reset.scenario.traffic,'normal');
+    await db.exec('reset role;');
+    assert.equal((await db.query("select actor_id from public.trip_history where trip_id=$1 and event='generated'",[reset.trip.id])).rows[0].actor_id,other);
+    await db.query('update public.accounts set demo_admin=false where id=$1',[other]);
+    await db.exec('savepoint revoked_demo; set local role service_role;');
+    await assert.rejects(shared('setup'),/Demo administrator required/);
+    await db.exec('rollback to savepoint revoked_demo; reset role;');
+    await db.query('update public.accounts set demo_admin=true where id=$1',[account.id]);
     assert.ok((await db.query('select deleted_at from public.trips where id=$1',[first.trip.id])).rows[0].deleted_at);
     await db.query("insert into public.trip_history(trip_id,actor_id,event,details) values($1,$2,'confirmed','{}')",[reset.trip.id,account.id]);
     assert.equal((await db.query('select count(*)::integer as count from public.trip_notifications where recipient_id=$1',[other])).rows[0].count,0);

@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { routeTraffic } from '../src/trips/route-traffic';
-import type { DrivingRoute } from '../src/integrations/onemap.service';
-import type { RoadSpeedBand, TrafficIncident, TrafficSnapshot } from '../src/integrations/lta.service';
+import { routeTraffic } from '../src/trips/traffic/route-traffic';
+import type { DrivingRoute } from '../src/integrations/onemap/onemap.service';
+import type { RoadSpeedBand, TrafficIncident, TrafficSnapshot } from '../src/integrations/lta/lta.service';
 
 /**
  * Control-flow and boundary tests for routeTraffic().

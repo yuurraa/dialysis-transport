@@ -6,7 +6,7 @@ import { NestFactory } from '@nestjs/core';
 import { ProfilesController } from '../src/profiles/profiles.controller';
 import { ProfilesService } from '../src/profiles/profiles.service';
 import { AuthService } from '../src/auth/auth.service';
-import { SupabaseService } from '../src/supabase.module';
+import { SupabaseService } from '../src/infrastructure/database/supabase.module';
 
 const id = '11111111-1111-4111-8111-111111111111';
 let role = 'coordinator';

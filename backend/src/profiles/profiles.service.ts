@@ -1,9 +1,9 @@
-import { BadRequestException, ConflictException, ForbiddenException, HttpException, Inject, Injectable, NotFoundException, NotImplementedException, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, HttpException, Inject, Injectable, NotFoundException, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 import { AuthService } from '../auth/auth.service';
-import { SupabaseService } from '../supabase.module';
-import { driverInput, personalInput } from './personal-input';
-import { patientInput } from './patient-input';
-import type { PatientScope, UserRole } from '../types';
+import { SupabaseService } from '../infrastructure/database/supabase.module';
+import { driverInput, personalInput } from './validation/personal-input';
+import { patientInput } from './validation/patient-input';
+import type { UserRole } from '../common/types';
 
 /** UC-02 and UC-02.1: coordinator-managed records and caregiver links. */
 @Injectable()
@@ -108,18 +108,6 @@ export class ProfilesService {
     if (error.code === '42501') throw new ForbiddenException('Profile access denied.');
     if (error.code === '23514' || error.code === '22P02' || error.code === '22023' || error.code === '23502') throw new BadRequestException('Invalid profile details.');
     throw new ServiceUnavailableException('Profile service is unavailable. Please try again.');
-  }
-
-  /** Require coordinator access and return only permitted fields. */
-  async listRecords(scope: PatientScope, recordType: string): Promise<unknown> {
-    // TODO: Implement using Supabase and database constraints.
-    throw new NotImplementedException('listRecords is awaiting implementation.');
-  }
-
-  /** Validate and create, edit or deactivate a record. */
-  async saveRecord(scope: PatientScope, recordType: string, data: unknown): Promise<unknown> {
-    // TODO: Implement using Supabase and database constraints.
-    throw new NotImplementedException('saveRecord is awaiting implementation.');
   }
 
   async ownCaregiver(header?:string){

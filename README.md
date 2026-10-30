@@ -79,10 +79,10 @@ The latest requested combined run passed **68 tests**, with the optional local P
 ## Project structure
 
 ```text
-frontend/   React application
-backend/    NestJS API
-database/  Database setup and permission tests
-docs/      Setup, deployment and requirements reference
+frontend/   React app: app/, features/, shared/, styles/
+backend/    NestJS domain modules, common/, infrastructure/, integrations/
+database/   Consolidated schema, seed data and permission tests
+docs/       Setup, architecture, requirements and implementation records
 ```
 
 ## Documentation
@@ -91,3 +91,5 @@ docs/      Setup, deployment and requirements reference
 - [Authentication](docs/authentication.md)
 - [Use-case coverage and ordered implementation priorities](docs/use-case-map.md)
 - [Integrations and responsive design](docs/apis-and-responsive-design.md)
+
+- [Source layout and ownership](docs/folder-structure.md)

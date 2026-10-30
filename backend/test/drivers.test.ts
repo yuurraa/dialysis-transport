@@ -3,12 +3,12 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { Module, UnauthorizedException } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
-import { AvailabilityController } from '../src/drivers/availability.controller';
-import { AvailabilityService } from '../src/drivers/availability.service';
+import { AvailabilityController } from '../src/drivers/availability/availability.controller';
+import { AvailabilityService } from '../src/drivers/availability/availability.service';
 import { DriversController } from '../src/drivers/drivers.controller';
 import { DriversService } from '../src/drivers/drivers.service';
 import { AuthService } from '../src/auth/auth.service';
-import { SupabaseService } from '../src/supabase.module';
+import { SupabaseService } from '../src/infrastructure/database/supabase.module';
 
 const id = '33333333-3333-4333-8333-333333333333';
 let role = 'driver'; let status = 'active'; let failure: string | null = null;

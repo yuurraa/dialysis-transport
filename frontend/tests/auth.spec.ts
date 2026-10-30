@@ -17,9 +17,24 @@ test('starts PKCE Google login and returns to this browser origin without Calend
 
 test('logout clears the session and protects reload and browser Back', async ({ page }) => {
   await seedSession(page);
-  await page.route('**/api/auth/me', route => route.fulfill({ json: { account: activeAccount } }));
+  const administrator={...activeAccount,role:'coordinator',demo_admin:true};
+  const cohort='22222222-2222-4222-8222-222222222222';
+  const actor={...activeAccount,id:'33333333-3333-4333-8333-333333333333',auth_user_id:'33333333-3333-4333-8333-333333333333',display_name:'Fictional Coordinator',role:'coordinator',demo_admin:false,demo_access_owner_id:cohort};
+  const demo={operator_id:administrator.id,cohort_owner_id:cohort,actors:[actor],scenario:{trip_id:'44444444-4444-4444-8444-444444444444',traffic:'normal',progress:0},trip:null};
+  await page.route('**/api/auth/me', route => route.fulfill({ json: { account: administrator } }));
+  await page.route('**/api/demo', route => route.fulfill({json:demo}));
+  await page.route('**/api/demo/switch', route => route.fulfill({json:{access_token:'demo-actor-token',expires_at:4102444800,account:actor}}));
   await page.route('**/auth/v1/logout?scope=local', route => route.request().method() === 'OPTIONS' ? route.fallback() : route.fulfill({ status: 204, headers: cors }));
   await page.goto('/');
+  // A second administrator returns to their own account, not the shared cohort owner.
+  await openAccountDropdown(page);
+  await page.getByRole('button',{name:'Demo Tools',exact:true}).click();
+  await page.getByLabel('View as').selectOption(actor.id);
+  await expect(page.getByRole('complementary',{name:'Demo session'})).toBeVisible();
+  await page.getByRole('button',{name:'Controls',exact:true}).click();
+  await expect(page.getByRole('option',{name:'Your coordinator account'})).toHaveAttribute('value',administrator.id);
+  await page.getByLabel('View as').selectOption(administrator.id);
+  await expect(page.getByRole('complementary',{name:'Demo session'})).toHaveCount(0);
   await openAccountDropdown(page);
   await page.getByRole('link', { name: 'My Account', exact: true }).click();
   await openAccountDropdown(page);

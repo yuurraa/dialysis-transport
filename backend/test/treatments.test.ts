@@ -1,11 +1,11 @@
-import type { TripRoutingService } from '../src/trips/trip-routing.service';
+import type { TripRoutingService } from '../src/trips/routing/trip-routing.service';
 import 'reflect-metadata';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { treatmentInput } from '../src/scheduling/treatment-input';
+import { treatmentInput } from '../src/scheduling/validation/treatment-input';
 import { SchedulingService } from '../src/scheduling/scheduling.service';
 import type { AuthService } from '../src/auth/auth.service';
-import type { SupabaseService } from '../src/supabase.module';
+import type { SupabaseService } from '../src/infrastructure/database/supabase.module';
 import { TripsService } from '../src/trips/trips.service';
 import { TripsController } from '../src/trips/trips.controller';
 import { Module } from '@nestjs/common';

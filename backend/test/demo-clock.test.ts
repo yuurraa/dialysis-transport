@@ -1,12 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { tripNow as backendNow } from '../src/trips/trip-clock';
-import { tripNow as frontendNow } from '../../frontend/src/lib/tripClock';
-import { TripRoutingService } from '../src/trips/trip-routing.service';
+import { tripNow as backendNow } from '../src/trips/lib/trip-clock';
+import { tripNow as frontendNow } from '../../frontend/src/features/trips/lib/tripClock';
+import { TripRoutingService } from '../src/trips/routing/trip-routing.service';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import type { SupabaseService } from '../src/supabase.module';
-import type { OneMapService } from '../src/integrations/onemap.service';
-import type { LtaService } from '../src/integrations/lta.service';
+import type { SupabaseService } from '../src/infrastructure/database/supabase.module';
+import type { OneMapService } from '../src/integrations/onemap/onemap.service';
+import type { LtaService } from '../src/integrations/lta/lta.service';
 
 for(const [name,clock] of [['backend',backendNow],['frontend',frontendNow]] as const) {
   test(`${name} clock isolates real trips and advances only an activated demo`,()=>{

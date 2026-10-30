@@ -1,4 +1,4 @@
-import { CalendarService } from '../src/integrations/calendar.service';
+import { CalendarService } from '../src/integrations/calendar/calendar.service';
 import 'reflect-metadata';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -6,7 +6,7 @@ import { Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { AuthController } from '../src/auth/auth.controller';
 import { AuthService } from '../src/auth/auth.service';
-import { SupabaseService } from '../src/supabase.module';
+import { SupabaseService } from '../src/infrastructure/database/supabase.module';
 import { DemoService } from '../src/demo/demo.module';
 import type { TripsService } from '../src/trips/trips.service';
 
@@ -59,9 +59,18 @@ test('requires a verified session and returns persisted account separately from 
   assert.equal(result.body.role, undefined);
   const previous=process.env.DEMO_ENABLED;
   let role='coordinator',status='active',demo_admin=false;
+  const cohort='22222222-2222-4222-8222-222222222222';
+  const actorId='33333333-3333-4333-8333-333333333333';
+  let actorOwner=cohort,actorMetadataOwner=cohort,revoked=false,actorAuth:string|null=actorId;
+  const provisioned:unknown[]=[];
+  const actor={id:actorId,auth_user_id:actorId,email:'demo.actor@example.test',role:'patient',status:'active',demo_access_owner_id:cohort,seed_key:'patient1'};
   const calls:unknown[]=[];
   const service=new DemoService({verifyIdentity:async()=>({account:{id:account.id,role,status,demo_admin}})} as unknown as AuthService,
-    {forIntegration:()=>({rpc:async(name:string,args:unknown)=>{calls.push([name,args]);return {data:{actors:[],scenario:null,trip:null},error:null};}})} as unknown as SupabaseService,{} as TripsService);
+    {forIntegration:()=>({rpc:async(name:string,args:unknown)=>{calls.push([name,args]);return {data:{cohort_owner_id:cohort,operator_id:account.id,actors:[{...actor,auth_user_id:actorAuth,demo_access_owner_id:actorOwner}],scenario:null,trip:null},error:null};},
+      auth:{admin:{createUser:async(input:{app_metadata:unknown})=>{provisioned.push(input.app_metadata);actorAuth=actorId;return {data:{user:{id:actorId,email:actor.email,app_metadata:input.app_metadata}},error:null};},
+        getUserById:async()=>({data:{user:{id:actorId,email:actor.email,app_metadata:{demo_account_id:actorId,demo_owner_id:actorMetadataOwner}}},error:null}),
+        generateLink:async()=>({data:{user:{id:actorId},properties:{hashed_token:'fixture-ticket'}},error:null})}}}),
+      forUser:()=>({auth:{verifyOtp:async()=>{if(revoked)demo_admin=false;return {data:{user:{id:actorId},session:{access_token:'actor-token',expires_at:123}},error:null};}}})} as unknown as SupabaseService,{} as TripsService);
   try {
     process.env.DEMO_ENABLED='false';await assert.rejects(service.state('Bearer fixture'));assert.equal(calls.length,0);
     process.env.DEMO_ENABLED='true';await assert.rejects(service.state('Bearer fixture'));assert.equal(calls.length,0);
@@ -70,6 +79,14 @@ test('requires a verified session and returns persisted account separately from 
     role='coordinator';status='inactive';await assert.rejects(service.state('Bearer fixture'));assert.equal(calls.length,0);
     status='active';await service.state('Bearer fixture');
     assert.deepEqual(calls,[['demo_manage',{owner:account.id,action:'state',details:{}}]]);
+    // A different flagged coordinator uses the trusted cohort owner, never their own ID or caller input.
+    actorAuth=null;
+    assert.equal((await service.setup('Bearer fixture')).cohort_owner_id,cohort);
+    assert.deepEqual(provisioned,[{demo_account_id:actorId,demo_owner_id:cohort}]);
+    assert.equal((await service.switchActor('Bearer fixture',{account_id:actorId})).access_token,'actor-token');
+    actorOwner=account.id;await assert.rejects(service.switchActor('Bearer fixture',{account_id:actorId}));actorOwner=cohort;
+    actorMetadataOwner=account.id;await assert.rejects(service.switchActor('Bearer fixture',{account_id:actorId}));actorMetadataOwner=cohort;
+    revoked=true;await assert.rejects(service.switchActor('Bearer fixture',{account_id:actorId}));demo_admin=true;revoked=false;
     await assert.rejects(service.switchActor('Bearer fixture',{account_id:account.id}));
     await assert.rejects(service.control('Bearer fixture',{action:'move',percent:101}));
     await assert.rejects(service.control('Bearer fixture',{action:'reset',owner_id:account.id,confirmed:true}));

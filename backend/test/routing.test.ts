@@ -1,11 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { OneMapService } from '../src/integrations/onemap.service';
-import { LtaService, type TrafficSnapshot } from '../src/integrations/lta.service';
+import { OneMapService } from '../src/integrations/onemap/onemap.service';
+import { LtaService, type TrafficSnapshot } from '../src/integrations/lta/lta.service';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { SupabaseService } from '../src/supabase.module';
-import { TripRoutingService, type RoadRoute } from '../src/trips/trip-routing.service';
-import { routeTraffic } from '../src/trips/route-traffic';
+import { SupabaseService } from '../src/infrastructure/database/supabase.module';
+import { TripRoutingService, type RoadRoute } from '../src/trips/routing/trip-routing.service';
+import { routeTraffic } from '../src/trips/traffic/route-traffic';
 
 test('OneMap validates provider responses, caches authentication and refuses ambiguous addresses', async context => {
   const previousEmail=process.env.ONEMAP_EMAIL,previousPassword=process.env.ONEMAP_PASSWORD;

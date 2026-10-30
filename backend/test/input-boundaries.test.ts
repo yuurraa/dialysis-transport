@@ -1,9 +1,9 @@
 import 'reflect-metadata';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { personalInput, driverInput } from '../src/profiles/personal-input';
-import { patientInput } from '../src/profiles/patient-input';
-import { treatmentInput } from '../src/scheduling/treatment-input';
+import { personalInput, driverInput } from '../src/profiles/validation/personal-input';
+import { patientInput } from '../src/profiles/validation/patient-input';
+import { treatmentInput } from '../src/scheduling/validation/treatment-input';
 
 /**
  * Boundary value analysis (BVA) for the pure input validators.

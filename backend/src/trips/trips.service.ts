@@ -1,8 +1,8 @@
-import { tripNow } from './trip-clock';
+import { tripNow } from './lib/trip-clock';
 import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, NotFoundException, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
-import { TripRoutingService } from './trip-routing.service';
+import { TripRoutingService } from './routing/trip-routing.service';
 import { AuthService } from '../auth/auth.service';
-import { SupabaseService } from '../supabase.module';
+import { SupabaseService } from '../infrastructure/database/supabase.module';
 
 /** UC-04, UC-05, UC-05.1 and UC-09 to UC-12: operations, recovery and patient actions. */
 @Injectable()

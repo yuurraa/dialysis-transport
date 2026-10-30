@@ -1,6 +1,6 @@
 import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, NotFoundException, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 import { AuthService } from '../auth/auth.service';
-import { SupabaseService } from '../supabase.module';
+import { SupabaseService } from '../infrastructure/database/supabase.module';
 
 @Injectable()
 export class DriversService {

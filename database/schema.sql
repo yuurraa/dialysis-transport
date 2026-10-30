@@ -36,11 +36,21 @@ create table if not exists private.seeded_accounts (
 );
 alter table private.seeded_accounts enable row level security;
 revoke all on private.seeded_accounts from public,anon,authenticated;
+-- Capability grants shared demo access; registry ownership only identifies fixtures.
+create or replace function private.demo_administrator(target uuid default null) returns boolean
+language sql stable security definer set search_path='' as $$
+  select exists(select 1 from public.accounts a join auth.users u on u.id=a.auth_user_id
+    where (target is null or a.id=target) and a.role='coordinator' and a.status='active' and a.demo_admin
+      and a.demo_owner_id is null and not exists(select 1 from private.seeded_accounts s where s.account_id=a.id)
+      and u.email_confirmed_at is not null
+      and exists(select 1 from auth.identities i where i.user_id=u.id and i.provider='google'));
+$$;
+revoke all on function private.demo_administrator(uuid) from public,anon,authenticated;
 create or replace function private.demo_identity_allowed() returns boolean
 language sql stable security definer set search_path='' as $$
   select not exists(select 1 from public.accounts a left join private.seeded_accounts s on s.account_id=a.id
     where a.auth_user_id=(select auth.uid()) and coalesce(a.demo_owner_id,s.owner_id) is not null
-    and not exists(select 1 from public.accounts owner where owner.id=coalesce(a.demo_owner_id,s.owner_id) and owner.role='coordinator' and owner.status='active' and owner.demo_admin));
+    and not private.demo_administrator());
 $$;
 revoke all on function private.demo_identity_allowed() from public,anon;
 grant execute on function private.demo_identity_allowed() to authenticated;
@@ -88,9 +98,9 @@ begin
   where u.id = (select auth.uid()) and u.email_confirmed_at is not null
     and (exists(select 1 from auth.identities i where i.user_id = u.id and i.provider = 'google')
       or exists(select 1 from public.accounts a join public.accounts owner on owner.id=a.demo_owner_id
-        where a.auth_user_id=u.id and a.status='active' and owner.role='coordinator' and owner.status='active' and owner.demo_admin)
+        where a.auth_user_id=u.id and a.status='active' and owner.role='coordinator' and private.demo_administrator())
       or exists(select 1 from public.accounts a join private.seeded_accounts s on s.account_id=a.id join public.accounts owner on owner.id=s.owner_id
-        where a.auth_user_id=u.id and a.status='active' and owner.role='coordinator' and owner.status='active' and owner.demo_admin));
+        where a.auth_user_id=u.id and a.status='active' and owner.role='coordinator' and private.demo_administrator()));
   if verified is null then
     raise exception 'A verified Google account is required.' using errcode = '42501';
   end if;
@@ -3872,15 +3882,22 @@ declare actor public.accounts; patient public.patients; scene private.demo_scena
   centre public.dialysis_centres; schedule public.treatment_schedules; pickup timestamptz;
   point jsonb;
   original_claims text; original_sub text; owner_auth uuid; result jsonb;
+  operator_id uuid:=owner; cohort_owner uuid;
 begin
-  if not exists(select 1 from public.accounts a where a.id=owner and a.role='coordinator' and a.status='active' and a.demo_admin and a.demo_owner_id is null
-    and not exists(select 1 from private.seeded_accounts s where s.account_id=a.id)) then
+  if not private.demo_administrator(operator_id) then
     raise exception 'Demo administrator required.' using errcode='42501';
   end if;
   -- Service-only entry point; existing schedule/link triggers still see the verified
   -- coordinator actor. Keep role=service_role for the narrowly scoped reset guard.
   select auth_user_id into owner_auth from public.accounts where id=owner and role='coordinator' and status='active' and demo_admin and demo_owner_id is null for share;
   if owner_auth is null then raise exception 'Sign in as the demo administrator first.' using errcode='42501'; end if;
+  -- Keep the caller as the verified actor, but operate on the existing shared cohort.
+  -- Reject ambiguous registries instead of silently choosing another set of identities.
+  if (select count(distinct s.owner_id) from private.seeded_accounts s)>1 then
+    raise exception 'Expected one shared demo cohort.' using errcode='P5003';
+  end if;
+  select s.owner_id into cohort_owner from private.seeded_accounts s limit 1;
+  owner:=coalesce(cohort_owner,operator_id);
   original_claims:=current_setting('request.jwt.claims',true); original_sub:=current_setting('request.jwt.claim.sub',true);
   perform set_config('request.jwt.claims',(coalesce(nullif(original_claims,''),'{}')::jsonb||jsonb_build_object('sub',owner_auth::text))::text,true);
   perform set_config('request.jwt.claim.sub',owner_auth::text,true);
@@ -3911,7 +3928,7 @@ begin
     -- Keep historical fixtures and feedback; archive only this scenario's journey.
     if scene.trip_id is not null then
       update public.trips set deleted_at=now(),updated_at=now() where id=scene.trip_id and demo_owner_id=owner;
-      insert into public.trip_history(trip_id,actor_id,event,details) values(scene.trip_id,owner,'deleted',jsonb_build_object('demo_reset',true));
+      insert into public.trip_history(trip_id,actor_id,event,details) values(scene.trip_id,operator_id,'deleted',jsonb_build_object('demo_reset',true));
     end if;
     -- Preserve the reused drivers' real saved availability rather than forcing
     -- all-day fixtures. Pick a daytime window with enough room for route planning.
@@ -3942,8 +3959,8 @@ begin
       treatment_start,treatment_end,arrival_by,source_version,patient_version,created_by,demo_clock_at)
       values(patient.id,patient.full_name,schedule.id,schedule.id,'demo:'||gen_random_uuid()::text,session_day,session_day,'outbound',
         patient.pickup_address||', Singapore '||patient.postal_code,centre.address||', Singapore '||centre.postal_code,
-        session_start,session_end,session_start-interval '15 minutes',schedule.version,patient.version,owner,session_start-interval '90 minutes') returning * into journey;
-    insert into public.trip_history(trip_id,actor_id,event,details) values(journey.id,owner,'generated',jsonb_build_object('demo',true));
+        session_start,session_end,session_start-interval '15 minutes',schedule.version,patient.version,operator_id,session_start-interval '90 minutes') returning * into journey;
+    insert into public.trip_history(trip_id,actor_id,event,details) values(journey.id,operator_id,'generated',jsonb_build_object('demo',true));
     update private.demo_scenarios set schedule_id=schedule.id,trip_id=journey.id,traffic='normal',progress=0 where owner_id=owner;
   elsif action in ('due','traffic','move') then
     select * into journey from public.trips where id=scene.trip_id and demo_owner_id=owner and deleted_at is null;
@@ -3972,7 +3989,7 @@ begin
       if journey.assigned_driver_id is not null then
         update public.trips set traffic_review_required=(details->>'scenario'='delay'),
           status=case when details->>'scenario'='delay' or driver_unavailable_at is not null or review_required or recovery_critical then 'at-risk' else 'on-track' end where id=journey.id;
-        insert into public.trip_history(trip_id,actor_id,event,details) values(journey.id,owner,
+        insert into public.trip_history(trip_id,actor_id,event,details) values(journey.id,operator_id,
           case when details->>'scenario'='delay' then 'traffic_risk_detected' else 'traffic_risk_cleared' end,jsonb_build_object('simulated',true));
       end if;
     else
@@ -3989,7 +4006,8 @@ begin
     end if;
   elsif action not in ('state','setup','attach') then raise exception 'Invalid demo action.' using errcode='22023';
   end if;
-  result:=jsonb_build_object('actors',(select coalesce(jsonb_agg(private.account_details(a) order by s.seed_key),'[]'::jsonb) from public.accounts a join private.seeded_accounts s on s.account_id=a.id where s.owner_id=owner),
+  result:=jsonb_build_object('cohort_owner_id',owner,'operator_id',operator_id,
+    'actors',(select coalesce(jsonb_agg(private.account_details(a) order by s.seed_key),'[]'::jsonb) from public.accounts a join private.seeded_accounts s on s.account_id=a.id where s.owner_id=owner),
     'scenario',(select to_jsonb(s) from private.demo_scenarios s where s.owner_id=owner),
     'trip',(select to_jsonb(t) from public.trips t join private.demo_scenarios s on s.trip_id=t.id where s.owner_id=owner),
     'visible_actor_ids',(select coalesce(jsonb_agg(a.id),'[]'::jsonb) from private.seeded_accounts s join public.accounts a on a.id=s.account_id
@@ -4008,7 +4026,7 @@ language sql stable security definer set search_path='' as $$
   select jsonb_build_object('traffic',coalesce(s.traffic,'normal'),'progress',coalesce(s.progress,0)) from public.trips t
     join public.accounts owner on owner.id=t.demo_owner_id left join private.demo_scenarios s on s.trip_id=t.id and s.owner_id=t.demo_owner_id
     where t.id=target and t.deleted_at is null
-      and owner.demo_admin and owner.role='coordinator' and owner.status='active';
+      and owner.role='coordinator' and private.demo_administrator();
 $$;
 create or replace function public.demo_trip_context(target uuid) returns jsonb
 language sql stable security invoker set search_path='' as $$ select private.demo_trip_context(target); $$;

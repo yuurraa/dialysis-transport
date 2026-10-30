@@ -1,8 +1,7 @@
 import { AuthService } from '../auth/auth.service';
-import { SupabaseService } from '../supabase.module';
-import { treatmentInput } from './treatment-input';
-import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, NotFoundException, NotImplementedException, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
-import type { PatientScope, AvailabilityInput, TreatmentSlotInput, AssignmentInput } from '../types';
+import { SupabaseService } from '../infrastructure/database/supabase.module';
+import { treatmentInput } from './validation/treatment-input';
+import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, NotFoundException, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 
 /** UC-03, UC-03.1, UC-06 and UC-07: schedules, matching and availability. */
 @Injectable()
@@ -159,30 +158,6 @@ export class SchedulingService {
   async deleteTreatment(header: string | undefined, _id: string, _body?: unknown) {
     await this.access(header, true, true);
     throw new ForbiddenException('Deleting a treatment schedule requires coordinator approval.');
-  }
-
-  /** Generate outbound and return journeys with a 15-minute buffer in Asia/Singapore. */
-  async createRecurringTrips(scope: PatientScope, slot: TreatmentSlotInput): Promise<unknown> {
-    // TODO: Implement using Supabase and database constraints.
-    throw new NotImplementedException('createRecurringTrips is awaiting implementation.');
-  }
-
-  /** Enforce verified driver availability, travel time, mobility, equipment, capacity and assistance; prefer patient choice before continuity; retain Unfilled trips. */
-  async assignResources(scope: PatientScope, input: AssignmentInput): Promise<unknown> {
-    // TODO: Implement using Supabase and database constraints.
-    throw new NotImplementedException('assignResources is awaiting implementation.');
-  }
-
-  /** Allow drivers to update their own valid availability windows. */
-  async saveAvailability(scope: PatientScope, input: AvailabilityInput): Promise<unknown> {
-    // TODO: Implement using Supabase and database constraints.
-    throw new NotImplementedException('saveAvailability is awaiting implementation.');
-  }
-
-  /** Require the assigned driver and confirmation; record the disruption and flag the eligible trip At-Risk. */
-  async reportUnavailability(scope: PatientScope, tripId: string): Promise<unknown> {
-    // TODO: Implement using Supabase and database constraints.
-    throw new NotImplementedException('reportUnavailability is awaiting implementation.');
   }
 
 }
