@@ -136,7 +136,7 @@
 }
 
 .patient-search:focus-within {
-  border-color: var(--ui-accent);
+  border-color: var(--ui-focus);
   outline: 2px solid var(--ui-focus);
 }
 
@@ -168,7 +168,7 @@
 }
 
 .dashboard-trips:has(> .page-heading) {
-  border-top: 2px solid var(--ui-accent);
+  border-top: 2px solid var(--ui-action);
 }
 
 .dashboard-section-heading h1, .dashboard-section-heading h2 {
@@ -253,7 +253,7 @@
 }
 
 .dashboard-page .list-info-control {
-  color: var(--ui-accent);
+  color: var(--ui-action);
 }
 
 .patients-pagination {
@@ -372,8 +372,8 @@
 }
 
 .list-choice:has(:checked) {
-  border-color: var(--ui-accent);
-  box-shadow: inset 0 0 0 1px var(--ui-accent);
+  border-color: var(--ui-action);
+  box-shadow: inset 0 0 0 1px var(--ui-action);
 }
 
 .list-choice:has(:focus-visible) {

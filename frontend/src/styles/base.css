@@ -63,7 +63,7 @@ button:hover:not(:disabled) {
 }
 
 input, select, textarea {
-  accent-color: var(--ui-accent);
+  accent-color: var(--ui-action);
 }
 
 input::placeholder, textarea::placeholder {

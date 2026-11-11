@@ -148,7 +148,7 @@
 }
 
 .bounded-options [aria-selected=true] {
-  color: var(--ui-accent);
+  color: var(--ui-action);
   font-weight: 600;
 }
 

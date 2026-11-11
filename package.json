@@ -15,6 +15,7 @@
     "dev:frontend": "npm run dev --workspace frontend",
     "dev:backend": "npm run dev --workspace backend",
     "build": "npm run build --workspaces",
+    "check:tokens": "! grep -rlE '#[0-9a-fA-F]{3,8}' frontend/src/styles --include=*.css | grep -v tokens.css",
     "test": "npm run test:database && npm run test --workspace backend && npm run test --workspace frontend --",
     "test:database": "node --test database/tests/*.test.mjs"
   },

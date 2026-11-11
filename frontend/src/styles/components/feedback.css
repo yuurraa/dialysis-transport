@@ -16,7 +16,7 @@
   height: 1em;
   flex-shrink: 0;
   border: 2px solid var(--ui-border);
-  border-top-color: var(--ui-accent);
+  border-top-color: var(--ui-action);
   border-radius: 50%;
   animation: account-spin .8s linear infinite;
 }
@@ -98,7 +98,7 @@
 }
 
 :root .auth-toast > button:focus-visible {
-  outline-color: var(--ui-accent);
+  outline-color: var(--ui-focus);
   outline-offset: -3px;
 }
 
@@ -177,7 +177,7 @@
   display: grid;
   place-items: center;
   flex-shrink: 0;
-  color: var(--ui-accent);
+  color: var(--ui-action);
 }
 
 .dashboard-data-status h3 {
@@ -228,7 +228,7 @@
 }
 
 .toast-progress {
-  background: var(--ui-accent);
+  background: var(--ui-action);
 }
 
 .list-error-state {

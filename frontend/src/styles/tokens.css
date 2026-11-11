@@ -1,31 +1,102 @@
-/* Theme palette, typography defaults and shared design tokens. */
+/* Theme palette, typography defaults and shared design tokens.
+   Palette and type scale follow docs/mockup-tokens.css. The dials marked
+   below are the intended retuning points for the whole look. */
 
 :root {
   color-scheme: light;
-  --ui-canvas: #F6F4EE;
-  --ui-surface: #FFFEFB;
-  --ui-field: #FFFEFB;
-  --ui-raised: #EFEAE0;
-  --ui-hover: #E7E0D4;
-  --ui-text: #292721;
-  --ui-muted: #625E56;
-  --ui-border: #D4CEC2;
-  --ui-control-border: #898174;
-  --ui-accent: #743B52;
-  --ui-accent-hover: #623046;
-  --ui-accent-text: #FFFFFF;
-  --ui-focus: #743B52;
-  --ui-danger: #A32E36;
-  --ui-danger-surface: #FBEAEC;
-  --ui-warning: #805318;
-  --ui-warning-surface: #F6EDD8;
-  --ui-success: #326447;
-  --ui-success-surface: #E7F1E8;
-  --ui-info: #245E85;
-  --ui-info-surface: #E7F1F8;
-  --ui-disabled: #EFEAE0;
-  --ui-radius: 10px;
-  --ui-control-radius: 8px;
+
+  /* Dials: shape and glass. Retuning the look starts here. */
+  --ui-card-radius: 20px;
+  --ui-control-radius: 9999px;
+  --ui-radius: 12px;
+  --ui-glass-blur: 12px;
+
+  /* Colour */
+  --ui-canvas: #f5f7fa;
+  --ui-surface: #ffffff;
+  --ui-field: #ffffff;
+  --ui-raised: #f5f7fa;
+  --ui-hover: #e9edf2;
+  --ui-text: #0b0b0f;
+  --ui-muted: #5a6572;
+  --ui-border: #0b0b0f14;
+  --ui-control-border: #7b848d;
+  --ui-action: #0b0b0f;
+  --ui-action-hover: #2a2d33;
+  --ui-action-text: #ffffff;
+  --ui-focus: #494fdf;
+  --ui-danger: #c6303a;
+  --ui-danger-surface: #fcedee;
+  /* #b7791f (mockup) is 3.6:1 on white and fails AA for text; darkened. */
+  --ui-warning: #8f5c12;
+  --ui-warning-surface: #faf3e6;
+  --ui-success: #2f7d4f;
+  --ui-success-surface: #eef6f1;
+  --ui-info: #245e85;
+  --ui-info-surface: #ebf3f9;
+  --ui-disabled: #f5f7fa;
+
+  /* Map overlay colours. These are drawn on map tiles, so they deliberately do
+     NOT follow the theme: a marker has to stay legible against the same imagery
+     in light and dark. Do not redefine them in the dark block. */
+  --ui-map-marker: #a83c65;
+  --ui-map-route: #376ac3;
+  --ui-map-slow: #ad7215;
+  --ui-map-heavy: #b83d42;
+  --ui-map-heavy-ring: #b83d4266;
+  --ui-map-on-overlay: #ffffff;
+  --ui-map-shadow: #0006;
+
+  /* Type scale (defined, not yet applied) */
+  --ui-font-display: "General Sans Variable", "General Sans", "Inter Variable", "Inter", -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --ui-font-body: "Inter Variable", "Inter", -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --ui-type-display-lg: 48px;
+  --ui-type-display-lg--line-height: 1.21;
+  --ui-type-display-lg--letter-spacing: -.48px;
+  --ui-type-display-lg--font-weight: 500;
+  --ui-type-display-md: 40px;
+  --ui-type-display-md--line-height: 1.2;
+  --ui-type-display-md--letter-spacing: -.4px;
+  --ui-type-display-md--font-weight: 500;
+  --ui-type-heading-lg: 32px;
+  --ui-type-heading-lg--line-height: 1.19;
+  --ui-type-heading-lg--letter-spacing: -.32px;
+  --ui-type-heading-lg--font-weight: 500;
+  --ui-type-heading-md: 24px;
+  --ui-type-heading-md--line-height: 1.33;
+  --ui-type-heading-md--letter-spacing: 0px;
+  --ui-type-heading-md--font-weight: 500;
+  --ui-type-heading-sm: 20px;
+  --ui-type-heading-sm--line-height: 1.4;
+  --ui-type-heading-sm--letter-spacing: 0px;
+  --ui-type-heading-sm--font-weight: 500;
+  --ui-type-body-lg: 18px;
+  --ui-type-body-lg--line-height: 1.56;
+  --ui-type-body-lg--letter-spacing: -.09px;
+  --ui-type-body-lg--font-weight: 400;
+  --ui-type-body-md: 16px;
+  --ui-type-body-md--line-height: 1.5;
+  --ui-type-body-md--letter-spacing: .24px;
+  --ui-type-body-md--font-weight: 400;
+  --ui-type-body-md-bold: 16px;
+  --ui-type-body-md-bold--line-height: 1.5;
+  --ui-type-body-md-bold--letter-spacing: .16px;
+  --ui-type-body-md-bold--font-weight: 600;
+  --ui-type-body-sm: 14px;
+  --ui-type-body-sm--line-height: 1.43;
+  --ui-type-body-sm--letter-spacing: 0px;
+  --ui-type-body-sm--font-weight: 400;
+  --ui-type-button-md: 16px;
+  --ui-type-button-md--line-height: 1.5;
+  --ui-type-button-md--letter-spacing: .24px;
+  --ui-type-button-md--font-weight: 600;
+  --ui-type-button-sm: 14px;
+  --ui-type-button-sm--line-height: 1.43;
+  --ui-type-button-sm--font-weight: 600;
+  --ui-type-caption: 13px;
+  --ui-type-caption--line-height: 1.4;
+  --ui-type-caption--font-weight: 400;
+
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   color: var(--ui-text);
   background: var(--ui-canvas);
@@ -34,26 +105,27 @@
 
 :root[data-theme=dark] {
   color-scheme: dark;
-  --ui-canvas: #1C1A18;
-  --ui-surface: #262320;
-  --ui-field: #262320;
-  --ui-raised: #332F2B;
-  --ui-hover: #403A35;
-  --ui-text: #F4F0E7;
-  --ui-muted: #C1B8AC;
-  --ui-border: #514B44;
-  --ui-control-border: #92877B;
-  --ui-accent: #F0ADC4;
-  --ui-accent-hover: #F7C4D5;
-  --ui-accent-text: #241A1F;
-  --ui-focus: #F0ADC4;
-  --ui-danger: #FFB1B5;
-  --ui-danger-surface: #442A2C;
-  --ui-warning: #F1C56E;
-  --ui-warning-surface: #3C3220;
-  --ui-success: #A5D3AE;
-  --ui-success-surface: #263B2B;
-  --ui-info: #9DCCEC;
-  --ui-info-surface: #243644;
-  --ui-disabled: #332F2B;
+
+  --ui-canvas: #0a0a0a;
+  --ui-surface: #16181a;
+  --ui-field: #16181a;
+  --ui-raised: #202326;
+  --ui-hover: #2b2f33;
+  --ui-text: #f2f4f7;
+  --ui-muted: #b8bdc4;
+  --ui-border: #ffffff1f;
+  --ui-control-border: #7c838c;
+  --ui-action: #f2f4f7;
+  --ui-action-hover: #d4d8de;
+  --ui-action-text: #0b0b0f;
+  --ui-focus: #8b90ff;
+  --ui-danger: #ff9ea3;
+  --ui-danger-surface: #3a1d20;
+  --ui-warning: #f1c56e;
+  --ui-warning-surface: #3a3020;
+  --ui-success: #8fd1a6;
+  --ui-success-surface: #1d3326;
+  --ui-info: #9dccec;
+  --ui-info-surface: #1f2f3d;
+  --ui-disabled: #202326;
 }

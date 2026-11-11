@@ -36,3 +36,14 @@ Use `npm run build --workspace frontend` for TypeScript and CSS compilation, and
 `pages/availability.css` owns the weekly driver grid, mobile day ranges and approval state; shared forms, focus colours, overlays and toasts remain in their existing stylesheets.
 
 Shared branding uses `BrandMark.tsx` with the supplied dark/light images embedded in `public/images/logo-dark.svg` and `logo-light.svg`. The SVG viewports trim unused outer space without redrawing the supplied artwork. Theme variables in `base.css` select the header image; `index.html` and `ThemeControl.tsx` keep the browser tab icon in sync. Header sizes and mobile visibility remain in their existing stylesheets.
+
+## Who edits what (restyle)
+
+One owner per file. `styles/` has no module boundaries, so this is the only
+boundary there is. If a task seems to need a file on the other side, stop and
+ask rather than editing it.
+
+| Owner | Files |
+| --- | --- |
+| Adhiraj | `tokens.css`, `base.css`, everything in `components/`, `dashboard.css`, `pages/trips.css` |
+| Eric | `public.css`, `pages/schedules.css`, `pages/patients.css`, `pages/profile.css`, `pages/availability.css` |

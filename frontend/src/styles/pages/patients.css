@@ -40,7 +40,7 @@
   table-layout: fixed;
   border-collapse: collapse;
   text-align: left;
-  font-size: .875rem;
+  font-size: var(--ui-type-body-sm);
 }
 
 .patients-table th, .patients-table td {
@@ -58,7 +58,7 @@
 .patients-table .patient-record-id {
   overflow-wrap: anywhere;
   font-family: ui-monospace, monospace;
-  font-size: .8125rem;
+  font-size: var(--ui-type-caption);
   user-select: all;
 }
 
@@ -82,7 +82,7 @@
 
 .patient-sort-button span {
   flex-shrink: 0;
-  color: var(--ui-accent);
+  color: var(--ui-action);
 }
 
 .patients-table th {
@@ -90,7 +90,7 @@
 }
 
 .patients-table td {
-  font-size: .9375rem;
+  font-size: var(--ui-type-body-md);
   padding-block: 10px;
 }
 
@@ -100,7 +100,7 @@
 }
 
 .patients-table .patient-record-name {
-  font-size: 1rem;
+  font-size: var(--ui-type-body-md);
   font-weight: 600;
 }
 
@@ -149,7 +149,7 @@
     border: 0;
     padding: 0;
     grid-column: 1 / -1;
-    font-size: 1rem;
+    font-size: var(--ui-type-body-md);
   }
 
   .patients-table td::before {
@@ -158,13 +158,13 @@
     min-width: 5rem;
     margin-right: 12px;
     color: var(--ui-muted);
-    font-size: .875rem;
+    font-size: var(--ui-type-body-sm);
   }
 
   .patients-table .patient-record-name {
     grid-column: 1;
     align-self: center;
-    font-size: 1.125rem;
+    font-size: var(--ui-type-body-lg);
   }
 
   .patients-table .patient-record-action {

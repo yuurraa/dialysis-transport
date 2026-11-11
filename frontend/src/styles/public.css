@@ -19,7 +19,7 @@
   display: flex;
   align-items: center;
   gap: 12px;
-  font-size: .875rem;
+  font-size: var(--ui-type-body-sm);
   font-weight: 600;
   line-height: 1.5;
   letter-spacing: .13em;
@@ -46,7 +46,7 @@
   height: 38px;
   border: 1px solid var(--ui-border);
   border-radius: 12px;
-  font-size: .875rem;
+  font-size: var(--ui-type-body-sm);
   font-weight: 600;
   letter-spacing: -.04em;
 }
@@ -105,7 +105,7 @@
 .journey-point {
   width: 7px;
   height: 7px;
-  border: 1px solid var(--ui-accent);
+  border: 1px solid var(--ui-action);
   border-radius: 50%;
   flex-shrink: 0;
 }
@@ -119,7 +119,7 @@
 
 .journey-destination {
   margin-right: 14px;
-  background: var(--ui-accent);
+  background: var(--ui-action);
 }
 
 .landing-entry {
@@ -181,7 +181,7 @@
 }
 
 .google-signin:focus-visible {
-  outline-color: var(--ui-accent);
+  outline-color: var(--ui-focus);
   outline-offset: 5px;
 }
 
@@ -191,13 +191,13 @@
   border-top: 1px solid var(--ui-border);
   color: var(--ui-muted);
   text-align: center;
-  font-size: .875rem;
+  font-size: var(--ui-type-body-sm);
   line-height: 1.6;
 }
 
 .entry-message {
   margin-top: 16px;
-  font-size: .875rem;
+  font-size: var(--ui-type-body-sm);
   line-height: 1.6;
 }
 
@@ -224,7 +224,7 @@
 }
 
 .entry-card-account button:focus-visible, .entry-card-account input:focus-visible, .entry-card-account select:focus-visible {
-  outline-color: var(--ui-accent);
+  outline-color: var(--ui-focus);
 }
 
 .entry-card-account button:disabled {
@@ -238,8 +238,8 @@
   padding: 5px 12px;
   border: 1px solid var(--ui-border);
   border-radius: 999px;
-  color: var(--ui-accent);
-  font-size: .875rem;
+  color: var(--ui-action);
+  font-size: var(--ui-type-body-sm);
 }
 
 .account-summary > section {
@@ -327,7 +327,7 @@
 }
 
 .signin-control:focus-visible {
-  outline-color: var(--ui-accent);
+  outline-color: var(--ui-focus);
   outline-offset: 5px;
 }
 
@@ -351,7 +351,7 @@
   border: 1px solid var(--ui-control-border);
   border-radius: 10px;
   text-align: center;
-  font-size: .875rem;
+  font-size: var(--ui-type-body-sm);
   line-height: 1.5;
   visibility: hidden;
   opacity: 0;
@@ -383,7 +383,7 @@
   margin: 0;
   min-width: 0;
   color: var(--ui-muted);
-  font-size: .875rem;
+  font-size: var(--ui-type-body-sm);
   overflow-wrap: anywhere;
 }
 
@@ -555,7 +555,7 @@
 
 .signup-review dt {
   color: var(--ui-muted);
-  font-size: .875rem;
+  font-size: var(--ui-type-body-sm);
 }
 
 .signup-review dd {
@@ -588,6 +588,7 @@
 .landing-page {
   background-color: var(--ui-canvas);
   color: var(--ui-text);
+  font-family: var(--ui-font-body);
 }
 
 .landing-page {
@@ -626,14 +627,17 @@
 
 .landing-brand {
   color: var(--ui-text);
-  letter-spacing: -.02em;
   text-transform: none;
-  font-size: 1rem;
+  font-family: var(--ui-font-display);
+  font-size: var(--ui-type-body-md-bold);
+  font-weight: var(--ui-type-body-md-bold--font-weight);
+  letter-spacing: var(--ui-type-body-md-bold--letter-spacing);
+  line-height: var(--ui-type-body-md-bold--line-height);
 }
 
 .brand-symbol {
-  color: var(--ui-accent);
-  border: 1px solid var(--ui-accent);
+  color: var(--ui-action);
+  border: 1px solid var(--ui-action);
   border-radius: 8px;
 }
 
@@ -651,45 +655,61 @@
 }
 
 .landing-intro h1 span {
-  color: var(--ui-accent);
+  color: var(--ui-action);
 }
 
 .landing-description {
   color: var(--ui-muted);
   max-width: 36ch;
-  font-size: 1.125rem;
-  line-height: 1.7;
+  font-size: var(--ui-type-body-lg);
+  font-weight: var(--ui-type-body-lg--font-weight);
+  letter-spacing: var(--ui-type-body-lg--letter-spacing);
+  line-height: var(--ui-type-body-lg--line-height);
 }
 
 .journey-detail {
   color: var(--ui-muted);
-  font-size: .875rem;
-  letter-spacing: 0;
+  font-size: var(--ui-type-body-sm);
+  font-weight: var(--ui-type-body-sm--font-weight);
+  letter-spacing: var(--ui-type-body-sm--letter-spacing);
+  line-height: var(--ui-type-body-sm--line-height);
   text-transform: none;
 }
 
-:root:not([data-theme=dark]) .landing-intro {
-  color: #171411;
-}
-
-:root:not([data-theme=dark]) .landing-intro h1 span {
-  color: #501C32;
-}
-
+/* Muted text is too light over the photo in light mode, so these use full text colour. */
+:root:not([data-theme=dark]) .landing-intro,
 :root:not([data-theme=dark]) .landing-description,
 :root:not([data-theme=dark]) .journey-detail,
 :root:not([data-theme=dark]) .landing-footer {
-  color: #211B17;
+  color: var(--ui-text);
+}
+
+/* Glass sign-in card that follows the theme: light glass in light mode, dark
+   glass in dark mode. The opacity keeps muted text at AA contrast over the photo. */
+.entry-card {
+  --entry-glass: 80%;
+  --entry-shadow: color-mix(in srgb, var(--ui-text) 14%, transparent);
+}
+
+:root[data-theme=dark] .entry-card {
+  --entry-glass: 55%;
+  --entry-shadow: color-mix(in srgb, var(--ui-canvas) 45%, transparent);
 }
 
 .entry-card {
-  background: var(--ui-surface);
+  background: color-mix(in srgb, var(--ui-surface) var(--entry-glass), transparent);
   border: 1px solid var(--ui-border);
-  border-top: 3px solid var(--ui-accent);
-  border-radius: 8px;
-  box-shadow: none;
-  backdrop-filter: none;
+  border-radius: var(--ui-card-radius);
+  box-shadow: 0 20px 60px var(--entry-shadow);
+  -webkit-backdrop-filter: blur(var(--ui-glass-blur));
+  backdrop-filter: blur(var(--ui-glass-blur));
+  color: var(--ui-text);
   padding: 32px;
+  transition: border-color 300ms ease;
+}
+
+.entry-card:hover {
+  border-color: color-mix(in srgb, var(--ui-text) 30%, transparent);
 }
 
 .entry-card-account {
@@ -698,14 +718,19 @@
 
 .entry-eyebrow {
   color: var(--ui-muted);
-  font-size: .875rem;
+  font-size: var(--ui-type-body-sm);
+  font-weight: var(--ui-type-body-sm--font-weight);
+  line-height: var(--ui-type-body-sm--line-height);
   text-transform: none;
-  letter-spacing: 0;
+  letter-spacing: var(--ui-type-body-sm--letter-spacing);
 }
 
 .entry-title {
-  font-size: 1.875rem;
-  letter-spacing: -.035em;
+  font-family: var(--ui-font-display);
+  font-size: var(--ui-type-heading-lg);
+  font-weight: var(--ui-type-heading-lg--font-weight);
+  letter-spacing: var(--ui-type-heading-lg--letter-spacing);
+  line-height: var(--ui-type-heading-lg--line-height);
 }
 
 .entry-description {
@@ -713,9 +738,19 @@
   color: var(--ui-muted);
 }
 
+.entry-note {
+  font-size: var(--ui-type-caption);
+  font-weight: var(--ui-type-caption--font-weight);
+  line-height: var(--ui-type-caption--line-height);
+}
+
 .google-signin {
+  font-size: var(--ui-type-button-md);
+  font-weight: var(--ui-type-button-md--font-weight);
+  letter-spacing: var(--ui-type-button-md--letter-spacing);
+  line-height: var(--ui-type-button-md--line-height);
   border: 1px solid var(--ui-control-border);
-  border-radius: 8px;
+  border-radius: var(--ui-control-radius);
   background: var(--ui-field);
   color: var(--ui-text);
 }
@@ -726,7 +761,7 @@
 }
 
 .signin-control, .entry-card-account button {
-  border-radius: 8px;
+  border-radius: var(--ui-control-radius);
 }
 
 .entry-card-account button {
@@ -736,13 +771,13 @@
 }
 
 .entry-card-account button[type=submit] {
-  background: var(--ui-accent);
-  color: var(--ui-accent-text);
-  border-color: var(--ui-accent);
+  background: var(--ui-action);
+  color: var(--ui-action-text);
+  border-color: var(--ui-action);
 }
 
 .entry-card-account button[type=submit]:hover:not(:disabled) {
-  background: var(--ui-accent-hover);
+  background: var(--ui-action-hover);
 }
 
 .entry-card-account button:not([type=submit]):hover:not(:disabled) {
@@ -752,12 +787,14 @@
 .entry-card-account input, .entry-card-account select {
   color: var(--ui-text);
   border-color: var(--ui-control-border);
-  border-radius: 8px;
+  border-radius: var(--ui-radius);
 }
 
 .landing-footer {
   color: var(--ui-muted);
   border-color: var(--ui-border);
+  font-size: var(--ui-type-caption);
+  line-height: var(--ui-type-caption--line-height);
 }
 
 .session-restoring > .landing-header {
@@ -800,7 +837,7 @@
   }
 
   .landing-brand {
-    font-size: .875rem;
+    font-size: var(--ui-type-body-sm);
   }
 
   .entry-card {

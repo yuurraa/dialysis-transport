@@ -13,18 +13,18 @@
 
 .generation-patient h3 {
   margin: 0;
-  font-size: 1.125rem;
+  font-size: var(--ui-type-body-lg);
   font-weight: 600;
 }
 
 .generation-kind {
   padding: 2px 8px;
   border: 1px solid currentColor;
-  border-radius: 4px;
-  font-size: .75rem;
+  border-radius: var(--ui-control-radius);
+  font-size: var(--ui-type-caption);
   font-weight: 600;
-  color: var(--ui-accent);
-  background: color-mix(in srgb, var(--ui-accent) 12%, var(--ui-surface));
+  color: var(--ui-action);
+  background: color-mix(in srgb, var(--ui-action) 12%, var(--ui-surface));
 }
 
 .generation-kind-rescheduled {
@@ -35,13 +35,13 @@
 .generation-patient-id {
   margin: 6px 0 12px;
   color: var(--ui-muted);
-  font-size: .75rem;
+  font-size: var(--ui-type-caption);
 }
 
 .generation-session {
   margin: 0 0 16px;
   font-weight: 600;
-  font-size: .9375rem;
+  font-size: var(--ui-type-body-md);
 }
 
 .generation-summary dl, .generation-timing {
@@ -51,19 +51,19 @@
 .generation-summary dt, .generation-timing dt {
   margin-bottom: 4px;
   color: var(--ui-muted);
-  font-size: .8125rem;
+  font-size: var(--ui-type-caption);
 }
 
 .generation-summary dd, .generation-timing dd {
   margin: 0;
-  font-size: .9375rem;
+  font-size: var(--ui-type-body-md);
   line-height: 1.5;
 }
 
 .generation-range-hint {
   margin: 8px 0 0;
   color: var(--ui-muted);
-  font-size: .8125rem;
+  font-size: var(--ui-type-caption);
   line-height: 1.5;
 }
 
@@ -106,7 +106,7 @@
   margin-bottom: 12px;
   padding: 20px;
   border: 1px solid var(--ui-border);
-  border-radius: 16px;
+  border-radius: var(--ui-card-radius);
   background: var(--ui-field);
 }
 
@@ -129,7 +129,7 @@
 .treatment-record p {
   margin: 6px 0;
   color: var(--ui-muted);
-  font-size: .875rem;
+  font-size: var(--ui-type-body-sm);
   line-height: 1.6;
 }
 
@@ -166,7 +166,7 @@
 .treatment-hint {
   margin: 0;
   color: var(--ui-muted);
-  font-size: .8125rem;
+  font-size: var(--ui-type-caption);
   line-height: 1.6;
 }
 
@@ -192,11 +192,11 @@
 
 .treatment-panel .patient-field > .treatment-hint {
   margin: 0;
-  font-size: .8125rem;
+  font-size: var(--ui-type-caption);
 }
 
 .centre-picker input:focus {
-  border-color: var(--ui-accent);
+  border-color: var(--ui-focus);
   outline: 2px solid var(--ui-focus);
   outline-offset: -2px;
 }
@@ -206,8 +206,8 @@
   margin: 0;
   padding: 3px 10px;
   border: 1px solid var(--ui-border);
-  border-radius: 999px;
-  color: var(--ui-accent);
+  border-radius: var(--ui-control-radius);
+  color: var(--ui-action);
 }
 
 .occurrence-dates {
@@ -228,8 +228,8 @@
   padding: 8px 0;
   border: 0;
   background: transparent;
-  color: var(--ui-accent);
-  font-size: .875rem;
+  color: var(--ui-action);
+  font-size: var(--ui-type-body-sm);
   text-decoration: underline;
   text-underline-offset: 3px;
 }
@@ -258,7 +258,7 @@
 
 .reschedule-history dt, .reschedule-history p {
   color: var(--ui-muted);
-  font-size: .875rem;
+  font-size: var(--ui-type-body-sm);
   line-height: 1.6;
 }
 
@@ -310,7 +310,7 @@
 
 .treatment-record h2 {
   margin-bottom: 6px;
-  font-size: 1.0625rem;
+  font-size: var(--ui-type-body-lg);
   letter-spacing: -.015em;
   font-variant-numeric: tabular-nums;
 }
@@ -325,13 +325,13 @@
 }
 
 .treatment-patient-id {
-  font-size: .75rem !important;
+  font-size: var(--ui-type-caption) !important;
 }
 
 .treatment-record p.treatment-kind {
   background: var(--ui-raised);
   border-color: var(--ui-border);
-  border-radius: 4px;
+  border-radius: var(--ui-control-radius);
   color: var(--ui-muted);
 }
 
@@ -373,7 +373,7 @@
   border: 0;
   border-radius: 0;
   padding: 0;
-  font-size: .8125rem;
+  font-size: var(--ui-type-caption);
 }
 
 .treatment-record {
@@ -382,7 +382,7 @@
 }
 
 .treatment-record h2 {
-  font-size: 1.125rem;
+  font-size: var(--ui-type-body-lg);
 }
 
 .treatment-record .treatment-patient-id {
@@ -391,13 +391,13 @@
 
 .treatment-location > span {
   color: var(--ui-muted);
-  font-size: .8125rem;
+  font-size: var(--ui-type-caption);
 }
 
 .treatment-location > p {
   margin-top: 4px;
   color: var(--ui-text);
-  font-size: 1rem;
+  font-size: var(--ui-type-body-md);
 }
 
 @media (max-width: 760px) {
@@ -422,7 +422,7 @@
 
 .schedule-detail-fields dt {
   color: var(--ui-muted);
-  font-size: .8125rem;
+  font-size: var(--ui-type-caption);
   margin-bottom: 4px;
 }
 
@@ -472,12 +472,12 @@
 
 .treatment-summary .treatment-identity > p:first-child {
   margin: 0;
-  font-size: 1rem;
+  font-size: var(--ui-type-body-md);
   line-height: 1.5;
 }
 
 .treatment-record h2, .treatment-location > span, .treatment-generation-label {
-  font-size: 1rem;
+  font-size: var(--ui-type-body-md);
   line-height: 1.5;
   margin: 0 0 4px;
   font-weight: 600;
@@ -487,7 +487,7 @@
 
 .treatment-record p.treatment-time, .treatment-record p.treatment-date-range, .treatment-record p.treatment-session-meta, .treatment-location p {
   margin: 0;
-  font-size: .8125rem;
+  font-size: var(--ui-type-caption);
   line-height: 1.6;
   font-weight: 400;
   color: var(--ui-muted);
@@ -513,16 +513,16 @@
 
 .treatment-record p.treatment-kind {
   border: 1px solid currentColor;
-  border-radius: 5px;
+  border-radius: var(--ui-control-radius);
   padding: 3px 8px;
-  font-size: .75rem;
+  font-size: var(--ui-type-caption);
   font-weight: 600;
   line-height: 1.5;
 }
 
 .treatment-record p.treatment-kind-recurring, .treatment-record p.treatment-kind-single {
-  background: color-mix(in srgb, var(--ui-accent) 12%, var(--ui-surface));
-  color: var(--ui-accent);
+  background: color-mix(in srgb, var(--ui-action) 12%, var(--ui-surface));
+  color: var(--ui-action);
 }
 
 .treatment-record p.treatment-kind-rescheduled {
@@ -649,7 +649,7 @@
 /* Coordinator trip coverage remains distinct from assignment status. */
 .treatment-generation { display: flex; flex-direction: column; align-items: flex-start; min-width: 0; }
 .treatment-generation-summary { display: flex; align-items: center; gap: 8px; max-width: 100%; min-width: 0; }
-.treatment-generation-badge { display: inline-block; flex-shrink: 0; white-space: nowrap; border: 1px solid var(--ui-border); border-radius: 5px; padding: 3px 8px; font-size: .75rem; line-height: 1.5; color: var(--ui-muted); }
+.treatment-generation-badge { display: inline-block; flex-shrink: 0; white-space: nowrap; border: 1px solid var(--ui-border); border-radius: var(--ui-control-radius); padding: 3px 8px; font-size: var(--ui-type-caption); line-height: 1.5; color: var(--ui-muted); }
 .treatment-generation-badge.generation-not_generated { color: var(--ui-danger); border-color: var(--ui-danger); background: var(--ui-danger-surface); }
 .treatment-generation-badge.generation-partial { color: var(--ui-warning); border-color: var(--ui-warning); background: var(--ui-warning-surface); }
 .treatment-generation-badge.generation-generated { color: var(--ui-success); border-color: var(--ui-success); background: var(--ui-success-surface); }
@@ -662,9 +662,9 @@
 
 
 .generation-coverage { margin: 16px 0; }
-.generation-coverage h3 { margin: 0 0 6px; font-size: .875rem; font-weight: 600; }
+.generation-coverage h3 { margin: 0 0 6px; font-size: var(--ui-type-body-sm); font-weight: 600; }
 .generation-coverage ul { display: grid; gap: 4px; list-style: none; margin: 0; padding: 0; }
-.generation-coverage li, .generation-coverage p { margin: 0; color: var(--ui-muted); font-size: .875rem; line-height: 1.6; }
+.generation-coverage li, .generation-coverage p { margin: 0; color: var(--ui-muted); font-size: var(--ui-type-body-sm); line-height: 1.6; }
 
 /* Mobile schedule type and trip coverage share one badge row. */
 @media (max-width: 760px) {
@@ -688,16 +688,16 @@
 }
 
 .generation-automatic { margin: 16px 0; }
-.generation-auto-toggle { display: flex; align-items: center; justify-content: flex-start; gap: 8px; min-height: 44px; font-size: .875rem; font-weight: 600; cursor: pointer; }
-.generation-auto-toggle input { width: 20px; height: 20px; min-height: 20px; margin: 0; accent-color: var(--ui-accent); }
+.generation-auto-toggle { display: flex; align-items: center; justify-content: flex-start; gap: 8px; min-height: 44px; font-size: var(--ui-type-body-sm); font-weight: 600; cursor: pointer; }
+.generation-auto-toggle input { width: 20px; height: 20px; min-height: 20px; margin: 0; accent-color: var(--ui-action); }
 .generation-automatic .treatment-hint { margin: 4px 0 0; }
-.generation-auto-error { color: var(--ui-danger); font-size: .8125rem; margin: 8px 0 0; }
+.generation-auto-error { color: var(--ui-danger); font-size: var(--ui-type-caption); margin: 8px 0 0; }
 
 .generation-auto-row { display: flex; align-items: center; gap: 12px; min-height: 44px; }
 
-.dashboard-dialog .generation-auto-row .generation-auto-save { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 20px; width: 20px; height: 20px; min-width: 20px; min-height: 20px; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--ui-accent); }
+.dashboard-dialog .generation-auto-row .generation-auto-save { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 20px; width: 20px; height: 20px; min-width: 20px; min-height: 20px; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--ui-action); }
 
-.schedule-create-warning { margin: 0 0 20px; font-size: .875rem; line-height: 1.6; color: var(--ui-text); }
+.schedule-create-warning { margin: 0 0 20px; font-size: var(--ui-type-body-sm); line-height: 1.6; color: var(--ui-text); }
 @media (max-width: 760px) {
   .treatment-panel:not(:has(.schedule-generate)) .treatment-summary .treatment-identity { padding-right: 56px; }
 }
@@ -705,17 +705,17 @@
 .schedule-create-confirmation .overlay-body { padding-top: 12px; }
 .schedule-create-confirmation .schedule-create-warning { margin: 0 0 16px; }
 .schedule-create-confirmation .schedule-detail-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 24px; }
-.schedule-create-confirmation .schedule-detail-fields dt { color: var(--ui-text); font-size: 1rem; }
-.schedule-create-confirmation .schedule-detail-fields dd { color: var(--ui-muted); font-size: .8125rem; }
+.schedule-create-confirmation .schedule-detail-fields dt { color: var(--ui-text); font-size: var(--ui-type-body-md); }
+.schedule-create-confirmation .schedule-detail-fields dd { color: var(--ui-muted); font-size: var(--ui-type-caption); }
 
 /* Change requests use the established flat records and centered modal controls. */
-.treatment-panel .treatment-change-badge { display: inline-flex; width: fit-content; margin: 0; padding: 3px 8px; border: 1px solid currentColor; border-radius: 5px; font-size: .75rem; min-height: 0; line-height: 1.5; color: var(--ui-warning); background: var(--ui-warning-surface); }
+.treatment-panel .treatment-change-badge { display: inline-flex; width: fit-content; margin: 0; padding: 3px 8px; border: 1px solid currentColor; border-radius: var(--ui-control-radius); font-size: var(--ui-type-caption); min-height: 0; line-height: 1.5; color: var(--ui-warning); background: var(--ui-warning-surface); }
 .treatment-change-badge.change-rejected { color: var(--ui-danger); background: var(--ui-danger-surface); }
-.treatment-change-outcome { margin: 0 0 16px; font-size: .875rem; line-height: 1.6; }
+.treatment-change-outcome { margin: 0 0 16px; font-size: var(--ui-type-body-sm); line-height: 1.6; }
 .treatment-change-dialog .overlay-body { display: grid; gap: 16px; }
 .treatment-change-dialog .overlay-body > .treatment-hint { margin: 0; }
 .treatment-change-comparison { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
-.treatment-change-comparison h3 { margin: 0 0 12px; font-size: 1rem; }
+.treatment-change-comparison h3 { margin: 0 0 12px; font-size: var(--ui-type-body-md); }
 @media (max-width: 760px) {
   .treatment-panel:not(:has(.schedule-generate)) .treatment-summary .treatment-identity { padding-right: 104px; }
   .treatment-change-comparison { gap: 16px; }
@@ -730,3 +730,6 @@
   .generation-settings :is(.generation-auto-row, .generation-auto-toggle) { min-height: 24px; }
   .generation-settings .generation-coverage h3 { line-height: 24px; }
 }
+
+/* Restyle: headings use the mockup display font. */
+.generation-patient h3, .treatment-record h2, .generation-coverage h3, .treatment-change-comparison h3 { font-family: var(--ui-font-display); }

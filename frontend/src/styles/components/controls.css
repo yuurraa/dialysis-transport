@@ -24,15 +24,15 @@
 }
 
 :is(.page-panel, .patients-panel, .treatment-panel, .dashboard-dialog) button.patient-primary {
-  background: var(--ui-accent);
-  border-color: var(--ui-accent);
-  color: var(--ui-accent-text);
+  background: var(--ui-action);
+  border-color: var(--ui-action);
+  color: var(--ui-action-text);
 }
 
 :is(.page-panel, .patients-panel, .treatment-panel, .dashboard-dialog) button.patient-primary:hover:not(:disabled) {
-  background: var(--ui-accent-hover);
-  border-color: var(--ui-accent-hover);
-  color: var(--ui-accent-text);
+  background: var(--ui-action-hover);
+  border-color: var(--ui-action-hover);
+  color: var(--ui-action-text);
 }
 
 :is(.page-panel, .patients-panel, .treatment-panel, .dashboard-dialog) button:disabled {
@@ -87,10 +87,10 @@
   background: color-mix(in srgb, var(--ui-field) 92%, black);
 }
 
-/* Editable fields stay neutral; only the focused control gets the pink outline.
+/* Editable fields stay neutral; only the focused control gets the focus outline.
    An inset outline remains visible inside scrolling forms and dialogs. */
 .patient-form-fields :is(input, select, textarea):not(:disabled):focus {
-  outline: 3px solid var(--ui-accent);
+  outline: 3px solid var(--ui-focus);
   outline-offset: -3px;
 }
 
@@ -161,15 +161,15 @@
 }
 
 :is(.page-panel, .dashboard-dialog) button.patient-primary {
-  background: var(--ui-accent);
-  color: var(--ui-accent-text);
-  border-color: var(--ui-accent);
+  background: var(--ui-action);
+  color: var(--ui-action-text);
+  border-color: var(--ui-action);
 }
 
 :is(.page-panel, .dashboard-dialog) button.patient-primary:hover:not(:disabled) {
-  background: var(--ui-accent-hover);
-  color: var(--ui-accent-text);
-  border-color: var(--ui-accent-hover);
+  background: var(--ui-action-hover);
+  color: var(--ui-action-text);
+  border-color: var(--ui-action-hover);
 }
 
 :is(.page-panel, .dashboard-dialog) button.button-danger {

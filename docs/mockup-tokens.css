@@ -1,0 +1,115 @@
+/* Design tokens extracted from the Dialysis Transport mockup
+   (Tailwind v4 @theme block of the compiled build). Reference only.
+   Source: Dialysis_Transport.html mockup, 2026-11-01 */
+
+:root {
+  /* Colour — brand/ink */
+  --color-primary: #494fdf;
+  --color-on-primary: #fff;
+  --color-ink: #0b0b0f;
+  --color-body: #1f2226;
+  --color-mute: #5a6572;
+  --color-stone: #8d969e;
+  --color-on-dark: #fff;
+  --color-on-dark-mute: #ffffffb8;
+
+  /* Colour — surfaces */
+  --color-canvas-light: #fff;
+  --color-canvas-dark: #000;
+  --color-surface-soft: #f5f7fa;
+  --color-surface-card: #fff;
+  --color-surface-deep: #0a0a0a;
+  --color-surface-elevated: #16181a;
+  --color-hairline-light: #0b0b0f14;
+  --color-hairline-dark: #ffffff1f;
+  --color-hairline-strong: #191c1f;
+
+  /* Colour — sky (gradient canvas) */
+  --color-sky-deep: #4a90d9;
+  --color-sky-mid: #7fb3e8;
+  --color-sky-light: #a8cdef;
+  --color-sky-pale: #e8f1fa;
+
+  /* Colour — semantic */
+  --color-accent-light-green: #2f7d4f;
+  --color-accent-yellow: #b7791f;
+  --color-accent-danger: #c6303a;
+
+  /* Type — families */
+  --font-display: "General Sans Variable", "General Sans", "Inter Variable", "Inter", sans-serif;
+  --font-body: "Inter Variable", "Inter", sans-serif;
+
+  /* Type — scale */
+  --text-sm: .875rem;
+  --text-sm--line-height: calc(1.25 / .875);
+  --text-display-lg: 48px;
+  --text-display-lg--line-height: 1.21;
+  --text-display-lg--letter-spacing: -.48px;
+  --text-display-lg--font-weight: 500;
+  --text-display-md: 40px;
+  --text-display-md--line-height: 1.2;
+  --text-display-md--letter-spacing: -.4px;
+  --text-display-md--font-weight: 500;
+  --text-heading-lg: 32px;
+  --text-heading-lg--line-height: 1.19;
+  --text-heading-lg--letter-spacing: -.32px;
+  --text-heading-lg--font-weight: 500;
+  --text-heading-md: 24px;
+  --text-heading-md--line-height: 1.33;
+  --text-heading-md--letter-spacing: 0px;
+  --text-heading-md--font-weight: 500;
+  --text-heading-sm: 20px;
+  --text-heading-sm--line-height: 1.4;
+  --text-heading-sm--letter-spacing: 0px;
+  --text-heading-sm--font-weight: 500;
+  --text-body-lg: 18px;
+  --text-body-lg--line-height: 1.56;
+  --text-body-lg--letter-spacing: -.09px;
+  --text-body-lg--font-weight: 400;
+  --text-body-md: 16px;
+  --text-body-md--line-height: 1.5;
+  --text-body-md--letter-spacing: .24px;
+  --text-body-md--font-weight: 400;
+  --text-body-md-bold: 16px;
+  --text-body-md-bold--line-height: 1.5;
+  --text-body-md-bold--letter-spacing: .16px;
+  --text-body-md-bold--font-weight: 600;
+  --text-body-sm: 14px;
+  --text-body-sm--line-height: 1.43;
+  --text-body-sm--letter-spacing: 0px;
+  --text-body-sm--font-weight: 400;
+  --text-button-md: 16px;
+  --text-button-md--line-height: 1.5;
+  --text-button-md--letter-spacing: .24px;
+  --text-button-md--font-weight: 600;
+  --text-button-sm: 14px;
+  --text-button-sm--line-height: 1.43;
+  --text-button-sm--font-weight: 600;
+  --text-caption: 13px;
+  --text-caption--line-height: 1.4;
+  --text-caption--font-weight: 400;
+
+  /* Radius */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 20px;
+  --radius-xl: 28px;
+  --radius-full: 9999px;
+
+  /* Spacing */
+  --spacing: .25rem;
+  --spacing-xxs: 4px;
+  --spacing-xs: 6px;
+  --spacing-sm: 8px;
+  --spacing-md: 14px;
+  --spacing-lg: 16px;
+  --spacing-xl: 24px;
+  --spacing-xxl: 32px;
+  --spacing-xxxl: 48px;
+  --spacing-section: 88px;
+  --spacing-band: 120px;
+
+  /* Blur */
+  --blur-md: 12px;
+
+}
