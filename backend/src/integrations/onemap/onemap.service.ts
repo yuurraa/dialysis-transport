@@ -6,7 +6,7 @@ export const ONEMAP_API = {
   search:'https://www.onemap.gov.sg/api/common/elastic/search',
   route:'https://www.onemap.gov.sg/api/public/routingsvc/route',
 } as const;
-export interface AddressMatch extends Coordinates { address:string; postalCode:string }
+export interface AddressMatch extends Coordinates { address:string; postalCode:string; block:string; road:string; building:string }
 export interface DrivingRoute { encodedPolyline:string; geometry:[number,number][]; distanceMetres:number; durationSeconds:number }
 const unavailable=()=>new ServiceUnavailableException({code:'route_unavailable',message:'Route information is unavailable.'});
 function object(value:unknown):Record<string,unknown> {
@@ -15,6 +15,10 @@ function object(value:unknown):Record<string,unknown> {
 }
 export function validCoordinates(value:Coordinates) {
   return Number.isFinite(value.latitude)&&Number.isFinite(value.longitude)&&value.latitude>=1.144&&value.latitude<=1.494&&value.longitude>=103.535&&value.longitude<=104.502;
+}
+const normalise=(value:string)=>value.toUpperCase().replace(/[^A-Z0-9]+/g,' ').trim().replace(/\s+/g,' ');
+function metres(a:Coordinates,b:Coordinates) {
+  return Math.hypot((a.latitude-b.latitude)*111320,(a.longitude-b.longitude)*111320*Math.cos(a.latitude*Math.PI/180));
 }
 /** Decode the provider's polyline, rejecting truncated, excessive or out-of-area geometry. */
 function geometry(encoded:string):[number,number][] {
@@ -94,7 +98,9 @@ export class OneMapService {
     const results=body.results.map(value=>{
       const row=object(value);const coordinate={latitude:Number(row.LATITUDE),longitude:Number(row.LONGITUDE)};
       if(!validCoordinates(coordinate)||typeof row.ADDRESS!=='string'||typeof row.POSTAL!=='string')throw unavailable();
-      return {...coordinate,address:row.ADDRESS,postalCode:row.POSTAL};
+      return {...coordinate,address:row.ADDRESS,postalCode:row.POSTAL,
+        block:typeof row.BLK_NO==='string'?row.BLK_NO:'',road:typeof row.ROAD_NAME==='string'?row.ROAD_NAME:'',
+        building:typeof row.BUILDING==='string'?row.BUILDING:''};
     });
     return {results,totalPages:Number(body.totalNumPages)};
   }
@@ -104,9 +110,20 @@ export class OneMapService {
     const query=postal??address.replace(/#[\w-]+/g,'').replace(/,\s*,/g,',').trim();
     const result=await this.searchAddresses(query,1,signal);
     const matches=result.results.filter(row=>!postal||row.postalCode===postal);
-    const unique=new Map(matches.map(row=>[`${row.latitude},${row.longitude}`,row]));
-    if(result.totalPages>1||unique.size!==1)throw new ServiceUnavailableException({code:'route_address_unresolved',message:'A route address could not be resolved uniquely.'});
-    const match=[...unique.values()][0];return {latitude:match.latitude,longitude:match.longitude};
+    const unique=[...new Map(matches.map(row=>[`${row.latitude},${row.longitude}`,row])).values()];
+    if(result.totalPages>1||!unique.length)throw new ServiceUnavailableException({code:'route_address_unresolved',message:'A route address could not be resolved uniquely.'});
+    if(unique.length===1)return {latitude:unique[0].latitude,longitude:unique[0].longitude};
+    // OneMap can list a block and a facility at the same postal code as separate nearby points.
+    const stated=normalise(address);
+    const site=unique.filter(row=>row.block&&row.road&&stated.includes(normalise(`${row.block} ${row.road}`)));
+    if(site.length!==unique.length||site.some(row=>normalise(`${row.block} ${row.road}`)!==normalise(`${site[0].block} ${site[0].road}`)
+      ||site.some(other=>metres(row,other)>75)))throw new ServiceUnavailableException({code:'route_address_unresolved',message:'A route address could not be resolved uniquely.'});
+    const named=new Set(stated.replace(normalise(`${site[0].block} ${site[0].road}`),'').replace(/SINGAPORE \d{6}/,'').split(' '));
+    const isBase=(row:AddressMatch)=>normalise(row.building)==='NIL';
+    const score=(row:AddressMatch)=>isBase(row)?0:normalise(row.building).split(' ').filter(word=>word.length>2&&named.has(word)).length;
+    const ranked=[...site].sort((a,b)=>score(b)-score(a)||(isBase(a)?-1:isBase(b)?1:a.address.localeCompare(b.address)));
+    const match=score(ranked[0])>=2&&score(ranked[0])>score(ranked[1]??ranked[0])?ranked[0]:ranked.find(isBase)??ranked[0];
+    return {latitude:match.latitude,longitude:match.longitude};
   }
 
   async getRoute(origin:Coordinates,destination:Coordinates,signal:AbortSignal=AbortSignal.timeout(5000)):Promise<DrivingRoute> {

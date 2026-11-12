@@ -11,12 +11,15 @@ test('OneMap validates provider responses, caches authentication and refuses amb
   const previousEmail=process.env.ONEMAP_EMAIL,previousPassword=process.env.ONEMAP_PASSWORD;
   process.env.ONEMAP_EMAIL='routing@example.test';process.env.ONEMAP_PASSWORD='fixture-only';
   context.after(()=>{if(previousEmail===undefined)delete process.env.ONEMAP_EMAIL;else process.env.ONEMAP_EMAIL=previousEmail;if(previousPassword===undefined)delete process.env.ONEMAP_PASSWORD;else process.env.ONEMAP_PASSWORD=previousPassword;});
-  let tokenRequests=0;let invalid=false;let ambiguous=false;let hold=false;let release:(()=>void)|undefined;
+  let tokenRequests=0;let invalid=false;let ambiguous=false;let nearby=false;let hold=false;let release:(()=>void)|undefined;
   context.mock.method(globalThis,'fetch',async(input:string|URL,options?:RequestInit)=>{
     const url=new URL(String(input));
     if(url.pathname.endsWith('/getToken')){tokenRequests++;assert.equal(options?.method,'POST');if(hold)return new Promise<Response>(resolve=>{release=()=>resolve(Response.json({access_token:'fixture-token',expiry_timestamp:Math.floor(Date.now()/1000)+3600}));});return Response.json({access_token:'fixture-token',expiry_timestamp:Math.floor(Date.now()/1000)+3600});}
     assert.equal((options?.headers as Record<string,string>).Authorization,'fixture-token');
-    if(url.pathname.endsWith('/search'))return Response.json({totalNumPages:1,results:[{ADDRESS:'Fixture location',POSTAL:'123456',LATITUDE:'1.3',LONGITUDE:'103.8'},...(ambiguous?[{ADDRESS:'Other location',POSTAL:'123456',LATITUDE:'1.4',LONGITUDE:'103.9'}]:[])]});
+    if(url.pathname.endsWith('/search'))return Response.json({totalNumPages:1,results:nearby?[
+      {ADDRESS:'19 FIXTURE ROAD SINGAPORE 123456',POSTAL:'123456',BLK_NO:'19',ROAD_NAME:'FIXTURE ROAD',BUILDING:'NIL',LATITUDE:'1.3',LONGITUDE:'103.8'},
+      {ADDRESS:'19 FIXTURE ROAD FIXTURE DIALYSIS CENTRE SINGAPORE 123456',POSTAL:'123456',BLK_NO:'19',ROAD_NAME:'FIXTURE ROAD',BUILDING:'FIXTURE DIALYSIS CENTRE',LATITUDE:'1.3003',LONGITUDE:'103.8002'},
+    ]:[{ADDRESS:'Fixture location',POSTAL:'123456',LATITUDE:'1.3',LONGITUDE:'103.8'},...(ambiguous?[{ADDRESS:'Other location',POSTAL:'123456',LATITUDE:'1.4',LONGITUDE:'103.9'}]:[])]});
     return Response.json(invalid?{error:'Provider failed'}:{status:0,route_geometry:'_||F_mpxRgEgE',route_summary:{total_distance:2500,total_time:901}});
   });
   const service=new OneMapService();
@@ -27,6 +30,9 @@ test('OneMap validates provider responses, caches authentication and refuses amb
   assert.equal(tokenRequests,1);
   invalid=true;await assert.rejects(service.getRoute(origin,{latitude:1.301,longitude:103.801}));
   ambiguous=true;await assert.rejects(service.resolveAddress('Fixture street, Singapore 123456'));
+  ambiguous=false;nearby=true;
+  assert.deepEqual(await service.resolveAddress('Blk 19 Fixture Road #01-01, Singapore 123456'),{latitude:1.3,longitude:103.8});
+  assert.deepEqual(await service.resolveAddress('Fixture Dialysis Centre, Blk 19 Fixture Road #01-01, Singapore 123456'),{latitude:1.3003,longitude:103.8002});
   hold=true;
   const fresh=new OneMapService();const authentication=fresh.getAccessToken();
   const deadline=new AbortController();const waiting=fresh.getAccessToken(deadline.signal);deadline.abort();
